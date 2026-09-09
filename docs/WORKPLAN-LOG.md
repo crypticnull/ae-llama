@@ -21243,3 +21243,128 @@ was written to test only the latter — noted in the section itself so the
 pass that takes it does not test one hypothesis and conclude about the
 other. That is §17j's lesson again, which this repo has now paid for
 twice.
+
+## 2026-09-09 (local session) — the preflight now asks about VALUES, and NOT with POST /prompt (NEXT UP 1b / §17g, 0.12.8)
+
+**Item: NEXT UP 1b (§17g).** Harness green first (770/770), so the list
+applied and this was the first unblocked item.
+
+**§17g's own filing is wrong about the method, and that is the first
+thing to write down.** It says "ComfyUI already has the honest check:
+`POST /prompt` with `validate_prompt`. The work is to run the graph past
+validation as part of the preflight." Read in the vendor build's source
+(`ComfyUI/server.py`, `post_prompt`), that cannot be done:
+
+- there is no validate-only endpoint and no validate-only flag. 27
+  routes; validation is reachable only through `POST /prompt`.
+- `post_prompt` calls `execution.validate_prompt` and then, `if
+  valid[0]`, puts the graph **straight on the queue**. The failing answer
+  is the only one with no side effect. A check that RUNS the job whenever
+  the answer is yes is not a preflight — and this preflight's entire
+  purpose is to save the churn.
+- it cannot be undone after the fact either. A client-minted `prompt_id`
+  is accepted and `/api/jobs/<id>/cancel` does exist in this build, so a
+  targeted cancel is possible in principle — but the worker thread wakes
+  on the put, so the cancel arrives after the first node has begun
+  loading, which for KREA2 is 18 GB of weights. Trading a possible failed
+  render for a certain 18 GB load on every generation is the wrong side
+  of the trade this item exists to win.
+
+**What shipped instead.** `Comfy.validateGraphInputs(url, graph, opts,
+cb)` — one walk of `/object_info` per class, answering BOTH halves:
+`missing` (weight slots the backend cannot load, unchanged) and
+`badValues` (build-constant enum VALUES it does not offer). It mirrors
+exactly what ComfyUI's `validate_inputs` does to a LITERAL — combo
+membership — and deliberately not the rest (link types, min/max), which
+would need the graph the panel actually posts rather than the template on
+disk. `missingWeights` is now a thin wrapper on it and its contract did
+not move, because the VRAM arbiter asks a different question (can these
+files be opened) than the preflight does (will this graph run).
+
+`tools.js`: `weightRefusalFor` -> `preflightRefusalFor`, refusing on
+either half, in the same place as before — after the boot the generation
+was going to pay for anyway, BEFORE the chat model is stopped, with
+nothing queued. New `describeBadValues` names the value, the node, and
+what the backend DOES offer, capped at 20 options because that is
+ComfyUI's own threshold in `validate_inputs` (so a user who sees both
+messages sees the same shape twice), and points at
+`panelAdaptation.setInputs` rather than the generated API file.
+
+**Two rules keep it from ever refusing a graph that would have run**,
+which is the property that made it safe to ship:
+
+- an enum whose options come from THIS DISK (`ckpt_name`,
+  `LoadImage.image`) is never judged. Those are one machine's contents
+  and half of them the panel overwrites before posting — the i2v template
+  ships the author's own PNG. Same build-constant rule and the same regex
+  as `scripts/harvest-core-enums.js`, so the offline test and the live
+  preflight cannot drift into answering different questions.
+- a node the manifest drops or re-classes UNCONDITIONALLY is skipped
+  (`opts.skipNodes`), because the preflight reads the template off disk
+  and the panel posts what `resolveOptionalNodes` left behind. Measured:
+  every `optionalNodes` entry in both shipped manifests is gated on
+  `when: "missing"`, which is self-answering — a missing class has no
+  `/object_info` definition and the check is already silent there — so
+  the skip list is EMPTY today and the mechanism exists for the entry
+  that is not.
+
+**The one residual exposure, written down so a false refusal is not
+re-diagnosed from scratch.** ComfyUI skips its own combo check for an
+input named in a node's `VALIDATE_INPUTS` argspec, and nothing in
+`/object_info` reports that a validate function exists. So a pack whose
+node validates its own enum could be refused here for a value that build
+would accept. `missingWeights` has carried the identical exposure since
+it shipped and no instance has ever been seen; if one is reported, this
+is the first suspect. Not filed as work — there is nothing measured to
+act on, and filing a hypothesis as a queue item is how a night gets spent
+testing one thing and concluding about another (§17j, twice).
+
+**Verified against the real vendor backend, not only stubs.** Booted the
+managed backend (0.34.0, port 8288) and ran
+`weight-availability-probe --url http://127.0.0.1:8288`:
+
+- both shipped templates PASS, with 6 (H3) and 7 (KREA2) build-constant
+  values really checked — so the new verdict is measuring something, not
+  passing vacuously.
+- putting `res_2s` back on KREA2 node 278 produces the refusal, naming
+  the value, the node, and the 44 samplers this backend really has. Then
+  restored (`git status` clean on that file).
+
+The probe gained **verdict 6** for this, kept separate from verdict 1 on
+purpose: verdict 1 is the line that printed `PASS a template whose
+weights the backend LISTS is not refused` on the very run that could not
+render, and folding both answers into one line reproduces exactly the
+"complete-LOOKING answer that does not contain the truth" failure §17g is
+about.
+
+**Stub back-fill.** `tests/test-weight-availability.js` grew the 17g case
+at both layers: the regression itself (node 278 on `res_2s` against a
+fake backend carrying the vendor's sampler list), the value it ships
+today passing, `LoadImage.image` NOT being judged, `skipNodes` honoured,
+`missingWeights` still answering only about weights, the refusal sentence
+(names the value, lists what exists, names the manifest seam, caps a long
+list), and the real `comfy_generate` path refusing a template whose
+weights all load — with `llama.stop` and `comfy.generate` both absent
+from the trace.
+
+**Results.** Stubbed suite 83/83 files green. Real-AE harness 770/770,
+before and after — nothing here touches the AE half, and it was re-run
+because the rule is that it is re-run. `extension/` changed, so bumped
+0.12.7 -> 0.12.8. `docs/CAPABILITIES.md` curated half updated (the
+preflight paragraph described only the weight check).
+
+**Nothing new filed in WORKPLAN**, deliberately, and here is what was
+considered so the next pass does not re-derive it: the `VALIDATE_INPUTS`
+exposure above (no measured instance); `injectParams` writing into the
+graph AFTER the preflight reads it (checked — everything it injects is a
+free string or a number, no enum-valued input, so there is no gap today);
+and the preflight being unreachable from Settings (a want, not a defect).
+§17g itself is marked DONE in the workplan with the `POST /prompt`
+correction written into the section, and NEXT UP 1b is struck with 1c
+promoted to START HERE.
+
+**State left behind.** AE running and untouched, harness green. The
+managed backend was booted by this pass and was still answering on 8288
+at the end of it — but see §17k: it has died silently four times in three
+days, so a later pass finding it down should not read this line as
+evidence it stayed up.

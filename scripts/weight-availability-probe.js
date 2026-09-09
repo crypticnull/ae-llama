@@ -11,7 +11,7 @@
  * asks both, through the panel's own code, against the real backend:
  *
  *   settings.js + tiers.js + comfy.js + tools.js        (the panel)
- *     -> Comfy.missingWeights + Tools._weightRefusalFor (the new check)
+ *     -> Comfy.validateGraphInputs + Tools._preflightRefusalFor
  *     -> Tools.executeCommands([comfy_generate])        (the real path)
  *     -> a REAL local ComfyUI's /object_info            (the ground truth)
  *
@@ -25,7 +25,15 @@
  *   4. an unreachable backend refuses NOTHING (the check may never invent
  *      a failure it could not measure);
  *   5. the refusal arrives through the real comfy_generate path with the
- *      chat model still loaded and ComfyUI never queued.
+ *      chat model still loaded and ComfyUI never queued;
+ *   6. every enum VALUE a shipped template names is one this backend has
+ *      (WORKPLAN 17g, added 2026-09-09). Verdict 1 alone printed
+ *      `PASS a template whose weights the backend LISTS is not refused`
+ *      about the KREA2 template on the very run where ComfyUI dropped
+ *      every output branch of it at validation: the sampler `res_2s` only
+ *      exists where the RES4LYF pack is installed. A weight check cannot
+ *      see a value inside a node, so it said "ready" about a graph the
+ *      backend refuses outright.
  *
  * NO After Effects: nothing is generated and nothing is imported, so no
  * dialog can be raised and the user's project is never touched.
@@ -141,7 +149,11 @@ function measure(w, next) {
   const manifest = Comfy.readManifest(w.file);
   const graph = Comfy.loadWorkflow(w.file);
   const priced = Tools._genNeedMBFor(manifest, s);
-  Comfy.missingWeights(s.comfyUrl, graph, function (err, res) {
+  const skipNodes = ((manifest && manifest.optionalNodes) || [])
+    .filter((e) => e && e.when && e.when !== "missing")
+    .map((e) => String(e.nodeId));
+  Comfy.validateGraphInputs(s.comfyUrl, graph, { skipNodes: skipNodes },
+                            function (err, res) {
     if (err) {
       say("error", w.name + ": " + err.message);
       next({ name: w.name, error: err, priced: priced });
@@ -156,9 +168,18 @@ function measure(w, next) {
           m.classType + "." + m.input + ", server lists " +
           m.choiceCount + " other choice(s))");
     }
-    Tools._weightRefusalFor(s, w.file, manifest, function (refusal) {
+    say("info", w.name + ": backend checked " + res.valuesChecked +
+        " build-constant enum value(s), " + res.badValues.length +
+        " it does not offer");
+    for (const b of res.badValues) {
+      say("tool", "   not offered: " + b.value + "  (node " + b.node + " " +
+          b.classType + "." + b.input + ", server offers " +
+          b.choices.length + ": " + b.choices.join(", ") + ")");
+    }
+    Tools._preflightRefusalFor(s, w.file, manifest, function (refusal) {
       if (refusal) say("tool", "   refusal: " + refusal.error);
       next({ name: w.name, missing: res.missing, checked: res.checked,
+             badValues: res.badValues, valuesChecked: res.valuesChecked,
              priced: priced, refusal: refusal, manifest: manifest });
     });
   });
@@ -183,7 +204,8 @@ function unreachableCheck() {
           "checked " + results.map((r) => r.name + "=" + r.checked).join(", "));
 
   verdict(loadable.every((r) => !r.refusal),
-          "a template whose weights the backend LISTS is not refused",
+          "a template whose weights the backend LISTS, and whose enum " +
+          "values it offers, is not refused",
           loadable.length
             ? loadable.map((r) => r.name).join(", ")
             : "no fully-loadable template on this machine");
@@ -213,10 +235,29 @@ function unreachableCheck() {
             r.priced + " MiB the arbiter would have paused chat for");
   }
 
+  // ---- verdict 6: the enum values, which verdict 1 cannot see ----------
+  //
+  // Kept separate from the weight verdicts on purpose. §17g is exactly the
+  // failure of reading one clean answer as a clean bill of health, and a
+  // verdict that folds both into one line reproduces it.
+  const measured = results.filter((r) => r.badValues);
+  verdict(measured.some((r) => r.valuesChecked > 0),
+          "the backend answered about at least one build-constant enum",
+          "checked " +
+          measured.map((r) => r.name + "=" + r.valuesChecked).join(", "));
+  for (const r of measured) {
+    verdict(r.badValues.length === 0,
+            r.name + ": every enum value it names is one this backend has",
+            r.badValues.length
+              ? r.badValues.map((b) => b.classType + "." + b.input + "='" +
+                                       b.value + "'").join(", ")
+              : r.valuesChecked + " value(s) checked");
+  }
+
   // ---- verdict 4: a backend that cannot be asked refuses NOTHING --------
   const dead = Object.assign({}, s, { comfyUrl: "http://127.0.0.1:1" });
   const any = results[0];
-  Tools._weightRefusalFor(dead, templates[0].file, any.manifest,
+  Tools._preflightRefusalFor(dead, templates[0].file, any.manifest,
     function (refusal) {
       verdict(!refusal,
               "an UNREACHABLE backend refuses nothing — the check may " +

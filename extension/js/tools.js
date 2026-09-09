@@ -1612,24 +1612,62 @@
    * tells a user their backend is pointed at the wrong root: the files it
    * cannot load AND where they are on disk.
    *
+   * The SECOND thing no arithmetic can see, added 2026-09-09 (WORKPLAN
+   * 17g): whether the backend has the enum VALUES the template names. A
+   * preflight that checks weights alone reports "ready" about a graph
+   * ComfyUI refuses outright — measured on the shipped KREA2 template,
+   * whose sampler `res_2s` exists only where the RES4LYF pack is
+   * installed. Both questions are asked in one walk of /object_info
+   * (Comfy.validateGraphInputs) and either one refuses.
+   *
    * cb(refusalResult|null). Anything that stops the question being
    * answered — an unreadable template, an unreachable backend, a class the
    * server does not know — answers null and the round proceeds exactly as
-   * before. This may only ever refuse a weight ComfyUI would itself reject.
+   * before. This may only ever refuse what ComfyUI would itself reject.
    */
-  function weightRefusalFor(s, workflowFile, manifest, cb) {
+  /**
+   * Node ids the preflight must NOT judge, because the graph it reads off
+   * disk is not the graph that will be posted: `resolveOptionalNodes` may
+   * drop or re-class them first. Only an UNCONDITIONAL entry needs listing
+   * — a `when: "missing"` entry is self-answering, since a missing class
+   * has no /object_info definition and the check is already silent there.
+   */
+  function unconditionalOptionalNodes(manifest) {
+    var list = (manifest && manifest.optionalNodes instanceof Array)
+      ? manifest.optionalNodes : [];
+    var out = [];
+    for (var i = 0; i < list.length; i++) {
+      var e = list[i] || {};
+      if (e.when && e.when !== "missing") out.push(String(e.nodeId));
+    }
+    return out;
+  }
+
+  function preflightRefusalFor(s, workflowFile, manifest, cb) {
     var graph = null;
     try {
       graph = global.Comfy.loadWorkflow ?
         global.Comfy.loadWorkflow(workflowFile) : null;
     } catch (e) { cb(null); return; }
-    if (!graph || !global.Comfy.missingWeights) { cb(null); return; }
-    global.Comfy.missingWeights(global.Comfy.backendUrl(s), graph,
-                                function (err, res) {
-      if (err || !res || !(res.missing instanceof Array) ||
-          !res.missing.length) { cb(null); return; }
-      cb({ ok: false,
-           error: describeMissingWeights(res.missing, manifest, s) });
+    var check = global.Comfy.validateGraphInputs;
+    if (!graph || !check) { cb(null); return; }
+    check(global.Comfy.backendUrl(s), graph,
+          { skipNodes: unconditionalOptionalNodes(manifest) },
+          function (err, res) {
+      if (err || !res) { cb(null); return; }
+      // Weights first: it is the older and the more expensive failure (the
+      // arbiter would hand the whole card over for files that cannot be
+      // opened), and its sentence names where they sit on disk.
+      if (res.missing instanceof Array && res.missing.length) {
+        cb({ ok: false,
+             error: describeMissingWeights(res.missing, manifest, s) });
+        return;
+      }
+      if (res.badValues instanceof Array && res.badValues.length) {
+        cb({ ok: false, error: describeBadValues(res.badValues, s) });
+        return;
+      }
+      cb(null);
     });
   }
 
@@ -1678,6 +1716,46 @@
            " of this workflow's weights, so the generation would fail even " +
            "after freeing VRAM for it. Missing from the backend's own model " +
            "list: " + lines.join("; ") + tail + ". " + advice;
+  }
+
+  /**
+   * The sentence for a value the backend does not have.
+   *
+   * It lists what the backend DOES offer, because that is the only thing
+   * that turns "res_2s is not available" into a fix — and it uses
+   * ComfyUI's own threshold for when a list stops helping: `validate_inputs`
+   * prints the options when there are 20 or fewer and a bare count above
+   * that (execution.py, measured on the vendor build). Matching it means a
+   * user who sees both messages sees the same shape twice.
+   *
+   * The advice names the manifest seam rather than the template, because
+   * editing the API template by hand is the wrong fix twice over: the file
+   * is generated, and an installed panel's copy is refreshed from the repo.
+   */
+  var ENUM_CHOICES_LISTED = 20;
+
+  function describeBadValues(bad, s) {
+    var lines = [];
+    for (var i = 0; i < bad.length; i++) {
+      var b = bad[i];
+      var choices = b.choices instanceof Array ? b.choices : [];
+      var has = choices.length <= ENUM_CHOICES_LISTED
+        ? "it has " + choices.join(", ")
+        : "it has " + choices.length + ", including " +
+          choices.slice(0, ENUM_CHOICES_LISTED).join(", ");
+      lines.push("node " + b.node + " " + b.classType + "." + b.input +
+                 " is set to '" + b.value + "' and " + has);
+    }
+    return "ComfyUI at " + global.Comfy.backendUrl(s) + " does not offer " +
+      bad.length + " of the values this workflow asks for, so it would " +
+      "refuse the whole graph at " +
+      "validation rather than render anything: " + lines.join("; ") + ". " +
+      "Values like these come from custom node packs, which add choices to " +
+      "nodes that are otherwise core — so this template was authored on a " +
+      "machine with a pack this backend does not have. Fix it in the " +
+      "workflow's .manifest.json (panelAdaptation.setInputs) and re-run " +
+      "scripts/adapt-workflow.js; editing the API template directly is " +
+      "overwritten by the next regeneration.";
   }
 
   // How long a VRAM wait is willing to sit there. The release wait is the
@@ -2254,8 +2332,8 @@
           if (progressSink) progressSink(bootMsg);
         }, function (bootErr) {
           if (bootErr) { finish({ ok: false, error: bootErr.message }); return; }
-          weightRefusalFor(s, chosen.file, manifest, function (weightRefusal) {
-            if (weightRefusal) { cb(weightRefusal); return; }
+          preflightRefusalFor(s, chosen.file, manifest, function (refusal) {
+            if (refusal) { cb(refusal); return; }
             VramArbiter.ensureFor(s, manifest, progressSink,
               function (refusal) {
                 if (refusal) { cb(refusal); return; }
@@ -3706,8 +3784,9 @@
     _vramArbiter: VramArbiter,        // exposed for tests and probes
     _genNeedMBFor: genNeedMBFor,      // exposed for tests
     _comfyModelRoots: comfyModelRoots, // exposed for tests
-    _weightRefusalFor: weightRefusalFor,          // exposed for tests
+    _preflightRefusalFor: preflightRefusalFor,    // exposed for tests
     _describeMissingWeights: describeMissingWeights, // exposed for tests
+    _describeBadValues: describeBadValues,        // exposed for tests
     _parseComfyPathsYaml: parseComfyPathsYaml,   // exposed for tests
     _panelTools: PANEL_TOOLS          // exposed for tests
   };

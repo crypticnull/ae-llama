@@ -1203,51 +1203,105 @@
   }
 
   /**
-   * Which weights in `graph` the RUNNING backend cannot load.
+   * A combo's options are BUILD-CONSTANT when they come from the build
+   * itself (`euler`, `simple`, `bislerp`) rather than from this disk
+   * (`ckpt_name`, `lora_name`, `image`). Only the first kind can be
+   * checked against a template's authored literal: the second kind is a
+   * picture of one machine, and half of them are values the panel
+   * OVERWRITES at generate time anyway (LoadImage.image is the author's
+   * own PNG until the panel uploads over it).
    *
-   * The panel prices a generation off the DISK (tools.js modelFileMB) and
-   * ComfyUI decides off ITS OWN search path, and the two answer different
-   * questions: the disk knows how big a weight is (/object_info carries no
-   * sizes), the backend knows whether it can open it (the disk cannot know
-   * the search path). Measured on this machine 2026-08-30, they disagreed:
-   * all four MiniMax H3 weights are on disk where the panel looks, and the
-   * running ComfyUI — launched `--base-directory Documents\ComfyUI`, with
-   * no extra_model_paths.yaml anywhere — sees none of them. So the arbiter
-   * would stop the chat model to make room for 40 503 MiB of weights and
-   * only then hear `Value not in list — vae_name: ...`. A user pays a full
-   * handoff for a job that was never runnable.
-   *
-   * cb(err, {missing: [{node, classType, input, value, choiceCount}],
-   *          checked}). NEVER guesses: a class the server does not know, an
-   * input that is not a combo, and a value that is not a weight filename
-   * are all passed over in silence, so this can only ever report a weight
-   * ComfyUI itself would reject at queue time — never a false refusal.
+   * Same rule, same regex as scripts/harvest-core-enums.js, which pins
+   * the offline half of this check — if the two ever disagree about what
+   * is checkable, the offline test and the live preflight are answering
+   * different questions.
    */
-  function missingWeights(comfyUrl, graph, cb) {
+  var INSTALL_DEPENDENT_RE =
+    /\.(safetensors|ckpt|pt|pth|bin|gguf|sft|onnx|yaml|json|png|jpg|jpeg|webp|gif|bmp|tiff?|mp4|webm|mov|npy|txt)$|[\\\/]/i;
+  function buildConstant(choices) {
+    if (!(choices instanceof Array) || !choices.length) return false;
+    for (var i = 0; i < choices.length; i++) {
+      if (typeof choices[i] === "string" &&
+          INSTALL_DEPENDENT_RE.test(choices[i])) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Everything about a graph's LITERAL inputs that the running backend
+   * would refuse — the weights it cannot load AND the enum values it does
+   * not have — in one walk of /object_info.
+   *
+   * Why both, and why here (WORKPLAN 17g). `missingWeights` below answers
+   * only about weight FILES, and it was read as "this template will run",
+   * which it cannot answer. Measured 2026-09-09: the shipped KREA2
+   * template named sampler `res_2s`, a value the RES4LYF pack adds to a
+   * CORE node's enum. The weight check passed it clean and printed
+   * `PASS a template whose weights the backend LISTS is not refused` —
+   * and ComfyUI then dropped every output branch of that same graph at
+   * validation. A complete-LOOKING answer that does not contain the
+   * truth, which is the class this repo has already paid for once (the
+   * truncated comp roster, §1).
+   *
+   * This mirrors what ComfyUI's own `validate_inputs` does to a literal:
+   * membership in the input's combo list. It deliberately does NOT
+   * re-implement the rest (link types, min/max, a node's own
+   * VALIDATE_INPUTS), because ComfyUI has no validate-only endpoint —
+   * measured on the vendor build, `POST /prompt` QUEUES the graph the
+   * moment validation passes, and a cancel cannot land before the worker
+   * thread has started loading 18 GB of weights. A preflight that runs
+   * the job it is asking about is not a preflight.
+   *
+   * cb(err, {missing, badValues, checked, valuesChecked}).
+   *   missing    — weight slots the backend cannot load (see below)
+   *   badValues  — {node, classType, input, value, choices} for a
+   *                build-constant enum whose authored value is not offered
+   *
+   * NEVER guesses, in either list. A class the server does not know, an
+   * input that is not a combo, a linked input, and a combo whose options
+   * come from this disk are all passed over in silence. The one residual
+   * exposure is a node with a VALIDATE_INPUTS that takes the input by
+   * name: ComfyUI skips its own combo check for those, so this could
+   * refuse a value that build would have accepted. No part of
+   * /object_info reports that a validate function exists, so it cannot be
+   * detected from here — and `missingWeights` has carried the identical
+   * exposure since it shipped.
+   *
+   * `opts.skipNodes` — node ids the CALLER knows will not reach the
+   * server as written (a manifest optionalNodes entry that drops or
+   * substitutes unconditionally). Entries gated on `when: "missing"` need
+   * no listing: if the class is missing there is no def and this is
+   * already silent, and if it is present the node runs exactly as written.
+   */
+  function validateGraphInputs(comfyUrl, graph, opts, cb) {
     var base;
     try { base = parseBase(comfyUrl); } catch (e) { cb(e); return; }
+    var skip = {};
+    var skipList = (opts && opts.skipNodes instanceof Array)
+      ? opts.skipNodes : [];
+    for (var s = 0; s < skipList.length; s++) skip[String(skipList[s])] = true;
     var ids = [], k;
     for (k in graph) {
       if (Object.prototype.hasOwnProperty.call(graph, k)) ids.push(k);
     }
     ids.sort();
     var defs = {};                 // class_type -> definition|null, once each
-    var missing = [], checked = 0;
+    var missing = [], badValues = [], checked = 0, valuesChecked = 0;
     (function next(i) {
       if (i >= ids.length) {
-        cb(null, { missing: missing, checked: checked });
+        cb(null, { missing: missing, badValues: badValues,
+                   checked: checked, valuesChecked: valuesChecked });
         return;
       }
       var nid = ids[i];
+      if (skip[nid]) { next(i + 1); return; }
       var node = graph[nid] || {};
       var cls = node.class_type;
       var inputs = node.inputs || {};
       var names = [], n;
       for (n in inputs) {
         if (!Object.prototype.hasOwnProperty.call(inputs, n)) continue;
-        if (typeof inputs[n] === "string" && WEIGHT_FILE_RE.test(inputs[n])) {
-          names.push(n);
-        }
+        if (typeof inputs[n] === "string") names.push(n);
       }
       if (!cls || !names.length) { next(i + 1); return; }
       function withDef(def) {
@@ -1255,14 +1309,28 @@
           var name = names[j];
           var choices = comboChoices(def, name);
           if (!choices) continue;
-          checked++;
+          var value = inputs[name];
+          var isWeight = WEIGHT_FILE_RE.test(value);
+          // A value that is not a weight filename is only checkable when
+          // the LIST is build-constant. Anything else is one disk's
+          // contents and belongs to the weight half or to nobody.
+          if (!isWeight && !buildConstant(choices)) continue;
           var hit = false;
           for (var c = 0; c < choices.length; c++) {
-            if (choices[c] === inputs[name]) { hit = true; break; }
+            if (choices[c] === value) { hit = true; break; }
           }
-          if (!hit) {
-            missing.push({ node: nid, classType: cls, input: name,
-                           value: inputs[name], choiceCount: choices.length });
+          if (isWeight) {
+            checked++;
+            if (!hit) {
+              missing.push({ node: nid, classType: cls, input: name,
+                             value: value, choiceCount: choices.length });
+            }
+          } else {
+            valuesChecked++;
+            if (!hit) {
+              badValues.push({ node: nid, classType: cls, input: name,
+                               value: value, choices: choices });
+            }
           }
         }
         next(i + 1);
@@ -1285,6 +1353,34 @@
           withDef(def);
         });
     })(0);
+  }
+
+  /**
+   * Which weights in `graph` the RUNNING backend cannot load.
+   *
+   * The panel prices a generation off the DISK (tools.js modelFileMB) and
+   * ComfyUI decides off ITS OWN search path, and the two answer different
+   * questions: the disk knows how big a weight is (/object_info carries no
+   * sizes), the backend knows whether it can open it (the disk cannot know
+   * the search path). Measured on this machine 2026-08-30, they disagreed:
+   * all four MiniMax H3 weights are on disk where the panel looks, and the
+   * running ComfyUI — launched `--base-directory Documents\ComfyUI`, with
+   * no extra_model_paths.yaml anywhere — sees none of them. So the arbiter
+   * would stop the chat model to make room for 40 503 MiB of weights and
+   * only then hear `Value not in list — vae_name: ...`. A user pays a full
+   * handoff for a job that was never runnable.
+   *
+   * cb(err, {missing: [{node, classType, input, value, choiceCount}],
+   *          checked}). The weight half of validateGraphInputs above, kept
+   * as its own name because that is the question the VRAM arbiter asks:
+   * whether these files can be opened, not whether the graph is runnable.
+   * NEVER guesses — see the invariants on validateGraphInputs.
+   */
+  function missingWeights(comfyUrl, graph, cb) {
+    validateGraphInputs(comfyUrl, graph, null, function (err, res) {
+      if (err) { cb(err); return; }
+      cb(null, { missing: res.missing, checked: res.checked });
+    });
   }
 
   /**
@@ -2634,6 +2730,7 @@
     expandFilenameTokens: expandFilenameTokens,
     classInstalled: classInstalled,
     missingWeights: missingWeights,
+    validateGraphInputs: validateGraphInputs,
     resolveOptionalNodes: resolveOptionalNodes,
     MODEL_SUBS: COMFY_MODEL_SUBS,
     _applyExtraModelPaths: applyExtraModelPaths   // exposed for tests

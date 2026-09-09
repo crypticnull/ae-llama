@@ -25,6 +25,18 @@
 //      where it sits on disk, which is the sentence that tells a user
 //      their backend is pointed at the wrong root.
 //
+// A THIRD half, added 2026-09-09 (WORKPLAN 17g). Checking weights alone
+// reported "ready" about a graph ComfyUI refuses: the shipped KREA2 template
+// named sampler `res_2s`, a value the RES4LYF pack ADDS to a core node's
+// enum, and the backend a buyer gets dropped every output branch of it at
+// validation while this very check printed PASS. So Comfy.validateGraphInputs
+// asks both questions in one walk of /object_info — the weight slots and the
+// build-constant enum VALUES — and the same invariant governs both: it may
+// only ever report what ComfyUI would itself reject. An enum whose options
+// come from this DISK (ckpt_name, LoadImage.image) is never judged, because
+// those are one machine's contents and half of them the panel overwrites at
+// generate time.
+//
 // The combo lists below are the REAL ones this machine's ComfyUI 0.32.0
 // answered on 2026-08-30, trimmed but not invented — including the two
 // entries that make the rules necessary: `pixel_space`, a NON-file value
@@ -70,6 +82,31 @@ const FIELD_LISTS = {
       "umt5_xxl_fp16.safetensors"
     ],
     type: ["stable_diffusion", "wan", "qwen_image", "krea2", "minimax"]
+  },
+  // Node classes whose combos are BUILD-CONSTANT: the same list on every
+  // install of the same build, which is what makes them checkable at all.
+  // 44 samplers is the vendor build's real count, measured 2026-09-09 —
+  // the author's ComfyUI offers 63 because RES4LYF adds 19, `res_2s`
+  // among them.
+  KSamplerSelect: {
+    sampler_name: [
+      "euler", "euler_cfg_pp", "euler_ancestral", "heun", "heunpp2", "dpm_2",
+      "dpm_2_ancestral", "lms", "dpm_fast", "dpm_adaptive", "dpmpp_2s_a",
+      "dpmpp_sde", "dpmpp_2m", "dpmpp_3m_sde", "ddpm", "lcm", "ipndm",
+      "deis", "res_multistep", "res_multistep_cfg_pp", "gradient_estimation",
+      "er_sde", "seeds_2", "seeds_3", "exp_heun_2_x0", "exp_heun_2_x0_sde",
+      "ddim", "uni_pc", "uni_pc_bh2"
+    ]
+  },
+  BasicScheduler: {
+    scheduler: ["simple", "sgm_uniform", "karras", "exponential", "ddim_uniform",
+                "beta", "normal", "linear_quadratic", "kl_optimal"]
+  },
+  // The trap that makes the build-constant rule necessary: a combo of this
+  // disk's images, whose authored value is the AUTHOR's file and which the
+  // panel overwrites with the user's upload before it ever posts.
+  LoadImage: {
+    image: ["author_reference.png", "some_other.jpg"]
   },
   UNETLoader: {
     unet_name: [
@@ -279,6 +316,98 @@ fakeComfy(FIELD_LISTS, (server, url, hits) => {
         });
       });
     },
+    // ---- 17g: the enum VALUES, which the weight check cannot see -----
+    (next) => {
+      // The regression itself, replayed: node 278 back on the RES4LYF
+      // sampler, against a backend that has the vendor build's 29.
+      const g = {
+        "278": { class_type: "KSamplerSelect",
+                 inputs: { sampler_name: "res_2s" } }
+      };
+      Comfy.validateGraphInputs(url, g, null, (err, res) => {
+        assert(!err && res.badValues.length === 1 && res.valuesChecked === 1,
+               "THE 17g CASE: a sampler only a custom pack provides is " +
+               "reported, where the weight check saw nothing (bad " +
+               (res ? res.badValues.length : "?") + ", checked " +
+               (res ? res.valuesChecked : "?") + ")");
+        const b = res.badValues[0];
+        assert(b && b.node === "278" && b.classType === "KSamplerSelect" &&
+               b.input === "sampler_name" && b.value === "res_2s",
+               "…carrying the node, class and input ComfyUI names in its " +
+               "own validation error");
+        assert(b && b.choices instanceof Array &&
+               b.choices.indexOf("euler") !== -1,
+               "…and WHAT THE BACKEND DOES OFFER, which is the only thing " +
+               "that turns the refusal into a fix");
+        next();
+      });
+    },
+    (next) => {
+      const g = {
+        "278": { class_type: "KSamplerSelect",
+                 inputs: { sampler_name: "exp_heun_2_x0" } }
+      };
+      Comfy.validateGraphInputs(url, g, null, (err, res) => {
+        assert(!err && res.badValues.length === 0 && res.valuesChecked === 1,
+               "the value the template ships TODAY is one this backend " +
+               "has, so nothing is refused — the check was really run " +
+               "(checked " + (res ? res.valuesChecked : "?") + ")");
+        next();
+      });
+    },
+    (next) => {
+      // The false-refusal trap. This combo is a picture of one disk, and
+      // the authored value is the AUTHOR's file — the panel uploads over
+      // it before posting. Judging it would fail every machine but one.
+      const g = {
+        "1": { class_type: "LoadImage",
+               inputs: { image: "not_on_this_machine.png" } }
+      };
+      Comfy.validateGraphInputs(url, g, null, (err, res) => {
+        assert(!err && res.badValues.length === 0 && res.valuesChecked === 0,
+               "a combo whose options come from this DISK is never judged " +
+               "as an enum — LoadImage.image is the author's own PNG until " +
+               "the panel overwrites it");
+        next();
+      });
+    },
+    (next) => {
+      const g = {
+        "1": { class_type: "VAELoader",
+               inputs: { vae_name: "gone.safetensors" } },
+        "2": { class_type: "KSamplerSelect",
+               inputs: { sampler_name: "res_2s" } }
+      };
+      Comfy.validateGraphInputs(url, g, { skipNodes: ["2"] }, (err, res) => {
+        assert(!err && res.badValues.length === 0 && res.missing.length === 1,
+               "a node the CALLER says will not reach the server as " +
+               "written (an unconditional optionalNodes drop) is not " +
+               "judged, while the rest of the graph still is");
+        next();
+      });
+    },
+    (next) => {
+      const g = {
+        "1": { class_type: "KSamplerSelect",
+               inputs: { sampler_name: "res_2s" } }
+      };
+      Comfy.missingWeights(url, g, (err, res) => {
+        assert(!err && res.missing.length === 0 &&
+               res.badValues === undefined,
+               "missingWeights still answers ONLY about weights — the " +
+               "arbiter asks whether files can be opened, not whether the " +
+               "graph is runnable, and its contract did not move");
+        next();
+      });
+    },
+    (next) => {
+      Comfy.validateGraphInputs("http://127.0.0.1:1", h3Graph(), null,
+                                (err, res) => {
+        assert(!!err && !res,
+               "an unreachable backend is an ERROR for the enum half too");
+        next();
+      });
+    },
     (next) => {
       Comfy.missingWeights("http://127.0.0.1:1", h3Graph(), (err, res) => {
         assert(!!err && !res,
@@ -343,7 +472,7 @@ function layer2(done) {
       listWorkflows: () => [{ name: "AE_LLAMA_H3_I2V_V1", file: H3_FILE }],
       readManifest: () => h3Manifest,
       loadWorkflow: (f) => JSON.parse(fs.readFileSync(f, "utf8")),
-      missingWeights: null,          // set per scenario
+      validateGraphInputs: null,     // set per scenario
       // The panel asks comfy.js WHICH backend it is talking to (managed
       // vs the user's own) rather than reading comfyUrl — keep the stub
       // faithful to that, or every call site throws.
@@ -388,6 +517,38 @@ function layer2(done) {
       value: "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
       choiceCount: 26 }
   ];
+
+  const BAD_SAMPLER = [
+    { node: "278", classType: "KSamplerSelect", input: "sampler_name",
+      value: "res_2s",
+      choices: ["euler", "heun", "dpmpp_2m", "res_multistep",
+                "exp_heun_2_x0", "ddim", "uni_pc"] }
+  ];
+
+  // ---- the sentence for a value the backend does not have -------------
+  {
+    const t = Tools._describeBadValues(BAD_SAMPLER, settings);
+    assert(t.indexOf("res_2s") !== -1 &&
+           /node 278 KSamplerSelect\.sampler_name/.test(t),
+           "the enum refusal names the value AND the node ComfyUI would " +
+           "have failed at");
+    assert(t.indexOf("exp_heun_2_x0") !== -1 && t.indexOf("euler") !== -1,
+           "…and lists what the backend DOES offer — a failed lookup that " +
+           "does not say what exists cannot be acted on");
+    assert(/panelAdaptation\.setInputs/.test(t) &&
+           /adapt-workflow\.js/.test(t),
+           "…and names the seam that FIXES it, not the generated API file " +
+           "that the next regeneration overwrites");
+    const many = [];
+    for (let i = 0; i < 30; i++) many.push("s" + i);
+    const t2 = Tools._describeBadValues(
+      [{ node: "1", classType: "KSamplerSelect", input: "sampler_name",
+         value: "res_2s", choices: many }], settings);
+    assert(/it has 30, including/.test(t2) && t2.indexOf("s29") === -1,
+           "a long option list is capped with a COUNT — ComfyUI's own " +
+           "validate_inputs stops listing above 20 and this matches it, so " +
+           "a user who sees both messages sees the same shape twice");
+  }
 
   // ---- the disagreement, as an arithmetic fact ------------------------
   const priced = Tools._genNeedMBFor(h3Manifest, settings);
@@ -451,8 +612,9 @@ function layer2(done) {
 
   run([
     (next) => {
-      window.Comfy.missingWeights = (u, g, cb) =>
-        cb(null, { missing: FIELD_MISSING, checked: 4 });
+      window.Comfy.validateGraphInputs = (u, g, o, cb) =>
+        cb(null, { missing: FIELD_MISSING, badValues: [], checked: 4,
+                   valuesChecked: 9 });
       generate((r) => {
         assert(r.ok === false && /cannot load 4 of this workflow/.test(r.error),
                "THE BUG CLASS: comfy_generate refuses a job whose weights " +
@@ -473,8 +635,9 @@ function layer2(done) {
       // The other half of the invariant, and the one that decides whether
       // this check is safe to ship: it may NEVER refuse a job that would
       // have run.
-      window.Comfy.missingWeights = (u, g, cb) =>
-        cb(null, { missing: [], checked: 4 });
+      window.Comfy.validateGraphInputs = (u, g, o, cb) =>
+        cb(null, { missing: [], badValues: [], checked: 4,
+                   valuesChecked: 9 });
       generate((r) => {
         assert(r.ok === true && trace.indexOf("comfy.generate") !== -1,
                "a backend that lists every weight generates as before");
@@ -484,7 +647,7 @@ function layer2(done) {
       });
     },
     (next) => {
-      window.Comfy.missingWeights = (u, g, cb) =>
+      window.Comfy.validateGraphInputs = (u, g, o, cb) =>
         cb(new Error("ComfyUI unreachable at 127.0.0.1:8188"));
       generate((r) => {
         assert(r.ok === true && trace.indexOf("comfy.generate") !== -1,
@@ -495,18 +658,62 @@ function layer2(done) {
     },
     (next) => {
       // A panel build (or a stale install) with no such function at all.
-      window.Comfy.missingWeights = null;
+      window.Comfy.validateGraphInputs = null;
       generate((r) => {
         assert(r.ok === true,
                "and neither does a Comfy module that has no weight check");
         next();
       });
     },
+    // ---- 17g on the REAL path: an enum value refuses the same way ------
+    (next) => {
+      window.Comfy.validateGraphInputs = (u, g, o, cb) =>
+        cb(null, { missing: [], badValues: BAD_SAMPLER, checked: 4,
+                   valuesChecked: 9 });
+      generate((r) => {
+        assert(r.ok === false && /does not offer 1 of the value/.test(r.error),
+               "THE 17g BUG CLASS: a template whose weights all load is " +
+               "STILL refused when the backend does not have a value it " +
+               "names (got: " +
+               (r.ok ? "ok — the graph ComfyUI refuses was queued"
+                     : String(r.error).slice(0, 60)) + ")");
+        assert(trace.indexOf("llama.stop") === -1 &&
+               trace.indexOf("comfy.generate") === -1,
+               "…before the handoff and without queueing anything, exactly " +
+               "as the weight refusal does (trace: " +
+               (trace.join(", ") || "empty") + ")");
+        next();
+      });
+    },
+    (next) => {
+      // The preflight reads the template off disk; the panel posts a graph
+      // resolveOptionalNodes has already edited. A node it drops or
+      // re-classes UNCONDITIONALLY must not be judged, or a correct
+      // template is refused on every machine.
+      let sawSkip = null;
+      window.Comfy.validateGraphInputs = (u, g, o, cb) => {
+        sawSkip = o && o.skipNodes;
+        cb(null, { missing: [], badValues: [], checked: 4, valuesChecked: 9 });
+      };
+      generate(() => {
+        assert(sawSkip instanceof Array,
+               "the preflight tells the check which nodes the manifest " +
+               "will rewrite before the POST (got " + JSON.stringify(sawSkip) +
+               ")");
+        assert(sawSkip && sawSkip.length === 0,
+               "…and every H3 optionalNodes entry is gated on " +
+               "when:'missing', which needs no listing: a missing class " +
+               "has no /object_info definition and the check is already " +
+               "silent there");
+        next();
+      });
+    },
     (next) => {
       // The ordering the FIRST version of this fix got wrong: a refusal
       // the arithmetic alone can reach must not boot a backend to say so.
-      window.Comfy.missingWeights = (u, g, cb) =>
-        cb(null, { missing: FIELD_MISSING, checked: 4 });
+      window.Comfy.validateGraphInputs = (u, g, o, cb) =>
+        cb(null, { missing: FIELD_MISSING, badValues: [], checked: 4,
+                   valuesChecked: 9 });
       settings.comfyPauseLlm = "never";
       generate((r) => {
         assert(r.ok === false && /never/.test(r.error),
