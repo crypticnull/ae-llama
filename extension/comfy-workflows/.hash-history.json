@@ -27,6 +27,12 @@
     ],
     "example-txt2img.json": [
       "1186980c6dd9d09b86edc8fddef10a1740a1b4e8"
+    ],
+    "AE_LLAMA_SD15_T2I_V1.json": [
+      "5eb31f9eb7ededdeb7aa6e00ad36406142b1ad40"
+    ],
+    "AE_LLAMA_SD15_T2I_V1.manifest.json": [
+      "0cf0f5728c93e1b434a0bfde2a950a943e2965a2"
     ]
   }
 }

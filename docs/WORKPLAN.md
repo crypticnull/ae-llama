@@ -50,8 +50,8 @@ the night retrying it.
 | ~~2~~ | ~~H3's measured block, at a length that can finish~~ **DONE 2026-09-09 (0.12.9).** Two runs at 2 s / 56 frames on the managed backend, 26 969 and 26 944 MiB over an established idle floor — 25 MiB apart, so repeatable; 80 s each, 1344x768 out. `minimax-h3` is measured, `ALLOW_UNMEASURED` is now EMPTY (§18 P12's first half). P3a answered **(a)**: the row quotes the 2 s reading and states the authored 15 s default beside it, so it cannot be read as the job the buyer gets; **(b), capping the default, stays owner-gated.** Root defect found en route — the probe could not name its own output size (`output ?`) because ffmpeg.js ended `})(this)`, which is Node's global inside `new Function`. | §18 P3 + P3a | — | — |
 | 2a | Cap the duration the panel injects when the user names none — **OWNER CALL**, the measurement behind it is now taken | §18 P3a (b) | — | yes |
 | 2b | A 15-minute generation reports elapsed seconds and no estimate, so it reads as a hang | §18 P3b | — | yes |
-| 3 | **START HERE.** sd15 basic template (+ the frontend-editable measurement) | §18 P5 | item 1, AE, 2 GB | yes |
-| 4 | sdxl basic template | §18 P6 | item 3, 7 GB | yes |
+| ~~3~~ | ~~sd15 basic template (+ the frontend-editable measurement)~~ **DONE 2026-09-09 (0.12.10).** `AE_LLAMA_SD15_T2I_V1` + manifest, `workflowTemplate`, hash history, `ALLOW_NO_TEMPLATE` −sd15, and a MEASURED block (2656 MiB / 4 s cold at 512x512, managed backend). Full chain green: weight probe, `comfy-probe --workflow` 9/9 incl. AE import, `catalog-vram-probe` x2, `chat-probe --steps 1,13` — and step 13 now picks sd15 for "a red apple", which is the §18 gap statement closed. **The frontend measurement is YES** (see §18 P5b). Two root defects found en route: §18 P5a and the chat-probe PID store. | §18 P5 | — | 0.12.10 |
+| 4 | **START HERE.** sdxl basic template — its checkpoint (`sd_xl_base_1.0.safetensors`) is ALREADY on this machine's backend, so the 7 GB download in the "needs" column is already paid | §18 P6 | item 3, 7 GB | yes |
 | 5 | wan22-5b basic t2v template | §18 P7 | item 3, 17 GB | yes |
 | 6 | krea2 core-only basic; the authored graph then leaves the bundle | §18 P8 | item 3 | yes |
 | 7 | H3 core-only basic; the authored graph then leaves the bundle | §18 P9 | items 2, 5 | yes |
@@ -3804,14 +3804,14 @@ taken on what a buyer gets — so nothing measured after §17c needs a
 | P3a | local + OWNER | **(a) DONE 2026-09-09** — the row quotes 2 s and states the authored 15 s beside it, enforced against the template itself. **(b) capping the injected default is the owner's** | (b) yes | — |
 | P3b | local | elapsed seconds is the only progress a 15-minute render reports; carry step k/N through `onProgress` | yes | — |
 | ~~P4~~ | remote | **DONE 2026-09-06 (0.12.2).** Settings **Workflows** rows via the pure `Tools.workflowRows()`; `test-workflow-rows.js` (21 rows) | yes | P1 |
-| P5 | local | sd15 basic + manifest + `workflowTemplate` + allowlist −sd15; **measure whether the frontend opens an API graph editable** | yes | §17c, P0–P2, AE |
+| ~~P5~~ | local | **DONE 2026-09-09 (0.12.10).** sd15 basic + manifest + `workflowTemplate` + hash + allowlist −sd15 + a measured block; the frontend measurement is **YES** (§18 P5b). §18 P5a filed | 0.12.10 | — |
 | P6 | local | sdxl as P5 | yes | P5 |
 | P7 | local | wan22-5b as P5; `--frames`; floor re-pin rule | yes | P5; 17 GB |
 | P8 | local | krea2 basic; on proof the authored graph leaves the bundle | yes | P5 |
 | P9 | local | H3 basic; on proof the authored graph leaves the bundle | yes | P3, P7 |
 | P10 | local | h3-int8: download the 26 GB encoder, second API file — confirm from the UI source first | yes | P9; 26 GB |
 | P11 | remote | `package-zxp.ps1` `$excludeDirs` += `workflows` | yes | — |
-| P12 | remote | **HALF DONE 2026-09-09:** `ALLOW_UNMEASURED` is `[]` (minimax-h3 was its last seat and is now measured). Still open: `ALLOW_NO_TEMPLATE → [ltx-small]` and STOPS there (Q1) | tests only | P5–P10 |
+| P12 | remote | **HALF DONE 2026-09-09:** `ALLOW_UNMEASURED` is `[]` (minimax-h3 was its last seat and is now measured). `ALLOW_NO_TEMPLATE` is down to `[sdxl, ltx-small, wan22-5b, minimax-h3-int8]` — sd15 left it in P5. Still open: it must reach `[ltx-small]` and STOP there (Q1) | tests only | P5–P10 |
 
 ### Hooks, named so nobody builds them early
 
@@ -3920,6 +3920,72 @@ Bumps. Loop-takeable.
 on `catalog-vram-probe.js` (unexercised by a real generation — first act
 of the pass that takes this), gate 0 on the same probe, and the
 video-length rule in `tests/test-model-catalog.js`.
+
+## 18 P5a. A manifest's positional `widget: N` silently lands on the wrong input (filed 2026-09-09, local session)
+
+**MEASURED, and it cost a GPU render to find.** The sd15 basic was
+authored with `procedural.resolution: {nodeId: 4, widget: 0}` on its
+`EmptyLatentImage`. `proceduralKey` (`comfy.js:605-627`) has no
+`entry.input` name to use, so it falls back to **index 0 of the node's
+non-link inputs in key order** — which for that node is `batch_size`,
+not `width`. The panel then wrote 0.15 (megapixels, from 512x288) into
+it and ComfyUI refused the entire graph before sampling a step:
+
+    Prompt outputs failed validation
+    [node 4 (EmptyLatentImage): Value 0 smaller than min of 1 — batch_size]
+
+The immediate authoring error is fixed (that template declares no
+`resolution` at all — an EmptyLatentImage takes literal width/height and
+introspection handles it), and `tests/test-workflow-bundle.js` now
+replays `injectParams` over every shipped template and fails when
+injection turns a whole positive number into a fraction or a zero —
+verified by reintroducing the bug, which reports
+`4.batch_size: 1 -> 0.15`. **The class is still open**, and it is a
+manifest-authoring landmine rather than a one-off:
+
+1. A positional index into JSON key order is only unambiguous when the
+   node has exactly ONE settable input. Everywhere else it is a guess
+   that re-serialising the graph can silently re-point —
+   `adapt-workflow.js` rewrites these files.
+2. The shipped H3 manifest uses `widget: 0` on nodes 114, 136, 138 and
+   167. Those are right TODAY (each was checked when authored); nothing
+   holds them right. Converting them to named `input:` values is the
+   fix, and each conversion needs one `comfy-probe --workflow` run to
+   prove it (cheap — the probe runs H3 at 0.2 s).
+3. Then `proceduralKey` should REFUSE a positional index on a node with
+   more than one settable input, naming the inputs it does have (the
+   grounded-error rule). That refusal cannot land before step 2 or it
+   breaks the shipped H3 template.
+
+Not bundled into P5: P5's own fix is complete and verified, and step 2
+changes a template that renders today.
+
+## 18 P5b. ANSWERED — the ComfyUI frontend DOES open an API graph editable
+
+The one measurement `docs/proposals/comfy-templates-PLAN.md` §5 said the
+owner's ask depends on ("can the frontend open a basic API-format graph
+as an EDITABLE canvas? Unverified in this repo"), taken 2026-09-09 on
+the MANAGED backend's own frontend build, in headless Chrome over CDP —
+not read off the source. `app.loadApiJson(AE_LLAMA_SD15_T2I_V1.json)`
+produced:
+
+    isApi: true, nodeCount: 7, missingNodeTypes: [], wiredInputs: 9
+    KSampler widgets: seed=12345 [number], control_after_generate=randomize
+      [combo], steps=20 [number], cfg=8 [number], sampler_name=euler
+      [combo], scheduler=normal [combo], denoise=1 [number]
+    CLIPTextEncode text: "a red toy car on a white table in daylight"
+
+Real LiteGraph nodes, real links, typed interactive widgets carrying the
+authored values. The drop path is `getDataFromJSON` (every value has
+`class_type` -> `{prompt}`) -> `app.handleFile` -> `isApiJson` ->
+`loadApiJson`, which calls `LiteGraph.createNode(class_type)` per node.
+
+**So the contingency in PLAN §5 is dead and must not be built:** basics
+ship as API files, and "improve manually" starts from the actual graph.
+The alternative it named — ship UI exports plus `adapt-workflow.js`,
+forcing a re-harvest of `comfy-node-defs.json` for KSampler /
+CheckpointLoaderSimple / Wan* — is now unnecessary work. P6-P10 inherit
+this answer; do not re-measure it.
 
 ## 19. "I already have models" — discovery and confirmation (filed 2026-09-07)
 

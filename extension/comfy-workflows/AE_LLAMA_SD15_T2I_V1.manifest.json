@@ -1,0 +1,42 @@
+{
+  "workflow": "AE_LLAMA_SD15_T2I_V1",
+  "kind": "image",
+  "catalogEntry": "sd15",
+  "notes": "The BASIC text-to-image graph for the sd15 catalog entry (WORKPLAN 18 P5). Core nodes only -- CheckpointLoaderSimple / CLIPTextEncode x2 / EmptyLatentImage / KSampler / VAEDecode / SaveImage -- so it runs on the backend the panel installs with nothing added. Every input was confirmed against the RUNNING managed backend's /object_info on 2026-09-09 rather than from memory: KSampler and CheckpointLoaderSimple are not in scripts/comfy-node-defs.json, so the offline harvest could not have answered for them. The sampler/scheduler/steps/cfg values are the vendor's OWN default workflow (ComfyUI script_examples/basic_api_example.py: euler, normal, 20 steps, cfg 8, denoise 1) -- the point of a basic is that it is the shape ComfyUI itself ships, not a tuned one. The latent is 512x512, SD 1.5's training resolution; the panel overrides it when the user names a size.",
+  "procedural": {
+    "prompt": {
+      "nodeId": 2,
+      "input": "text",
+      "note": "reached by introspection anyway (the panel follows KSampler.positive/negative to the CLIPTextEncode pair, comfy-workflows/README.md); named here so a reader does not have to derive it. Note the NAMED input rather than a widget INDEX -- see whyNoResolution."
+    }
+  },
+  "whyNoResolution": "There is deliberately no procedural.resolution here, and the omission is load-bearing. procedural.resolution means 'this template derives its pixel dimensions from a MEGAPIXEL widget' (comfy.js injectProcedural), which is true of H3's ResolutionSelector and false of an EmptyLatentImage that takes literal width and height -- those are injected by introspection, which is what the README contract promises. Measured 2026-09-09: authoring it here anyway, in the positional form {nodeId: 4, widget: 0}, resolved widget 0 to the node's FIRST settable input, which is batch_size, and the panel wrote 0.15 megapixels into it. ComfyUI refused the whole graph before sampling a step: 'Prompt outputs failed validation [node 4 (EmptyLatentImage): Value 0 smaller than min of 1 -- batch_size]'. The positional widget form is the hazard; prefer a named input. See WORKPLAN 18 P5a.",
+  "models": [
+    {
+      "file": "v1-5-pruned-emaonly-fp16.safetensors",
+      "role": "checkpoint",
+      "dir": "checkpoints",
+      "sizeMB": 2034,
+      "note": "one file carries unet + CLIP + VAE, which is why this graph needs no separate encoder or vae loader"
+    }
+  ],
+  "customNodes": [
+    {
+      "pack": "(comfy-core)",
+      "nodes": [
+        "CheckpointLoaderSimple",
+        "CLIPTextEncode",
+        "EmptyLatentImage",
+        "KSampler",
+        "SaveImage",
+        "VAEDecode"
+      ]
+    }
+  ],
+  "panelIntegration": {
+    "promptInjection": "introspection: KSampler.positive -> node 2, KSampler.negative -> node 3",
+    "resolutionCeilingFrom": "tier ceilings (COMFY_TIERS_PLAN)",
+    "saveNode": "SaveImage 7 -- filename_prefix is RELATIVE, so ComfyUI joins it onto its own output dir (an absolute prefix is refused by folder_paths.get_save_image_path and kills the render at its last node; see the KREA2 manifest's node 474)"
+  },
+  "nodeAttributionScannedOn": "2026-09-09 (managed backend, /object_info on 127.0.0.1:8288)"
+}

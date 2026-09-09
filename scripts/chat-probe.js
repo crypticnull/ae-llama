@@ -289,7 +289,19 @@ function aeRead(expr, cb) {
 
 // -------------------------------------------------------- the panel, in Node
 
-const storage = {};
+// The managed backend's PID lives in a FILE beside settings.json, not in
+// this process's memory. Measured 2026-09-09 (WORKPLAN 18 P5): with a
+// bare in-memory shim here, `Comfy.ensureRunning` could not see that the
+// backend answering on the managed port was one the panel itself booted,
+// so every step-13 generation died on "Something is already answering on
+// 127.0.0.1:8288 ... and the panel did not start it" -- a refusal aimed
+// at a squatting stranger, fired at the panel's own backend. The other
+// six scripts already share scripts/lib/comfy-managed.js for exactly
+// this (17m/17n/17o, "one backend-resolution rule"); chat-probe was the
+// seventh and kept its own copy. makeStorage is a superset of the shim
+// it replaces: same in-memory behaviour for every key but the PID.
+const managed = require("./lib/comfy-managed.js");
+let pidFile = null;              // set once Settings.dataRoot() is loadable
 let probeRuns = 0;
 const window = {
   console: console,
@@ -297,12 +309,7 @@ const window = {
   clearTimeout: clearTimeout,
   setInterval: setInterval,
   clearInterval: clearInterval,
-  localStorage: {
-    getItem(k) { return Object.prototype.hasOwnProperty.call(storage, k)
-      ? storage[k] : null; },
-    setItem(k, v) { storage[k] = String(v); },
-    removeItem(k) { delete storage[k]; }
-  },
+  localStorage: managed.makeStorage(function () { return pidFile; }),
   AEBridge: {
     nodeRequire: require,
     getExtensionPath() { return EXT; },
@@ -362,6 +369,11 @@ loadPanelFile("mogrt-read.js");
 loadPanelFile("tools.js");
 
 const Settings = window.Settings;
+// Now Settings is loaded, the PID key has somewhere durable to point --
+// beside settings.json, by the panel's own dataRoot rule.
+try {
+  pidFile = path.join(Settings.dataRoot(), "comfy-managed.pid");
+} catch (e) { pidFile = null; }
 const Llama = window.Llama;
 const Tools = window.Tools;
 const Comfy = window.Comfy;

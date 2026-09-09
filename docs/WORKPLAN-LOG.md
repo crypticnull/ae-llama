@@ -21908,3 +21908,150 @@ decides — a 2 s clip is still 80 s on a 5090.
 Managed backend UP on 8288, queue empty, card released to 4761 MiB
 (idle floor was 4761 — it gave everything back). Two probe transcripts
 and two 2 s H3 clips under `logs/`.
+
+## 2026-09-09 (local session) — sd15 has a basic graph that renders, and the frontend answer the plan was waiting on is YES (NEXT UP 3 / §18 P5, 0.12.10)
+
+**Item: NEXT UP 3 (§18 P5), the "START HERE" row.** Harness green first —
+`run-ae-selftest.ps1` **770/770** — so the list applied. Gate 0:
+`from=file saved=true dataRoot=C:\Users\mr\AppData\Roaming\AE-Llama`.
+Backend already up on 8288 from the previous pass (ComfyUI 0.34.0,
+python 3.13.14, torch 2.13.0+cu130, 4278 MB extracted).
+
+**What shipped.** `extension/comfy-workflows/AE_LLAMA_SD15_T2I_V1.json`
+plus its manifest: seven core nodes, CheckpointLoaderSimple /
+CLIPTextEncode x2 / EmptyLatentImage / KSampler / VAEDecode / SaveImage.
+Every input was confirmed against the RUNNING backend's `/object_info`,
+not from memory — KSampler and CheckpointLoaderSimple are not in
+`scripts/comfy-node-defs.json`, so the offline harvest could not have
+answered for them. The sampler values are the vendor's OWN default
+workflow (`ComfyUI/script_examples/basic_api_example.py`: euler, normal,
+20 steps, cfg 8, denoise 1) rather than a tuned set: a "basic" that
+renders a shape ComfyUI itself does not ship is not a baseline. Latent
+512x512, SD 1.5's training size. `filename_prefix` is RELATIVE (the
+KREA2 node-474 lesson). The 2 GB checkpoint was fetched with
+`download-gen-weight.js --entry sd15` and the backend picked it up with
+no restart.
+
+Also: `workflowTemplate` on the catalog entry, the hash history
+recorded, `ALLOW_NO_TEMPLATE` down to four names, and a MEASURED block —
+`ALLOW_UNMEASURED` is empty, so a graph that never rendered cannot ship.
+
+**The chain, all of it green.**
+
+    weight-availability-probe   1 weight slot, 0 unloadable; 2 enums, 0 missing
+    catalog-vram-probe --entry sd15   run 1 (cold): idle 4810 -> peak 6922,
+                                        delta 2112 MiB, 4s, 512x512
+                                      run 2 (warm): delta 2656 MiB, 2s
+    comfy-probe --workflow AE_LLAMA_SD15_T2I_V1   9/9 incl. AE imported it
+                                                  at the injected 512x288
+    chat-probe --steps 1,13     pass, 4 rounds
+
+The catalog carries the LARGER delta (2656) and the COLD wall clock (4 s),
+because a buyer's first generation is the cold one. `minVramGB` stays 4 —
+the only catalog entry so far whose gate a measurement did not move.
+
+**The §18 gap statement is closed for the nameless default.** §18 opens
+with "the nameless default is ALPHABETICAL — 'a red apple' goes to the
+40 GB H3 video graph today". Measured this pass: chat-probe step 13,
+asked for a red apple, called
+`comfy_generate {"workflow":"AE_LLAMA_SD15_T2I_V1", ...}` and imported
+the result into the comp. P1's `resolveWorkflow` was doing its job; it
+had nothing image-shaped to pick until now.
+
+**ROOT DEFECT 1 — §18 P5a, filed. A positional `widget: N` landed on the
+wrong input.** The manifest was first authored with
+`procedural.resolution: {nodeId: 4, widget: 0}`. `proceduralKey`
+(`comfy.js:605-627`) has no name to use in that form, so it takes index 0
+of the node's non-link inputs in KEY ORDER — `batch_size`, not width —
+and the panel wrote 0.15 megapixels into it. ComfyUI refused the whole
+graph before sampling a step:
+
+    Prompt outputs failed validation
+    [node 4 (EmptyLatentImage): Value 0 smaller than min of 1 — batch_size]
+
+Fixed at the root for this template by removing the entry entirely, which
+is the correct answer and not a workaround: `procedural.resolution` means
+"this graph derives pixels from a MEGAPIXEL widget", true of H3's
+ResolutionSelector and false of an EmptyLatentImage that takes literal
+width and height — those are introspection's job, which is what the
+bundle README promises. The manifest now carries a `whyNoResolution` key
+so the next author does not re-add it.
+
+**Stub back-fill, and it was verified by reintroducing the bug.**
+`tests/test-workflow-bundle.js` now does what
+`docs/proposals/comfy-templates-PLAN.md` §5 specified and the shipped
+file never did: it RUNS `Comfy.injectParams` over every shipped template
+with its real manifest and asserts the prompt landed
+(`_graphCarriesValue`), the pinned seed landed, and — the general form of
+this bug — that **injection never turns a whole positive number into a
+fraction or a zero**. Every real injection writes integers; only a widget
+landing on the wrong input produces 0.15 where 1 was. Negative control
+run: put the bad `resolution` block back and the test reports
+`AE_LLAMA_SD15_T2I_V1: injection left every whole-number input whole
+(4.batch_size: 1 -> 0.15)`. No AE, no backend, no GPU.
+
+The CLASS is still open and is in the queue as §18 P5a: the shipped H3
+manifest uses `widget: 0` on four nodes, right today and held right by
+nothing, and `proceduralKey` should refuse a positional index on a node
+with more than one settable input — but not before those four are named,
+or it breaks a template that renders.
+
+**ROOT DEFECT 2 — `chat-probe.js` was the seventh script with its own
+backend rule.** Step 13's first run died with *"Something is already
+answering on 127.0.0.1:8288, the port this panel's own ComfyUI uses, and
+the panel did not start it"* — a refusal written for a squatting stranger,
+fired at the panel's own managed backend. Cause: chat-probe carried a bare
+in-memory `localStorage` shim, so `Comfy.ensureRunning` could not read the
+PID of the backend a previous script booted. §17m/§17n/§17o put six
+scripts on `scripts/lib/comfy-managed.js` for exactly this; chat-probe was
+missed because its shim sits 200 lines away from where the backend is
+resolved. It now uses `managed.makeStorage`, a superset of the shim it
+replaced (identical in-memory behaviour for every key but the PID).
+
+**§18 P5b — the frontend measurement, ANSWERED YES, and it kills a
+contingency.** PLAN §5 called this "one measurement the owner's ask
+depends on ... Unverified in this repo", with a fallback if the answer
+was no: ship UI exports plus `adapt-workflow.js`, forcing a re-harvest of
+`comfy-node-defs.json`. Measured on the MANAGED backend's own frontend
+build in headless Chrome over CDP — driven, not read off the source:
+
+    app.loadApiJson(AE_LLAMA_SD15_T2I_V1.json)
+      isApi: true, nodeCount: 7, missingNodeTypes: [], wiredInputs: 9
+      KSampler widgets: seed=12345 [number], control_after_generate=
+        randomize [combo], steps=20 [number], cfg=8 [number],
+        sampler_name=euler [combo], scheduler=normal [combo],
+        denoise=1 [number]
+      CLIPTextEncode text: "a red toy car on a white table in daylight"
+
+Real LiteGraph nodes, real links, typed interactive widgets holding the
+authored values. The drop path is `getDataFromJSON` (every value has
+`class_type` -> `{prompt}`) -> `handleFile` -> `isApiJson` ->
+`loadApiJson`, which calls `LiteGraph.createNode(class_type)` per node.
+So basics ship as API files and the owner's "improve manually" starts
+from the actual graph. **P6-P10 inherit this; do not re-measure it, and
+do not build the fallback.**
+
+**Verification.** All 86 stubbed test files pass. Two went red on the way
+and both were the same missing P5 deliverable — a new bundled template
+with no recorded hash (`test-workflow-hash-history.js`,
+`test-workflow-seeding.js`); `node scripts/workflow-hash-history.js`
+recorded 2 new hashes. Harness re-run after every change:
+**770/770 PASSED**. Bumped 0.12.9 -> **0.12.10** (extension/ changed:
+version.js plus two new bundle files plus the hash history).
+
+**Filed in WORKPLAN** (not only here): §18 P5a as its own section with
+the three ordered steps, §18 P5b as the answered measurement, NEXT UP
+item 3 struck with item 4 promoted to START HERE, P5 struck in the §18
+passes table, and P12's remaining half restated with the shortened
+allowlist. Worth a line for the next pass: **item 4 (sdxl, P6) says it
+needs 7 GB, but `sd_xl_base_1.0.safetensors` is ALREADY on this
+machine's backend** — `/object_info` lists it — so that download is
+already paid and P6 is a short pass.
+
+**State left behind.** AE running and untouched, project not closed —
+`chat-probe` and `comfy-probe` cleaned up every item they made. Managed
+backend UP on 8288, queue empty. The headless Chrome the frontend
+measurement used ran on a throwaway profile and is gone (checked by
+command line — the owner's own Chrome was not touched). One evidence
+file left on disk by chat-probe's own design:
+`%APPDATA%\AE-Llama\generated\AELlama_SD15__00004_.png`.

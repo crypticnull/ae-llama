@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.12.9",
+    VERSION: "0.12.10",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -103,7 +103,25 @@
       {
         name: "sd15",
         label: "Stable Diffusion 1.5",
-        kind: "image", sizeMB: 2034, minVramGB: 4, measured: false,
+        // MEASURED 2026-09-09 on an RTX 5090 by scripts/catalog-vram-probe.js,
+        // running the shipped AE_LLAMA_SD15_T2I_V1 through the panel's own
+        // comfy_generate on the MANAGED backend (the one a buyer installs:
+        // ComfyUI portable, python 3.13.14, torch 2.13.0+cu130), nvidia-smi
+        // streaming at 250 ms. Two runs at the template's authored 512x512,
+        // seed 12345: 2112 MiB in 4 s COLD (the checkpoint still coming off
+        // disk) and 2656 MiB in 2 s warm. The larger delta is the figure
+        // here and the cold wall clock is the seconds, because a buyer's
+        // first generation is the cold one.
+        //
+        // minVramGB stays 4: the delta is 2656 MiB against a 4096 MiB card,
+        // and the weights it must hold are 2034 MiB of that. This is the
+        // one catalog entry whose gate the measurement did not move.
+        kind: "image", sizeMB: 2034, minVramGB: 4, measured: true,
+        measuredVramMB: 2656, measuredSeconds: 4,
+        measuredAt: "512x512 (the template's authored latent), seed 12345",
+        measuredOn: "NVIDIA GeForce RTX 5090, managed ComfyUI backend " +
+                    "(torch 2.13.0+cu130), 2026-09-09",
+        workflowTemplate: "AE_LLAMA_SD15_T2I_V1",
         urls: [{
           url: "https://huggingface.co/Comfy-Org/stable-diffusion-v1-5-archive/resolve/main/v1-5-pruned-emaonly-fp16.safetensors",
           sizeMB: 2034, dir: "checkpoints"

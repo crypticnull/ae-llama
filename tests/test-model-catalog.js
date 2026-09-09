@@ -314,7 +314,10 @@ window.AELL.COMFY_CATALOG.forEach((e) => {
 // ltx-small, whose seat is PERMANENT until the owner pins its weights or
 // drops the entry (Q1: postponed, 2026-09-06) — it has `urls: []`, so
 // there is nothing to download and nothing to render.
-const ALLOW_NO_TEMPLATE = ["sd15", "sdxl", "ltx-small", "wan22-5b",
+// sd15 left this list 2026-09-09 (WORKPLAN 18 P5): it ships
+// AE_LLAMA_SD15_T2I_V1 and that graph has rendered on the managed
+// backend and imported into AE.
+const ALLOW_NO_TEMPLATE = ["sdxl", "ltx-small", "wan22-5b",
                            "minimax-h3-int8"];
 
 // Entries whose template has never been measured through

@@ -211,6 +211,107 @@ shipped.forEach((t) => {
   }
 });
 
+// ------------------------------------ replay the real injection (P5)
+//
+// Everything above reads the files. This RUNS the panel's own
+// injectParams over each shipped template + its manifest and checks what
+// landed, which is the half docs/proposals/comfy-templates-PLAN.md §5
+// asked for and the file did not do.
+//
+// It exists because of a bug it would have caught for free. Measured
+// 2026-09-09 (WORKPLAN §18 P5): the sd15 manifest was authored with
+// `procedural.resolution: {nodeId: 4, widget: 0}`, and proceduralKey's
+// POSITIONAL fallback resolved widget 0 to the node's first settable
+// input — `batch_size`, not width — so the panel wrote 0.15 megapixels
+// into it and ComfyUI refused the whole graph: "Value 0 smaller than
+// min of 1 — batch_size". Nothing here or in CI noticed; it took a GPU,
+// a backend and a real generation to find. The rule below is the
+// general form: injection may CHANGE a literal input, but it may never
+// turn a whole positive number into a fraction or a zero. Every real
+// injection (width, height, frames, seed, steps) writes integers; only
+// a widget landing on the wrong input produces 0.15 where 1 was.
+{
+  const win = {
+    AEBridge: { nodeRequire: require, getExtensionPath: () => REPO },
+    Settings: { dataRoot: () => REPO },
+    setTimeout, clearTimeout, setInterval, clearInterval
+  };
+  (new Function("window", fs.readFileSync(
+    path.join(REPO, "extension", "js", "comfy.js"), "utf8")))(win);
+  const Comfy = win.Comfy;
+
+  const PROMPT = "a lighthouse in a storm, oil painting";
+  const NEGATIVE = "blurry, watermark";
+  const SEED = 424242;
+
+  shipped.forEach((t) => {
+    const graph = JSON.parse(fs.readFileSync(t.file, "utf8"));
+    const mfPath = t.file.replace(/\.json$/i, ".manifest.json");
+    if (!fs.existsSync(mfPath)) return;
+    const mf = JSON.parse(fs.readFileSync(mfPath, "utf8"));
+
+    // Every literal number the graph carries, before anything is written.
+    const before = {};
+    Object.keys(graph).forEach((k) => {
+      const n = graph[k];
+      if (!n || !n.inputs) return;
+      Object.keys(n.inputs).forEach((ik) => {
+        if (typeof n.inputs[ik] === "number") before[k + "." + ik] = n.inputs[ik];
+      });
+    });
+
+    const params = {
+      prompt: PROMPT, negative: NEGATIVE, seed: SEED,
+      width: 512, height: 288
+    };
+    // A video template is asked in the units its own manifest declares.
+    if (mf.kind === "video") {
+      if (mf.procedural && mf.procedural.durationSeconds) {
+        params.durationSeconds = 2;
+      } else {
+        params.frames = 25;
+      }
+    }
+
+    let applied = null, err = null;
+    try { applied = Comfy.injectParams(graph, params, mf); }
+    catch (e) { err = e.message; }
+    assert(!err, t.base + ": injectParams runs over the shipped file",
+           err || (applied.length + " change(s)"));
+    if (err) return;
+
+    assert(Comfy._graphCarriesValue(graph, PROMPT),
+           t.base + ": the prompt landed in the graph as a literal");
+
+    // The seed is a number, so _graphCarriesValue (string compare) cannot
+    // see it — look for it directly.
+    const seeded = Object.keys(graph).some((k) => {
+      const n = graph[k];
+      if (!n || !n.inputs) return false;
+      return Object.keys(n.inputs).some((ik) =>
+        /seed/i.test(ik) && n.inputs[ik] === SEED);
+    });
+    assert(seeded, t.base + ": the pinned seed landed on a seed input");
+
+    // THE RULE: no whole positive number became a fraction or a zero.
+    const wrecked = [];
+    Object.keys(before).forEach((key) => {
+      const parts = key.split(".");
+      const n = graph[parts[0]];
+      const now = n && n.inputs ? n.inputs[parts.slice(1).join(".")] : undefined;
+      if (typeof now !== "number") return;          // detached/rewired: fine
+      const was = before[key];
+      if (!(was > 0 && was === Math.round(was))) return;
+      if (now === 0 || now !== Math.round(now)) {
+        wrecked.push(key + ": " + was + " -> " + now);
+      }
+    });
+    assert(wrecked.length === 0,
+           t.base + ": injection left every whole-number input whole",
+           wrecked.join("; ") || "none broken");
+  });
+}
+
 // --------------------------------------------- the catalog's own side
 
 // Every entry that NAMES a template must name one that is bundled AND
