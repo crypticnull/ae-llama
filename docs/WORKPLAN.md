@@ -45,7 +45,8 @@ the night retrying it.
 | ~~1a~~ | ~~The shipped KREA2 template cannot render on the backend a buyer gets~~ **DONE 2026-09-09 (0.12.7).** All six candidates rendered at one seed: three of the four the original filing shortlisted are UNUSABLE at 4 steps, and the two it missed are the two that work. `exp_heun_2_x0` chosen, applied via the manifest's `panelAdaptation.setInputs`, verified end to end. §18 items 3-8 are unblocked. | §17f | — | — |
 | ~~1b~~ | ~~a preflight that checks weights but not enum VALUES says "ready" about a graph ComfyUI refuses~~ **DONE 2026-09-09 (0.12.8).** `Comfy.validateGraphInputs` asks both questions in one walk of /object_info and either one refuses, before the handoff and before anything is queued. NOT via `POST /prompt`: measured on the vendor build, it has no validate-only mode and QUEUES the graph the moment validation passes — see §17g. | §17g | — | — |
 | ~~1c~~ | ~~`comfy-probe.js` says "ComfyUI reachable" PASS when nothing is listening, and `--boot` sits inside that same dead branch~~ **DONE 2026-09-09.** FOUR probes had it, not one; `managed.reachable` is now the single place the question is asked, and the panel's own two callers audited clean. No bump — nothing in `extension/` changed. | §17n | — | — |
-| 1d | **START HERE.** `comfy-probe.js --url` is silently ignored in managed mode — it sets `comfyUrl`, which `Comfy.backendUrl` never consults. Fix with §17h, which asks the weight probe for the same override. **Take §17o with it**: `handoff-probe.js` and `oom-probe.js` read `s.comfyUrl` directly, so in managed mode they measure the wrong backend — same class, three lines. | §17m + §17h + §17o | nothing | no |
+| ~~1d~~ | ~~`comfy-probe.js --url` is silently ignored in managed mode~~ **DONE 2026-09-09.** SIX scripts, one rule: `managed.urlOverride(url)` sets the MODE as well as the address, because an explicit URL names an INSTANCE, and every probe resolves with `Comfy.backendUrl`. Verified on the real machine — `--url` moves the target (and generated end to end through it), and a bare `weight-availability-probe` finally measures the managed backend (all verdicts PASS). No bump: nothing in `extension/` changed. | §17m + §17h + §17o | — | — |
+| 1e | **START HERE.** **`node tests/test-comfy-install.js` KILLS the live managed backend** and passes every assertion while doing it — measured twice 2026-09-09, and it is §17k's silent death. Its temp APPDATA carries no `comfyManagedPort`, so the run defaults to 8288 and `stopByPort(8288)` taskkills the real one. Give the fixture a port nothing owns. | §17p | nothing | no |
 | 2 | H3 t2v regression + `catalog-vram-probe --entry minimax-h3` → measured block | §18 P3 | item 1, AE | no |
 | 3 | sd15 basic template (+ the frontend-editable measurement) | §18 P5 | item 1, AE, 2 GB | yes |
 | 4 | sdxl basic template | §18 P6 | item 3, 7 GB | yes |
@@ -4360,6 +4361,20 @@ run that could not render.
 
 ## 17k. The managed backend dies SILENTLY within the half hour (filed 2026-09-09, local session)
 
+**CAUSE FOUND 2026-09-09 (local session) — see §17p, and read it before
+acting on anything below.** The killer is in this repo: the stubbed test
+suite. `tests/test-comfy-install.js` runs the real `comfy-install.js
+--check --stop` against a temp APPDATA that carries no
+`comfyManagedPort`, so it defaults to 8288 and `stopByPort(8288)`
+taskkills whatever ComfyUI is listening there — the live backend.
+Measured TWICE by boot / run that one test file / read the port: a pid
+listening before, nothing after, and `comfy-managed.log` ending on a
+normal line, which is exactly the signature described below. Every pass
+runs the suite, which is where "within the half hour" comes from. The
+job-object and idle-timer hypotheses below are not needed to explain any
+death measured so far; leave them unpursued unless a death survives the
+§17p fix.
+
 The successor to §17j, and the first entry written with its log in hand.
 §17j is closed; this is the question it was filed to make answerable.
 
@@ -4473,7 +4488,22 @@ install check. Not chosen tonight — the fixture does carry
 `harvestedOn`/`comfyuiVersion` (0.34.0), so the drift is at least
 legible.
 
-## 17m. `comfy-probe.js --url` is silently ignored in managed mode (filed 2026-09-09, local session)
+## ~~17m. `comfy-probe.js --url` is silently ignored in managed mode~~ DONE 2026-09-09 (filed 2026-09-09, local session)
+
+**DONE 2026-09-09 (local session), together with §17h and §17o — one rule,
+six scripts.** `managed.urlOverride(url)` returns `{comfyUrl,
+comfyBackend: "own"}`: an explicit URL names an INSTANCE, so it selects
+the mode that means "the instance at this URL" as well as the address,
+and every caller downstream (status, generate, validateGraphInputs,
+freeVram) follows without `backendUrl` having to learn a special case.
+Every probe resolves with `Comfy.backendUrl(s)`; nothing under `scripts/`
+reads `.comfyUrl` as a target any more. Stub back-fill
+`tests/test-probe-backend-url.js`, three layers, its source guard
+enumerating the two files still allowed to print the SETTING. Verified on
+the real machine: `--url` moves the target, and a full generation ran
+through the override. No bump — nothing in `extension/` changed.
+
+The original filing follows.
 
 Measured 2026-09-09:
 
@@ -4564,7 +4594,15 @@ A stubbed test belongs with the fix: a `Comfy.status` stub returning
 pass did not write it — the fix is a probe/panel change and the item was
 §17f; filing it rather than bundling it is the §17j lesson applied.
 
-## 17o. `handoff-probe.js` and `oom-probe.js` ask `s.comfyUrl`, so in managed mode they measure the wrong backend (filed 2026-09-09, local session)
+## ~~17o. `handoff-probe.js` and `oom-probe.js` ask `s.comfyUrl`, so in managed mode they measure the wrong backend~~ DONE 2026-09-09 (filed 2026-09-09, local session)
+
+**DONE 2026-09-09 with §17m/§17h.** Both resolve with
+`Comfy.backendUrl(s)` now, and each prints which backend it is about to
+measure before the first verdict. Their transcript headers said
+`comfyUrl:` while the run went elsewhere; they carry `backend:` with the
+resolved URL and the mode.
+
+The original filing follows.
 
 Found while fixing §17n, in the same callbacks. Both probes do
 
@@ -4589,7 +4627,19 @@ online check, the fix here is the §17h/§17m resolution rule, and bundling
 a second change into a verified one is the §17j lesson. Do all three
 together — one rule, four call sites, one test.
 
-## 17h. `weight-availability-probe.js` cannot see the managed backend without being told (filed 2026-09-09, local session)
+## ~~17h. `weight-availability-probe.js` cannot see the managed backend without being told~~ DONE 2026-09-09 (filed 2026-09-09, local session)
+
+**DONE 2026-09-09 with §17m/§17o, and verified the way the filing asked.**
+A bare `node scripts/weight-availability-probe.js` in managed mode now
+reports `ComfyUI URL: http://127.0.0.1:8288  (backend: managed)` and every
+verdict PASSES against the live managed backend — the same command that
+reported `1 verdict(s) FAILED` with ECONNREFUSED against the own-mode
+port. En route: its verdict-4 fixture ("an UNREACHABLE backend refuses
+nothing") was built by overriding `comfyUrl` alone, so in managed mode the
+"unreachable" backend it tested was the LIVE one. It uses the shared patch
+now.
+
+The original filing follows.
 
 Measured 2026-09-09: with `comfyBackend: "managed"` and
 `comfyManagedPort: 8288`, a bare
@@ -4606,6 +4656,55 @@ Small fix, real consequence: an unattended §18 pass that runs this probe
 without `--url` measures nothing and reports a failure that says nothing
 about the weights. It should default to the backend the settings
 actually select, and `--url` should stay an override.
+
+## 17p. The stubbed test suite kills the live managed backend (filed 2026-09-09, local session)
+
+**This is §17k's cause, measured rather than hypothesised.** Found while
+closing §17m: a backend booted at 08:52 and still serving a full H3
+generation at 08:53:53 was gone by 08:56:34, `comfy-managed.log` ending on
+an ordinary line — no traceback, no shutdown message. What ran in between
+was the stubbed suite.
+
+Reproduced twice, deliberately, with nothing else running:
+
+    node scripts/comfy-install.js --boot      # pid 20856 / 79892 on 8288
+    node tests/test-comfy-install.js          # exit 0, ALL TESTS PASSED
+    Get-NetTCPConnection -LocalPort 8288      # nothing
+
+**The path.** Block 4 of that test writes a stale `comfy-managed.pid`
+(`424242`) into a temp APPDATA and runs the real `comfy-install.js --check
+--stop` twice. `managed.stop()` correctly refuses to kill the recycled
+number and clears the record — and then falls through to
+`stopByPort(port, say)`. The temp settings carry no `comfyManagedPort`, so
+`Comfy.managedPort()` hands back the DEFAULT 8288, which on this machine
+is the real backend. The command-line guard inside `stopByPort` cannot
+save it: the process really is ComfyUI, so it is really killed, with
+`taskkill /PID n /T /F` — which is exactly why nothing is written to the
+log.
+
+**It passes while doing it**, which is why this survived four deaths. The
+kill prints `stopped the backend holding port 8288 (pid N)`, and the
+assertion beside it only forbids `stopped the managed backend` — a
+different string. The `r2` assertion that follows (`no managed backend
+found to stop`) then passes BECAUSE the real backend was just killed.
+
+**Fix the fixture, not `stopByPort`.** A test that drives a stop path must
+name a port nothing owns: write `comfyManagedPort` into the temp
+`settings.json`, from an OS-allocated dead port the way
+`tests/test-probe-backend-url.js` does it — never a hardcoded number, or
+the test starts passing for the wrong reason on one machine. Then assert
+POSITIVELY that no stop-by-port was claimed, so it fails if it ever
+reaches for a real process again.
+
+Check in the same pass whether any other test runs a script that can reach
+`stopByPort` or `taskkill` with a defaulted port.
+`tests/test-comfy-backend.js` is stubbed and does not, but the rule is
+the same one.
+
+Consequence while it stands: every unattended pass that boots a backend
+and then runs the suite loses the backend, silently — and §18's measured
+blocks, which need a backend that survives between passes, cannot be
+taken.
 
 ## 17i. llama-server has the same lifetime bug the managed backend just had (filed 2026-09-09, local session)
 

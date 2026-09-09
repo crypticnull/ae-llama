@@ -296,7 +296,11 @@ const OVERRIDE = {
   comfyOutDir: OUT_DIR,
   comfyTimeoutSec: OPT.timeout
 };
-if (OPT.url) OVERRIDE.comfyUrl = OPT.url;
+// --url names an INSTANCE, so it must select the mode that means "the
+// instance at this URL" as well as the address — setting comfyUrl alone
+// is invisible in managed mode, which is the whole of §17m. One place:
+// managed.urlOverride.
+if (OPT.url) Object.assign(OVERRIDE, managed.urlOverride(OPT.url));
 const realGet = Settings.get;
 Settings.get = function () {
   const s = realGet.apply(Settings, arguments);
@@ -326,7 +330,8 @@ function writeTranscript() {
   const file = path.join(dir, "comfy-probe-" + stamp + ".md");
   const lines = ["# comfy-probe " + stamp, "",
     "- workflow: " + OPT.workflow,
-    "- url: " + S.comfyUrl,
+    "- url: " + Comfy.backendUrl(S) +
+      "  (backend: " + Comfy.backendMode(S) + ")",
     "- params: durationSeconds=" + OPT.duration + " " + OPT.width + "x" +
       OPT.height + " seed=" + OPT.seed +
       (OPT.image ? " image=" + OPT.image : " (text-to-video)"), ""];

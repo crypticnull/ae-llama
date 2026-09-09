@@ -21475,3 +21475,122 @@ unverified one.
 **State left behind.** AE running and untouched, harness green, managed
 backend DOWN (stopped by the probe that booted it — the correct
 behaviour, not a failure). NEXT UP 1c struck, 1d promoted to START HERE.
+
+
+## 2026-09-09 (local session) — one backend-resolution rule for six scripts, and the test suite is what has been killing the backend (NEXT UP 1d / §17m+§17h+§17o; §17p filed)
+
+**Item: NEXT UP 1d.** Harness green first (770/770), so the list applied
+and 1d was START HERE.
+
+**The filing said three files; it was six, and one rule fixes all of
+them.** `comfyUrl` is the "use my own ComfyUI" SETTING and
+`Comfy.backendUrl(s)` is the backend, so a script may only ask the second
+question. Six scripts asked the first one, in two directions:
+
+- `comfy-probe.js`, `catalog-vram-probe.js`, `output-size-probe.js`,
+  `weight-availability-probe.js` all did `OVERRIDE.comfyUrl = OPT.url` and
+  then resolved with `Comfy.backendUrl(S)` — which in MANAGED mode never
+  consults `comfyUrl`. `--url` was accepted, printed nothing and changed
+  nothing (§17m). `output-size-probe.js` was not in the filing.
+- `weight-availability-probe.js` also read `comfyUrl` as its TARGET, so a
+  bare run in managed mode measured the own-mode port (§17h).
+- `handoff-probe.js` and `oom-probe.js` read `s.comfyUrl` at every call
+  site — reachability, queue depth, `/free`, `/interrupt`, transcript
+  header — while existing to MEASURE one backend taking the card (§17o).
+
+**The rule: an explicit URL names an INSTANCE, so it sets the MODE as well
+as the address.** `managed.urlOverride(url)` returns `{comfyUrl,
+comfyBackend: "own"}` and nothing else. That was chosen over teaching
+`backendUrl` to consult `comfyUrl` (its resolution is deliberate and
+load-bearing) and over each probe carrying its own resolved URL —
+`comfy.js` resolves internally in `generate`, `validateGraphInputs`,
+`freeVram` and the arbiter, so anything short of moving the SETTINGS
+leaves the probe checking one port and generating on another. Two fields
+or neither: `comfyBackend` alone would point "own" mode at whatever
+`comfyUrl` happened to hold. `backendMode`'s own doc already said it —
+"a caller handing us an explicit URL … means the instance at that URL."
+
+**Real-machine verification** (settings: `comfyBackend: managed`,
+`comfyManagedPort: 8288`, `comfyUrl: http://127.0.0.1:8188` — so the two
+answers differ and a wrong one is visible):
+
+- `comfy-probe.js --no-ae --url http://127.0.0.1:8299` →
+  `ComfyUI at http://127.0.0.1:8299  (backend: own)`, FAIL at
+  reachability, stop. §17m's measurement printed `8288 (backend:
+  managed)` for this exact command.
+- `comfy-probe.js --no-ae --url http://127.0.0.1:8288` against the live
+  backend → all the way through: 20s H3 render, 19778-byte mp4, `ftyp`
+  box, `COMFY PROBE PASSED`. The override does not break the generate
+  path — that was the risk of moving the mode.
+- Bare `weight-availability-probe.js`, backend down →
+  `ComfyUI URL: http://127.0.0.1:8288  (backend: managed)`, ECONNREFUSED
+  on 8288 (it used to say 8188). Backend up → **every verdict PASS**, 4
+  and 3 weight slots checked, 6 and 7 enum values. That is §17h's failing
+  command passing.
+- En route, a fixture that was testing nothing: verdict 4 builds an
+  "UNREACHABLE backend" by overriding `comfyUrl` to port 1 — which in
+  managed mode still resolved to the LIVE 8288. It uses the shared patch
+  now.
+
+**Stub back-fill: `tests/test-probe-backend-url.js`, three layers.** (1)
+`managed.urlOverride` against the REAL `Comfy.backendUrl` loaded out of
+`extension/js/comfy.js` — including the regression itself as a named
+assertion (setting `comfyUrl` alone leaves the target untouched), both
+modes, and that the patch carries exactly two fields. (2) A source guard:
+no file under `scripts/` may read `.comfyUrl` outside an enumerated
+allow-list of THREE (chat-probe's gate-0 dump, comfy-install's message
+about the setting, the helper that writes it), and the six probes must
+resolve with `Comfy.backendUrl`, and the four with a `--url` must wire it
+through `managed.urlOverride`. (3) End to end: comfy-probe in MANAGED
+mode with `--url` at an OS-allocated dead port must name the port it was
+given and never the managed one. **Negative control run for all six
+files**, one at a time: reverting comfy-probe fails 5 assertions
+(including both end-to-end halves), catalog-vram 3, weight-availability 4,
+output-size 4, handoff 2, oom 2.
+
+`chat-probe.js`'s gate-0 dump now prints the resolved backend beside the
+raw `comfyUrl`, which is the same defect in the read-only direction: a
+transcript naming one backend while the run measures another.
+
+**Results.** Stubbed suite 85/85 files green (84 + the new one). Real-AE
+harness 770/770 before and after — nothing here touches the AE half.
+**NO version bump: nothing under `extension/` changed** (six files in
+`scripts/`, one new test, docs).
+
+---
+
+**Filed as WORK, and it is bigger than the item: §17p — the stubbed test
+suite is what kills the managed backend.** This is §17k's cause,
+measured, not another hypothesis.
+
+A backend booted at 08:52 served a full generation at 08:53:53 and was
+gone by 08:56:34, its log ending on an ordinary line. What ran in between
+was the suite. Reproduced TWICE, deliberately, nothing else running:
+
+    node scripts/comfy-install.js --boot     # pid 20856, then 79892, on 8288
+    node tests/test-comfy-install.js         # exit 0, ALL TESTS PASSED
+    Get-NetTCPConnection -LocalPort 8288     # nothing
+
+Block 4 of that test runs the REAL `comfy-install.js --check --stop`
+against a temp APPDATA carrying no `comfyManagedPort`. `managed.stop()`
+correctly declines to kill the stale PID it planted, clears it, and falls
+through to `stopByPort(port)` — where the port defaults to **8288**, the
+live backend. `stopByPort`'s command-line guard cannot help: the victim
+really is ComfyUI. `taskkill /T /F` is why the log has no last words.
+
+**And it passes while doing it**, which is how four deaths went
+unexplained: the kill prints `stopped the backend holding port 8288`,
+while the assertion beside it only forbids the string `stopped the
+managed backend`; the next assertion (`no managed backend found to stop`)
+then passes BECAUSE the real backend was just killed.
+
+Not fixed here on purpose — §17j's lesson, and the one-item rule. The
+fix belongs in the fixture (an OS-allocated dead `comfyManagedPort`, plus
+a positive assertion that no stop-by-port was claimed), it is small, and
+it is now NEXT UP **1e / START HERE**. §17k is annotated with the cause
+so nobody spends another night on job objects or idle timers; both
+hypotheses there are unnecessary for every death measured so far.
+
+**State left behind.** AE running and untouched, harness 770/770, managed
+backend DOWN — killed by `test-comfy-install.js`, which is the finding,
+not an accident. Working tree committed; NEXT UP 1d struck, 1e promoted.

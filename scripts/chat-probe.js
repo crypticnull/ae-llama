@@ -379,7 +379,14 @@ function reportSettingsOrigin() {
   const o = Settings.origin();
   if (o.saved) {
     console.log("settings   : " + o.from + " (" + o.file + ")");
-    console.log("comfyUrl   : " + Settings.get().comfyUrl);
+    // Both, deliberately: comfyUrl is the "use my own ComfyUI" SETTING,
+    // and in managed mode it is not what anything talks to. Printing it
+    // alone is how a transcript names one backend while the run measures
+    // another (§17m).
+    const cs = Settings.get();
+    console.log("comfyUrl   : " + cs.comfyUrl);
+    console.log("backend    : " + Comfy.backendMode(cs) + " -> " +
+                Comfy.backendUrl(cs));
     return o;
   }
   console.log("\n!! SETTINGS NOT FOUND — every value below is a DEFAULT, " +

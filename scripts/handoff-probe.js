@@ -441,7 +441,8 @@ function writeTranscript() {
   const lines = ["# handoff probe " + stamp, "",
     "- chat model: `" + s.modelPath + "`",
     "- workflow: " + OPT.workflow + " at " + OPT.width + "x" + OPT.height,
-    "- comfyUrl: " + s.comfyUrl,
+    "- backend: " + Comfy.backendUrl(s) +
+      "  (" + Comfy.backendMode(s) + ")",
     "- rounds: " + OPT.rounds + " (round B override " + OPT.override + " GB)",
     ""];
   for (const t of transcript) lines.push("- **" + t.kind + "** " + t.text);
@@ -485,14 +486,23 @@ detectGpu(function (gpu) {
   // NOT `if (err)`: Comfy.status reports a DOWN backend as
   // cb(null, {online:false, hint}) so the panel can show the hint, so a
   // caller testing only `err` printed PASS with nothing listening (§17n).
-  managed.reachable(Comfy, s.comfyUrl, s, function (down, st) {
+  //
+  // And NOT s.comfyUrl (§17o): comfyUrl is the "use my own ComfyUI"
+  // setting, and in managed mode the panel talks to its own port. This
+  // probe exists to MEASURE a handoff — pointed at a backend that is not
+  // the one the panel uses, every number in the transcript is about a
+  // different process.
+  const URL = Comfy.backendUrl(s);
+  say("info", "ComfyUI at " + URL + "  (backend: " +
+              Comfy.backendMode(s) + ")");
+  managed.reachable(Comfy, URL, s, function (down, st) {
     if (down) {
-      verdict(false, "ComfyUI reachable at " + s.comfyUrl, down);
+      verdict(false, "ComfyUI reachable at " + URL, down);
       say("error", "Nothing to hand the card to — stopping.");
       finish();
       return;
     }
-    verdict(true, "ComfyUI reachable at " + s.comfyUrl,
+    verdict(true, "ComfyUI reachable at " + URL,
             "queue running=" + (st.running || 0) +
             " pending=" + (st.pending || 0));
 
@@ -531,7 +541,7 @@ detectGpu(function (gpu) {
       function probeFreeDirectly() {
         // The tier plan's open question, answered with the status code.
         sampleVram(function (before) {
-          rawFree(s.comfyUrl, function (fErr, code, body) {
+          rawFree(URL, function (fErr, code, body) {
             sampleVram(function (after) {
               if (fErr) {
                 verdict(false, "POST /free is supported by this backend",

@@ -41,6 +41,9 @@
  *   node scripts/weight-availability-probe.js
  *   node scripts/weight-availability-probe.js --url http://127.0.0.1:8188
  *
+ * With no --url it asks the backend the SETTINGS select — the managed one
+ * when the panel is in managed mode, not comfyUrl (§17h).
+ *
  * Writes a markdown transcript to logs/ and exits 0 only if every verdict
  * passed.
  */
@@ -51,6 +54,7 @@ const path = require("path");
 
 const ROOT = path.join(__dirname, "..");
 const EXT = path.join(ROOT, "extension");
+const managed = require("./lib/comfy-managed.js");
 
 const argv = process.argv.slice(2);
 function argValue(name, dflt) {
@@ -112,7 +116,12 @@ const OVERRIDE = {
   comfyOutDir: OUT_DIR,
   comfyTimeoutSec: 60
 };
-if (OPT.url) OVERRIDE.comfyUrl = OPT.url;
+// §17h/§17m: without this the probe went to comfyUrl — the "use my own
+// ComfyUI" setting — while the panel was talking to the managed port, so
+// a bare run in managed mode reported ECONNREFUSED as a weight failure.
+// The target is Comfy.backendUrl(s) now; --url overrides it through the
+// shared patch, which sets the MODE as well as the address.
+if (OPT.url) Object.assign(OVERRIDE, managed.urlOverride(OPT.url));
 const realGet = Settings.get;
 Settings.get = function () {
   const s = realGet.apply(Settings, arguments);
@@ -137,7 +146,9 @@ function verdict(ok, label, detail) {
 // ------------------------------------------------------------------- probe
 
 const s = Settings.get();
-say("info", "ComfyUI URL: " + s.comfyUrl);
+const BACKEND = Comfy.backendUrl(s);
+say("info", "ComfyUI URL: " + BACKEND + "  (backend: " +
+            Comfy.backendMode(s) + ")");
 say("info", "Workflow dir: " + s.comfyWorkflowsDir);
 
 const templates = Comfy.listWorkflows(s.comfyWorkflowsDir)
@@ -152,7 +163,7 @@ function measure(w, next) {
   const skipNodes = ((manifest && manifest.optionalNodes) || [])
     .filter((e) => e && e.when && e.when !== "missing")
     .map((e) => String(e.nodeId));
-  Comfy.validateGraphInputs(s.comfyUrl, graph, { skipNodes: skipNodes },
+  Comfy.validateGraphInputs(BACKEND, graph, { skipNodes: skipNodes },
                             function (err, res) {
     if (err) {
       say("error", w.name + ": " + err.message);
@@ -255,7 +266,11 @@ function unreachableCheck() {
   }
 
   // ---- verdict 4: a backend that cannot be asked refuses NOTHING --------
-  const dead = Object.assign({}, s, { comfyUrl: "http://127.0.0.1:1" });
+  // Port 1 in "own" mode, both set together: in managed mode a settings
+  // object carrying only a dead comfyUrl still resolves to the LIVE
+  // managed port, so this "unreachable" backend would have been the
+  // reachable one (§17m).
+  const dead = Object.assign({}, s, managed.urlOverride("http://127.0.0.1:1"));
   const any = results[0];
   Tools._preflightRefusalFor(dead, templates[0].file, any.manifest,
     function (refusal) {
@@ -335,7 +350,7 @@ function finish() {
   const file = path.join(dir, "weight-availability-probe-" + stamp + ".md");
   const body = ["# weight availability probe", "",
     "- when: " + new Date().toISOString(),
-    "- backend: " + s.comfyUrl, ""]
+    "- backend: " + BACKEND + "  (" + Comfy.backendMode(s) + ")", ""]
     .concat(transcript.map((t) => (t.kind === "verdict" ? "**" + t.text + "**"
                                                         : "    " + t.text)))
     .join("\n");

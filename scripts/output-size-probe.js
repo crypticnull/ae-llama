@@ -96,6 +96,7 @@ loadPanelFile("comfy.js");
 
 const Settings = window.Settings;
 const Comfy = window.Comfy;
+const managed = require("./lib/comfy-managed.js");
 
 const OUT_DIR = path.join(ROOT, "logs", "output-size");
 const OVERRIDE = {
@@ -103,7 +104,8 @@ const OVERRIDE = {
   comfyOutDir: OUT_DIR,
   comfyTimeoutSec: OPT.timeout
 };
-if (OPT.url) OVERRIDE.comfyUrl = OPT.url;
+// Mode as well as address, or --url is invisible in managed mode (§17m).
+if (OPT.url) Object.assign(OVERRIDE, managed.urlOverride(OPT.url));
 const realGet = Settings.get;
 Settings.get = function () {
   const s = realGet.apply(Settings, arguments);
@@ -153,7 +155,8 @@ function main() {
     process.exit(2);
   }
   say("info", "template " + chosen.name);
-  say("info", "backend  " + S.comfyUrl);
+  say("info", "backend  " + Comfy.backendUrl(S) + "  (" +
+              Comfy.backendMode(S) + ")");
   say("info", "asked for " + OPT.width + "x" + OPT.height);
 
   // The prediction, taken from the panel's own code on a throwaway copy
@@ -190,7 +193,7 @@ function main() {
   say("info", "rendering (this holds the card for as long as it takes)...");
   const startedAt = Date.now();
   Comfy.generate({
-    comfyUrl: S.comfyUrl,
+    comfyUrl: Comfy.backendUrl(S),
     workflowFile: chosen.file,
     outDir: OUT_DIR,
     timeoutSec: OPT.timeout,

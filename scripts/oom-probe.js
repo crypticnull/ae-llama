@@ -356,7 +356,7 @@ function runRound(cb) {
     setPhase("warm");
     sampleVram(function (mb) {
       vramAtWarm = mb;
-      queueDepth(s.comfyUrl, function (q) {
+      queueDepth(Comfy.backendUrl(s), function (q) {
         queueAtWarm = q;
         say("info", "at warm-up: VRAM " + mb + " MB, ComfyUI queue " +
                     (q ? q.running + " running / " + q.pending + " pending"
@@ -410,7 +410,7 @@ function runRound(cb) {
       Llama.start = realStart;
       clearInterval(watcher);
       setPhase("after");
-      queueDepth(s.comfyUrl, function (qAfter) {
+      queueDepth(Comfy.backendUrl(s), function (qAfter) {
         cb({
           hung: false,
           result: results[0] || {},
@@ -520,7 +520,8 @@ function writeTranscript() {
   const lines = ["# OOM / abandoned-job recovery probe " + stamp, "",
     "- chat model: `" + s.modelPath + "`",
     "- workflow: " + OPT.workflow + " at " + OPT.width + "x" + OPT.height,
-    "- comfyUrl: " + s.comfyUrl,
+    "- backend: " + Comfy.backendUrl(s) +
+      "  (" + Comfy.backendMode(s) + ")",
     "- comfyTimeoutSec: " + OPT.timeout + ", vramOverrideGB: " + OPT.override,
     ""];
   for (const t of transcript) lines.push("- **" + t.kind + "** " + t.text);
@@ -538,8 +539,9 @@ function writeTranscript() {
  * rest of the night, whether it passed, failed or threw. */
 function finish() {
   const s = Settings.get();
-  comfyRequest(s.comfyUrl, "POST", "/interrupt", {}, function () {
-    comfyRequest(s.comfyUrl, "POST", "/free",
+  const URL = Comfy.backendUrl(s);
+  comfyRequest(URL, "POST", "/interrupt", {}, function () {
+    comfyRequest(URL, "POST", "/free",
       { unload_models: true, free_memory: true }, function () {
         watchOff();
         try { Llama.stop(); } catch (e) {}
@@ -576,14 +578,22 @@ detectGpu(function (gpu) {
   // NOT `if (err)`: Comfy.status reports a DOWN backend as
   // cb(null, {online:false, hint}) so the panel can show the hint, so a
   // caller testing only `err` printed PASS with nothing listening (§17n).
-  managed.reachable(Comfy, s.comfyUrl, s, function (down, st) {
+  //
+  // And NOT s.comfyUrl (§17o): comfyUrl is the "use my own ComfyUI"
+  // setting, and in managed mode the panel talks to its own port. This
+  // probe exists to watch ONE backend take the card — pointed at another
+  // instance its numbers are about a different process.
+  const URL = Comfy.backendUrl(s);
+  say("info", "ComfyUI at " + URL + "  (backend: " +
+              Comfy.backendMode(s) + ")");
+  managed.reachable(Comfy, URL, s, function (down, st) {
     if (down) {
-      verdict(false, "ComfyUI reachable at " + s.comfyUrl, down);
+      verdict(false, "ComfyUI reachable at " + URL, down);
       say("error", "Nothing to hand the card to — stopping.");
       finish();
       return;
     }
-    verdict(true, "ComfyUI reachable at " + s.comfyUrl,
+    verdict(true, "ComfyUI reachable at " + URL,
             "queue running=" + (st.running || 0) +
             " pending=" + (st.pending || 0));
 

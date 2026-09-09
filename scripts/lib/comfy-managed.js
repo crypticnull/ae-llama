@@ -217,6 +217,37 @@ function reachable(Comfy, url, settings, cb) {
   }, settings);
 }
 
+/**
+ * The settings patch that makes `--url` REAL. Merge it into the override
+ * object a probe already layers over Settings.get().
+ *
+ * §17m, measured 2026-09-09: every probe did `OVERRIDE.comfyUrl = OPT.url`
+ * and then resolved its target with `Comfy.backendUrl(S)` — which in
+ * MANAGED mode returns the managed port and never consults `comfyUrl` at
+ * all. So the flag was accepted, printed nothing, and the probe measured
+ * the managed backend anyway:
+ *
+ *     node scripts/comfy-probe.js --no-ae --url http://127.0.0.1:8299
+ *     -- ComfyUI at http://127.0.0.1:8288  (backend: managed)
+ *
+ * The fix is not to make `backendUrl` consult `comfyUrl` — that
+ * resolution is deliberate and load-bearing (see the comment above it in
+ * comfy.js). It is that an explicit URL names an INSTANCE, so it selects
+ * the mode that means "the instance at this URL" as well as the address.
+ * `backendMode`'s own doc says exactly that: "a caller handing us an
+ * explicit URL predates the setting and means the instance at that URL."
+ *
+ * Both fields, or neither: setting `comfyUrl` alone is the bug, and
+ * setting `comfyBackend` alone would point "own" mode at whatever
+ * `comfyUrl` happened to hold. Consequence of getting it wrong is not a
+ * wrong port but a wrong MEASUREMENT — handoff/oom exist to watch one
+ * backend take the card, and pointed elsewhere they report numbers about
+ * a different process.
+ */
+function urlOverride(url) {
+  return { comfyUrl: String(url), comfyBackend: "own" };
+}
+
 module.exports = {
   PID_KEY: PID_KEY,
   makeStorage: makeStorage,
@@ -224,5 +255,6 @@ module.exports = {
   stopByPort: stopByPort,
   stop: stop,
   boot: boot,
-  reachable: reachable
+  reachable: reachable,
+  urlOverride: urlOverride
 };

@@ -146,7 +146,9 @@ const OVERRIDE = {
   comfyOutDir: OUT_DIR,
   comfyTimeoutSec: OPT.timeout
 };
-if (OPT.url) OVERRIDE.comfyUrl = OPT.url;
+// Both fields, via the shared patch: comfyUrl alone is never read in
+// managed mode, so --url was accepted and ignored (§17m).
+if (OPT.url) Object.assign(OVERRIDE, managed.urlOverride(OPT.url));
 const realGet = Settings.get;
 Settings.get = function () {
   const s = realGet.apply(Settings, arguments);
@@ -177,7 +179,8 @@ function writeTranscript() {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const file = path.join(dir, "catalog-vram-probe-" + stamp + ".md");
   const lines = ["# catalog-vram-probe " + stamp, "",
-                 "- url: " + S.comfyUrl,
+                 "- url: " + Comfy.backendUrl(S) +
+                   "  (backend: " + Comfy.backendMode(S) + ")",
                  "- card: " + (cardName || "?") + " (" +
                    (cardTotalMB === null ? "?" : cardTotalMB + " MiB") + ")", ""];
   if (measurements.length) {
@@ -367,7 +370,11 @@ function peakOf(samples) {
 function postFree(cb) {
   const s = Settings.get();
   let u;
-  try { u = new URL(s.comfyUrl); } catch (e) { cb(new Error("bad comfyUrl")); return; }
+  // The RESOLVED backend, not comfyUrl: /free has to reach the instance
+  // whose VRAM this probe is measuring (§17m/§17o).
+  const target = Comfy.backendUrl(s);
+  try { u = new URL(target); }
+  catch (e) { cb(new Error("bad backend URL: " + target)); return; }
   const body = JSON.stringify({ unload_models: true, free_memory: true });
   const req = http.request({
     hostname: u.hostname, port: u.port || 80, path: "/free", method: "POST",
