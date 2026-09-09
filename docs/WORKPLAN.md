@@ -57,6 +57,7 @@ NOTHING but the repo and are always takeable:
 
 | item | where | bumps |
 |---|---|---|
+| The managed backend dies silently within the half hour — measure the cause before fixing it | §17k | maybe |
 | `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url` | §17h | no |
 | Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire | §17i | yes |
 | `Setup.scanForModelRoots()` — probe a named shortlist, never scan drives | §19a | yes |
@@ -4242,6 +4243,63 @@ ComfyUI already has the honest check: **`POST /prompt` with
 work is to run the graph past validation as part of the preflight, and
 report what it says, instead of inferring readiness from weight slots
 alone.
+
+## 17k. The managed backend dies SILENTLY within the half hour (filed 2026-09-09, local session)
+
+The successor to §17j, and the first entry written with its log in hand.
+§17j is closed; this is the question it was filed to make answerable.
+
+**Measured 2026-09-09.** Backend booted detached at 03:43 (pid 61904),
+served a full KREA2 generation, and was gone from port 8288 within the
+half hour — the third time in two days. `comfy-managed.log` now exists
+and its last line is:
+
+    [INFO] Prompt executed in 12.72 seconds
+
+Nothing after it. **No traceback, no shutdown message, no atexit
+output.** That is the new datum and it is worth more than it looks: a
+Python-level crash, an unhandled exception, an OOM abort and a clean
+shutdown would all write SOMETHING there. This process was terminated
+from outside, hard.
+
+**Ruled out.** The loop's own reaper is not it.
+`Get-AellCliPassProcesses` (`scripts/lib/claude-procs.ps1`) filters
+descendants by NAME to `claude*` and `node*` whose command line mentions
+claude, so `python.exe` is never a candidate — and both of
+`run-local-agent.ps1`'s kill sites go through it. Nothing else in
+`scripts/` kills anything ComfyUI-shaped except `comfy-managed.js`'s own
+`stop`/`stopByPort`, which are only reached from an explicit `--stop`.
+
+**HYPOTHESIS, not a measurement — do not log this as fact.** Windows job
+objects. Node's `detached: true` gets the child out of the LAUNCHER's
+job (measured 2026-09-09, and it holds — the backend outlives
+`comfy-install.js` by minutes and served two independent processes). It
+does not obviously get the child out of the job the enclosing agent
+session or terminal is in. Kill that job and every process in it dies at
+once with no chance to log, which is exactly the signature above, and
+the ~30-minute latency matches a pass ending rather than anything
+ComfyUI does.
+
+**How to test it** — cheap, and it settles the question before anyone
+writes code:
+
+1. Boot the backend, note the pid, and read its job assignment
+   (`NtQueryInformationProcess` is overkill; `Get-Process`
+   + a `AssignProcessToJobObject`-aware tool, or simply test the
+   behaviour) — then END the session that booted it and see whether it
+   dies at that moment rather than on a timer. A death that lands
+   exactly on session end is the answer; a death on a timer is not.
+2. If confirmed, the fix is to break job inheritance at spawn: launch
+   through a detaching shim (`cmd /c start ""` or PowerShell
+   `Start-Process`) so the backend is re-parented out of the tree,
+   instead of `detached: true` alone.
+
+Do NOT skip step 1. §17j is a standing lesson in this exact repo about
+how a plausible mechanism gets recorded as a cause and then has to be
+retracted — and about how a test can be sound and its conclusion still
+too broad.
+
+Wanted by §18: those passes need a backend that stays up between them.
 
 ## 17h. `weight-availability-probe.js` cannot see the managed backend without being told (filed 2026-09-09, local session)
 

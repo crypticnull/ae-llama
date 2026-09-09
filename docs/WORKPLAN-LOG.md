@@ -21071,3 +21071,30 @@ also noticed the original filing's shortlist of four missed
 carry — `res_2s` is a 2nd-order EXPONENTIAL single-step method, so a
 name match on `res_*` is not obviously the closest behaviour. Both notes
 are filed in §17f, not only here.
+
+### Addendum, same pass — the first death with a log to read (§17k filed)
+
+Checked the port after committing: the backend was gone again, within
+the half hour, the third time in two days. This is the first time that
+has happened with `comfy-managed.log` in place, so it is the first time
+there is anything to look at.
+
+The log's last line is `Prompt executed in 12.72 seconds` and there is
+nothing after it — no traceback, no shutdown message, no atexit output.
+A Python crash, an unhandled exception, an OOM abort and a clean
+shutdown would each write something. It was terminated from outside,
+hard.
+
+Ruled out while I had the files open: the loop's own reaper cannot be
+it. `Get-AellCliPassProcesses` filters descendants by NAME to `claude*`
+and `node*`-running-claude, so `python.exe` is never a candidate, and
+both of `run-local-agent.ps1`'s kill sites go through it. Nothing else
+in `scripts/` kills anything ComfyUI-shaped outside an explicit
+`--stop`.
+
+Filed as **§17k**, with a Windows job-object hypothesis written down AS
+a hypothesis and a two-step test that measures before anything is
+changed. I did not act on it — this pass's item was §17j and it is done,
+and §17j is itself the standing lesson about recording a plausible
+mechanism as a cause. Also added to the always-takeable list, so the
+loop can pick it up.
