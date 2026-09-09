@@ -4335,6 +4335,25 @@ once with no chance to log, which is exactly the signature above, and
 the ~30-minute latency matches a pass ending rather than anything
 ComfyUI does.
 
+**Second death, measured 2026-09-09 (later the same day) — and it
+weakens the hypothesis above.** Booted, served six sweep renders plus a
+full end-to-end probe, last log line `Prompt executed in 4.45 seconds` at
+**04:02:25**, nothing after it, port dead by **04:16**. Same silent
+signature. But this time: the agent session that booted it **did not
+end** (it was still running, and still running when the death was found),
+no `--stop` was issued, the backend had already outlived its launching
+process by half an hour of active use, and it died **IDLE** — every
+generation it was asked for had succeeded.
+
+So the ~30-minute latency is NOT obviously "a pass ending", which is what
+the job-object story leans on. It fits an idle timer at least as well.
+Step 1 below tests only the job-object story; run it, but do not read a
+null result there as "no cause found". Add the cheap idle control
+alongside it: boot, do ONE generation, then leave it strictly alone and
+watch the port, with nothing else on the machine changing. If it dies on
+a timer with no session ending, the hypothesis below is refuted rather
+than unproven.
+
 **How to test it** — cheap, and it settles the question before anyone
 writes code:
 

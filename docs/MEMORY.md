@@ -63,7 +63,7 @@ _15 older corrections not listed — `grep -niE 'retract|supersed|CORRECTION' do
 
 | Date | Lines | Ver | Entry | Tags |
 |---|---|---|---|---|
-| 2026-09-09 | `21102,21223` | — | KREA2's sampler chosen by rendering all six, not by argument (NEXT UP 1a / §17f, 0.12.7) | comfy |
+| 2026-09-09 | `21102,21246` | — | KREA2's sampler chosen by rendering all six, not by argument (NEXT UP 1a / §17f, 0.12.7) | comfy |
 | 2026-09-09 | `20973,21101` | — | the detached backend's dead stderr pipe was killing every generation (§17j, 0.12.6) | other |
 | 2026-09-09 | `20939,20972` | — | correction to the entry above: the backend did NOT stay up | other |
 | 2026-09-09 | `20814,20938` | 0.12.5 | NEXT UP item 1 / §17c: the managed backend did not outlive its launcher (0.12.5) | comfy, setup |

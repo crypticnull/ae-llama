@@ -21214,9 +21214,32 @@ CI globs `tests/test-*.js`, so it is picked up with no registration).
 Real-AE harness 770/770, before and after; nothing here touches the AE
 half. `extension/` changed, so bumped 0.12.6 → 0.12.7.
 
-**State left behind.** The managed backend is UP on 8288 and rendering.
-AE left running and untouched — the probe removed the item it imported.
-§17k (the backend dying silently within the half hour) was NOT
-investigated this pass and is still open; the backend survived the whole
-of this pass, which is one more data point for the "dies when the booting
-session ends" hypothesis and not evidence for anything on its own.
+**State left behind.** AE left running and untouched — the probe removed
+the item it imported. The managed backend is **DOWN**: it died silently
+again while this entry was being written, the fourth time in three days.
+
+I had written "the backend survived the whole of this pass" a few minutes
+earlier and it was wrong — correcting it here rather than leaving it,
+because §17k's next pass will read this as evidence. What actually
+happened, all four facts checkable:
+
+- `comfy-managed.log` ends at **04:02:25** with `Prompt executed in 4.45
+  seconds` — my last generation — and **nothing after it**. Same
+  signature as yesterday: no traceback, no shutdown message, no atexit
+  output. Terminated from outside, hard.
+- By **04:16** the port was dead. So it went within ~14 minutes of its
+  last activity, having been booted ~20 minutes before that.
+- **My agent session never ended, and never issued `--stop`.** The Bash
+  call that booted it exited long before, and the backend outlived that
+  by roughly half an hour of active use.
+- It died while **IDLE**, not under load. Every generation it was asked
+  for succeeded.
+
+That last pair matters for §17k, which currently leans on a job-object
+hypothesis with the ~30-minute latency attributed to "a pass ending". A
+pass did not end here. What did happen is that it went quiet. An idle
+timer is now at least as good a fit as job teardown, and §17k's step 1
+was written to test only the latter — noted in the section itself so the
+pass that takes it does not test one hypothesis and conclude about the
+other. That is §17j's lesson again, which this repo has now paid for
+twice.
