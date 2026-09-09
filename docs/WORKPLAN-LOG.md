@@ -21668,3 +21668,97 @@ promoted to START HERE. §17k's "cause found" note upgraded to "cause
 found and fixed", with the standing instruction that its job-object and
 idle-timer hypotheses stay unpursued unless a death is measured AFTER
 this fix — one measured now would be a NEW bug, not the old one.
+
+## 2026-09-09 (local session) — H3's t2v regression passes; its AUTHORED render is a >15-minute job, so the measured block is BLOCKED on wall clock, not on VRAM (NEXT UP 2 / §18 P3; §18 P3a filed)
+
+**Item: NEXT UP 2 (§18 P3).** Harness green first — `run-ae-selftest.ps1`
+**770/770** — so the list applied and item 2 was START HERE. Backend was
+up from the previous pass, same pid 42796 on 8288, `/queue` 200. Gate 0:
+`from=file saved=true dataRoot=C:\Users\mr\AppData\Roaming\AE-Llama`.
+
+**Half one, the t2v regression: PASS, 9/9 verdicts.** `comfy-probe.js`
+against the MANAGED backend, no image given, so the first frame detached
+and `AE_LLAMA_H3_I2V_V1` ran text-to-video. 19 s, VRAM peak 31673 over an
+idle 4681. Every optional node resolved the way the manifest says it
+should on a bare install (7 bypassed/substituted, `Float ->
+PrimitiveFloat` carried its value), the mp4 came back real (`ftyp`,
+19778 bytes), AE imported it (544x288, 0.208 s @ 24 fps, audio present)
+and the probe removed it again. That is the regression §18 P3 asked for
+and it holds on the backend a buyer gets, not the owner's 8000.
+
+**Half two, the measured block: NOT TAKEN, and the reason is the
+finding.** `catalog-vram-probe --entry minimax-h3` measures at the
+template's AUTHORED size on purpose (that is what the panel gives a user
+who names no size). For H3 the authored settings are node 136 = **15
+seconds**, node 167 = **0.98 MP**, node 142 = **20 steps**, and node
+135's `max(5, round(a*b)) + (5 - (max(5, round(a*b)) % 17)) % 17`
+turns 15 s x 24 fps into a **362-frame** latent. On the 5090 that job
+was **still sampling at 901 s** when the probe's timeout cancelled it:
+
+    idle floor 4857 MiB (settled to within 0 MiB)
+    3511 nvidia-smi samples over 901 s, peak 30191 MiB
+    FAIL minimax-h3: generation completed - timed out after 901s, cancelled
+
+**It is not a VRAM wall.** No OOM, no grind signature: the card sat at
+100% utilisation the whole time and the peak, 30191 MiB, stayed under
+the card's 32607. The delta that reading implies (25334 MiB / 24.7 GiB)
+is a **lower bound from an unfinished run**, so it is NOT publishable as
+a measured block — `measuredVramMB` has to come from a generation that
+produced a file. `minimax-h3` therefore STAYS in `ALLOW_UNMEASURED` and
+the catalog entry is untouched. Nothing under `extension/` changed this
+pass, so **no version bump**.
+
+**What that means for the product, which is bigger than the reading.**
+A user who asks the panel for an H3 video and names no length gets a
+render that takes **over fifteen minutes on an RTX 5090** — the fastest
+card the catalog knows about. That is the panel's default, not an edge
+case, and `comfy_generate` has no ETA to offer while it happens. Filed
+as **§18 P3a** (NEXT UP 2a) with the decision it needs: either the
+catalog's H3 number is taken at a stated shorter length and says so, or
+the panel caps the default duration it injects. That is a product call
+with a measurement attached, so it is filed rather than made here.
+
+**The tool the next pass needs is landed.** `catalog-vram-probe.js` had
+`--width`/`--height` for decomposing an answer but nothing for LENGTH,
+so a video entry could only ever be measured at its authored duration —
+which for H3 is the one duration that cannot be measured inside a pass.
+Added `--duration <seconds>`, passed as `durationSeconds` into the same
+`comfy_generate` args, with the comment saying plainly that a reading
+taken with it is NOT the catalog's headline number (the transcript
+prints the args, so the two cannot be confused). A 2 s H3 clip is 56
+frames against 362, so the next pass gets its reading in minutes.
+**Unexercised by a real generation** — it landed after tonight's run had
+already started and there was no time left to spend 4 minutes proving a
+one-line pass-through. First act of the next pass.
+
+**Gate 0 added to the probe itself.** §18 requires every local pass to
+print `Settings.origin()` and refuse an empty APPDATA; `comfy-install.js`
+and `download-gen-weight.js` do it and this probe did not — and it is the
+script whose readings go into the CATALOG, so a run against a default
+settings file would measure whatever model roots THAT names and publish
+it as this machine's. Now prints the origin line and exits 2 when
+`appdata` is empty.
+
+**Stub back-fill (`tests/test-model-catalog.js`).** The measured-block
+assertions required `measuredAt` to name a pixel size and said nothing
+about length. For a VIDEO entry that is half a number: the latent is
+frames x pixels, so H3 at 15 s and H3 at 2 s are two different jobs on
+the card and a row reading only `1920x1080` cannot say which was
+measured — and the pixel rule passes either way, which is exactly how
+that gap would have shipped alongside P3a's answer. A measured
+`kind: "video"` entry must now name seconds or frames as well. Negative
+control: krea2 (`kind: "image"`) is unaffected and still passes; a
+hand-added video entry carrying only a pixel size fails.
+
+**Results.** `tests/test-model-catalog.js`, `test-probe-bundle.js`,
+`test-es3-ternary.js` (57 rows) all green; `catalog-vram-probe --list`
+runs and prints the new gate-0 line. Real-AE harness 770/770 at pass
+start; **not re-run at the end and here is why** — this pass changed one
+probe script and one Node test and nothing under `extension/` or in
+`selftest.js`, so the AE half is byte-identical to the run that passed.
+
+**State left behind.** AE running and untouched. Managed backend UP on
+8288, pid 42796 — same process that started the pass, queue empty, card
+released to 4911 MiB. The cancelled prompt
+(79ee5e9a-ed0a-4774-a03c-6c6271ffa04a) was cancelled by the probe, not
+left running.

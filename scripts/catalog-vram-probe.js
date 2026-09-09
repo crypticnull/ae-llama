@@ -21,6 +21,7 @@
  *
  *   node scripts/catalog-vram-probe.js --list          # no GPU work at all
  *   node scripts/catalog-vram-probe.js --entry krea2
+ *   node scripts/catalog-vram-probe.js --entry minimax-h3 --duration 2
  *   node scripts/catalog-vram-probe.js                 # every measurable one
  *
  * Three things it does deliberately, each learned from an earlier pass:
@@ -77,6 +78,7 @@ const OPT = {
   seed: parseInt(argValue("--seed", "12345"), 10),
   width: argValue("--width", null),
   height: argValue("--height", null),
+  duration: argValue("--duration", null),
   timeout: parseInt(argValue("--timeout", "1800"), 10),
   // How long to wait for the card to stop moving, and how still is still.
   settleSec: parseInt(argValue("--settle", "45"), 10),
@@ -156,6 +158,24 @@ Settings.get = function () {
   return s;
 };
 const S = Settings.get();
+
+/* Gate 0 (WORKPLAN §18). dataRoot() falls through APPDATA -> USERPROFILE ->
+ * the extension folder, so a pass with no APPDATA reads pure defaults and
+ * measures whatever weights THAT settings file points at — a reading taken
+ * against the wrong install, published into the catalog as if it were this
+ * machine's. Say where the settings came from, and refuse when it is a
+ * guess. */
+const ORIGIN = Settings.origin();
+console.log("-- settings: from=" + ORIGIN.from + " saved=" + ORIGIN.saved +
+            " dataRoot=" + ORIGIN.dataRoot);
+if (!ORIGIN.appdata) {
+  console.error("\n" +
+    "APPDATA is empty, so the data root is a guess and this " +
+    "run would measure whatever model roots a DEFAULT settings file names. " +
+    "Run this from a session that has APPDATA set (WORKPLAN §18 " +
+    "'gate 0').");
+  process.exit(2);
+}
 
 // --------------------------------------------------------------- reporting
 
@@ -506,6 +526,16 @@ function measure(plan, done) {
      * making the headline figure smaller. */
     if (OPT.width) args.width = parseInt(OPT.width, 10);
     if (OPT.height) args.height = parseInt(OPT.height, 10);
+    /* Same rule as the size above, and for a VIDEO entry it is the bigger
+     * of the two knobs: with no length the template renders at the length
+     * it was AUTHORED at, which is what the panel gives a user who names
+     * no duration, so that is the headline figure. --duration is for
+     * DECOMPOSING it afterwards — how much of the delta is the weights and
+     * how much is the clip — and for the case the headline cannot be
+     * measured at all because the authored length does not fit the card.
+     * A reading taken with this flag is not the catalog's number; the
+     * transcript prints the args so the two can never be confused. */
+    if (OPT.duration) args.durationSeconds = parseFloat(OPT.duration);
     say("info", "comfy_generate " + JSON.stringify(args));
     Tools.setProgressSink(function (msg) { say("tool", msg); });
 

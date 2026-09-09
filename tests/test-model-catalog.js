@@ -196,6 +196,18 @@ window.AELL.COMFY_CATALOG.forEach((e) => {
   // cannot be compared with anything.
   assert(/\d+\s*x\s*\d+/.test(String(e.measuredAt)),
          e.name + ": measuredAt names the pixel size it was measured at");
+  // For a VIDEO entry the frame is only half the size. The latent is
+  // frames x pixels, so the same graph at two lengths is two different
+  // jobs on the card — H3's authored 15 s and a 2 s decomposition of it
+  // are not the same measurement, and a row carrying only "1920x1080"
+  // cannot say which one it is. The pixel-size rule above passes either
+  // way, which is exactly how that gap would ship.
+  if (e.kind === "video") {
+    assert(/\d+(\.\d+)?\s*(s|sec|seconds|f|frames)/i
+             .test(String(e.measuredAt)),
+           e.name + ": a video entry's measuredAt names the clip LENGTH " +
+           "as well (seconds or frames)");
+  }
   assert(typeof e.minVramGB === "number",
          e.name + ": a measured entry still has a gate");
   assert(e.minVramGB * 1024 >= e.measuredVramMB,

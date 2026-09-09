@@ -47,7 +47,8 @@ the night retrying it.
 | ~~1c~~ | ~~`comfy-probe.js` says "ComfyUI reachable" PASS when nothing is listening, and `--boot` sits inside that same dead branch~~ **DONE 2026-09-09.** FOUR probes had it, not one; `managed.reachable` is now the single place the question is asked, and the panel's own two callers audited clean. No bump — nothing in `extension/` changed. | §17n | — | — |
 | ~~1d~~ | ~~`comfy-probe.js --url` is silently ignored in managed mode~~ **DONE 2026-09-09.** SIX scripts, one rule: `managed.urlOverride(url)` sets the MODE as well as the address, because an explicit URL names an INSTANCE, and every probe resolves with `Comfy.backendUrl`. Verified on the real machine — `--url` moves the target (and generated end to end through it), and a bare `weight-availability-probe` finally measures the managed backend (all verdicts PASS). No bump: nothing in `extension/` changed. | §17m + §17h + §17o | — | — |
 | ~~1e~~ | ~~`node tests/test-comfy-install.js` KILLS the live managed backend~~ **DONE 2026-09-09.** The fixture now writes `comfyManagedPort` from an OS-allocated dead port, and the fall-through that had NO assertion at all (`stopped the backend holding port`) is checked in both directions plus a flat refusal of the string `8288`. Verified on the machine, against §17p's own reproduction: boot on 8288, run all 85 test files, backend STILL ALIVE on the same pid, `/queue` 200. New block 5 refuses any test that drives `--stop` without naming a port. No bump — nothing in `extension/` changed. | §17p | — | — |
-| 2 | **START HERE.** H3 t2v regression + `catalog-vram-probe --entry minimax-h3` → measured block | §18 P3 | item 1, AE | no |
+| 2 | **START HERE.** H3's measured block, at a length that can finish. The t2v REGRESSION half is DONE 2026-09-09 (9/9, managed backend, detached first frame, AE import). The reading half is not: at the template's AUTHORED 15 s / 0.98 MP / 20 steps (a 362-frame latent) the 5090 was still sampling at 901 s and the probe cancelled it — peak 30191 MiB under a 32607 MiB card, so this is WALL CLOCK, not VRAM. Take the reading with the new `--duration` (2 s = 56 frames, minutes not quarter-hours), then answer P3a before writing the catalog block. | §18 P3 + P3a | item 1, AE | yes, with the block |
+| 2a | The panel's DEFAULT H3 render is a >15-minute job on the fastest card the catalog knows | §18 P3a | — | maybe |
 | 3 | sd15 basic template (+ the frontend-editable measurement) | §18 P5 | item 1, AE, 2 GB | yes |
 | 4 | sdxl basic template | §18 P6 | item 3, 7 GB | yes |
 | 5 | wan22-5b basic t2v template | §18 P7 | item 3, 17 GB | yes |
@@ -3798,7 +3799,8 @@ taken on what a buyer gets — so nothing measured after §17c needs a
 | ~~P0~~ | remote | **DONE 2026-09-06.** `test-workflow-bundle.js`, two both-directions allowlists in `test-model-catalog.js`, manifests walk | no | — |
 | ~~P1~~ | remote | **DONE 2026-09-06 (0.12.1).** `describeWorkflows` + `resolveWorkflow` with the baseline tiebreak; the alphabet no longer picks; `comfyWorkflows` setting; `catalogEntry` on both manifests; `test-workflow-resolve.js` (22 rows) | yes | P0 |
 | ~~P2~~ | remote | **DONE 2026-09-06.** `--frames`/`--boot`/`--stop` on both probes, `scripts/lib/comfy-managed.js`, `download-gen-weight.js`, chat-probe kind verdict, gate 0. Also fixed: both probes read `comfyUrl` where §17a had moved the answer to `backendUrl` | no | P1 |
-| P3 | local | H3 t2v re-run + `catalog-vram-probe --entry minimax-h3` → measured block | no | §17c, P2, AE |
+| P3 | local | H3 t2v re-run **DONE 2026-09-09** (9/9); the measured block is NOT taken — see P3a and take it with `--duration` | with the block | §17c, P2, AE |
+| P3a | local | the AUTHORED H3 default cannot be measured in a pass, and a buyer waits it out — decide the length the catalog quotes, or cap the default | maybe | P3 |
 | ~~P4~~ | remote | **DONE 2026-09-06 (0.12.2).** Settings **Workflows** rows via the pure `Tools.workflowRows()`; `test-workflow-rows.js` (21 rows) | yes | P1 |
 | P5 | local | sd15 basic + manifest + `workflowTemplate` + allowlist −sd15; **measure whether the frontend opens an API graph editable** | yes | §17c, P0–P2, AE |
 | P6 | local | sdxl as P5 | yes | P5 |
@@ -3816,6 +3818,56 @@ stored default per kind; feed `comfyCatalog` guard (no producer exists);
 `catalog-vram-probe --out docs/measured/` for §13a step 4; renderable
 predicate on `recommendGen`; `video: [names]` on `comfy_list_workflows`
 only if the chat-probe verdict shows the model needs it.
+
+## 18 P3a. H3's authored default is a >15-minute render, and that is what a
+user who names no length gets (filed 2026-09-09, local session)
+
+**Measured, on the machine, on the MANAGED backend a buyer gets.**
+`catalog-vram-probe --entry minimax-h3` runs a template at its AUTHORED
+settings on purpose, because that is what `comfy_generate` gives a user
+who names no size and no length. For `AE_LLAMA_H3_I2V_V1` those settings
+are node 136 = **15 seconds**, node 167 = **0.98 MP**, node 142 = **20
+steps**, and node 135 turns 15 s x 24 fps into a **362-frame** latent.
+On an RTX 5090 that job was **still sampling at 901 s** when the probe
+cancelled it. 3511 nvidia-smi samples: idle floor 4857 MiB, peak
+**30191 MiB** against a 32607 MiB card, 100% utilisation throughout.
+
+**Two facts, and only the first is about VRAM.**
+
+1. H3 FITS the card. No OOM, no page-thrash signature, peak 24.7 GiB
+   over the floor with headroom left. Whatever the catalog's gate should
+   say, 32 is not disproved.
+2. The number cannot be MEASURED at that length inside an unattended
+   pass, and more importantly a **user cannot sit through it**. Fifteen
+   minutes-plus on the fastest card the catalog knows about, with no ETA
+   from `comfy_generate` while it runs, is the panel's DEFAULT for a
+   video request that names no duration.
+
+**The decision, which is a product call and not the probe's to make:**
+
+- **(a) Quote the catalog at a stated shorter length.** Take the reading
+  with `catalog-vram-probe --entry minimax-h3 --duration 2` (56 frames,
+  minutes not quarter-hours) and write `measuredAt` so it names the
+  length as well as the frame — `tests/test-model-catalog.js` now
+  REQUIRES that of a `kind: "video"` entry. Honest, cheap, and it leaves
+  the 15 s default in place: the catalog then describes a job the user
+  is not the one being given.
+- **(b) Cap the duration the panel injects when the user names none.**
+  A default the buyer will actually wait for (2-4 s), with the template's
+  15 s reachable by asking for it. Changes panel behaviour, so it bumps,
+  and it needs the owner — it is his authored graph's default being
+  overridden.
+- **(c) Both**, which is probably right: measure at the capped default,
+  so the catalog quotes the job the panel actually runs.
+
+Nothing here should be guessed at by an unattended pass on its own; but
+(a) is takeable NOW and blocks nothing, and P3's measured block should
+not be written from a run that never produced a file.
+
+**Tooling already landed for it (2026-09-09):** `--duration <seconds>`
+on `catalog-vram-probe.js` (unexercised by a real generation — first act
+of the pass that takes this), gate 0 on the same probe, and the
+video-length rule in `tests/test-model-catalog.js`.
 
 ## 19. "I already have models" — discovery and confirmation (filed 2026-09-07)
 
