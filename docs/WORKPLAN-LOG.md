@@ -20935,3 +20935,37 @@ not the answer.
 
 `extension/js/comfy.js` changed, so **0.12.4 -> 0.12.5**. Stubbed suite
 82/82; harness 770/770.
+
+## 2026-09-09 (local session) — correction to the entry above: the backend did NOT stay up
+
+SUPERSEDES: the "State left behind" paragraph of the entry immediately
+above, which said the managed backend was RUNNING on 8288 and that a
+later pass could use it. Checked again after the commit: nothing is
+listening on 8288. It was true when written and is not true now, and a
+pass that believed it would start §18 work against a dead port.
+
+**What is still solid** — the detach fix is not in question. The backend
+outlived its launcher by minutes and served two later, independent
+processes (the weight probe and a full generation attempt), and answered
+200 across six polls over two minutes with the launcher gone. That is the
+thing the fix claimed and it holds.
+
+**What is now known**: it does not stay up for the ~30 minutes after
+that. Twice today. The cause is UNMEASURED and I am not going to guess
+at it — the broken-pipe theory was already tested and refuted.
+
+**And the reason it is unmeasured is itself the actionable part.** There
+is no log to read. `bootManaged` pipes the child's stdout/stderr and
+keeps only a 600-byte `errTail` in memory for boot failures; once the
+launcher exits, ComfyUI's output has no reader and nothing on disk. The
+data root holds `comfy-managed.pid`, `settings.json` and a backup — no
+backend log anywhere, and none under the portable install either. So a
+backend that dies half an hour later leaves no evidence at all.
+
+Filed as **§17j**: give the DETACHED (script) path stdio to a file under
+the data root. Not for survival — that was refuted — but so the next
+death is diagnosable. The panel path can keep its in-memory `errTail`,
+since there the host process is alive to read it.
+
+Nothing re-verified after this note beyond the port check; the suite and
+harness results in the entry above stand (82/82, 770/770).

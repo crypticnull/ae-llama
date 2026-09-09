@@ -4248,3 +4248,33 @@ after AE closes, for no current benefit. The work here is to DECIDE:
 either give llama the same opt-in seam, or delete the reap and say
 plainly that the server dies with the panel. What must not stand is code
 that reads as coverage for a case that cannot occur.
+
+## 17j. The detached backend leaves no log, so its deaths are undiagnosable (filed 2026-09-09, local session)
+
+Measured 2026-09-09: the managed backend, booted detached by a script,
+served two later independent processes and answered six polls over two
+minutes — then was gone within the half hour. Twice. Cause unknown, and
+unknowable as things stand.
+
+`bootManaged` (`comfy.js`) pipes the child's stdout/stderr into a
+600-byte in-memory `errTail` used only for boot-failure messages. That is
+right for the PANEL, where the host process outlives the backend and can
+read it. For a SCRIPT-launched backend the launcher exits within seconds,
+after which ComfyUI's output has no reader and is written nowhere: the
+data root holds only `comfy-managed.pid` and `settings.json`, and the
+portable install carries no log of its own.
+
+**The work.** When `setManagedDetached(true)` is in effect, point the
+child's stdio at a file under `Settings.dataRoot()` (append, rotated or
+truncated per boot) instead of pipes. Boot-failure reporting should then
+read that file's tail, which is strictly more than the 600 bytes it keeps
+today. Leave the panel path on its in-memory tail.
+
+Do NOT bundle a survival fix into this. The obvious theory — that the
+child dies writing to a pipe whose reader is gone — was TESTED on
+2026-09-09 and refuted: it kept answering 200 under sustained traffic
+with the launcher long dead. This item buys the evidence needed to find
+the real cause; it is not itself the cause.
+
+Wanted by §18: those passes need a backend that stays up between them,
+and right now a pass that finds it gone has nothing to read.
