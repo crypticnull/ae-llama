@@ -44,8 +44,8 @@ the night retrying it.
 | ~~1~~ | ~~Install the managed ComfyUI backend~~ **DONE 2026-09-09.** Installed and booted; 4264 MB extracted, python 3.13.14, torch 2.13.0+cu130 (CUDA 13.0). `extra_model_paths.yaml` points at the owner's store and the vendor backend loads it: `weight-availability-probe --url http://127.0.0.1:8288` all verdicts PASS, 0 missing slots for both templates. Root defect found and fixed en route (the backend did not outlive its launcher). | §17c | — | — |
 | ~~1a~~ | ~~The shipped KREA2 template cannot render on the backend a buyer gets~~ **DONE 2026-09-09 (0.12.7).** All six candidates rendered at one seed: three of the four the original filing shortlisted are UNUSABLE at 4 steps, and the two it missed are the two that work. `exp_heun_2_x0` chosen, applied via the manifest's `panelAdaptation.setInputs`, verified end to end. §18 items 3-8 are unblocked. | §17f | — | — |
 | ~~1b~~ | ~~a preflight that checks weights but not enum VALUES says "ready" about a graph ComfyUI refuses~~ **DONE 2026-09-09 (0.12.8).** `Comfy.validateGraphInputs` asks both questions in one walk of /object_info and either one refuses, before the handoff and before anything is queued. NOT via `POST /prompt`: measured on the vendor build, it has no validate-only mode and QUEUES the graph the moment validation passes — see §17g. | §17g | — | — |
-| 1c | **START HERE.** `comfy-probe.js` says "ComfyUI reachable" PASS when nothing is listening, and `--boot` sits inside that same dead branch so it can never boot. Two contradictory verdicts in one run; measured. | §17n | nothing | maybe |
-| 1d | `comfy-probe.js --url` is silently ignored in managed mode — it sets `comfyUrl`, which `Comfy.backendUrl` never consults. Fix with §17h, which asks the weight probe for the same override. | §17m + §17h | nothing | no |
+| ~~1c~~ | ~~`comfy-probe.js` says "ComfyUI reachable" PASS when nothing is listening, and `--boot` sits inside that same dead branch~~ **DONE 2026-09-09.** FOUR probes had it, not one; `managed.reachable` is now the single place the question is asked, and the panel's own two callers audited clean. No bump — nothing in `extension/` changed. | §17n | — | — |
+| 1d | **START HERE.** `comfy-probe.js --url` is silently ignored in managed mode — it sets `comfyUrl`, which `Comfy.backendUrl` never consults. Fix with §17h, which asks the weight probe for the same override. **Take §17o with it**: `handoff-probe.js` and `oom-probe.js` read `s.comfyUrl` directly, so in managed mode they measure the wrong backend — same class, three lines. | §17m + §17h + §17o | nothing | no |
 | 2 | H3 t2v regression + `catalog-vram-probe --entry minimax-h3` → measured block | §18 P3 | item 1, AE | no |
 | 3 | sd15 basic template (+ the frontend-editable measurement) | §18 P5 | item 1, AE, 2 GB | yes |
 | 4 | sdxl basic template | §18 P6 | item 3, 7 GB | yes |
@@ -4498,7 +4498,41 @@ correctly, which is true, and then asks that "`--url` should stay an
 override" — in comfy-probe `--url` is not an override at all yet. Fix
 both together: `--url` should set the RESOLVED target, not `comfyUrl`.
 
-## 17n. `comfy-probe.js` reports "ComfyUI reachable" PASS when nothing is listening, and `--boot` therefore never boots (filed 2026-09-09, local session)
+## ~~17n. `comfy-probe.js` reports "ComfyUI reachable" PASS when nothing is listening, and `--boot` therefore never boots~~ DONE 2026-09-09 (filed 2026-09-09, local session)
+
+**DONE 2026-09-09 (local session).** No bump — nothing under `extension/`
+changed. `scripts/lib/comfy-managed.js` gained `reachable(Comfy, url,
+settings, cb)`, which answers "is it up, and if not why not" in ONE
+place; `down` is a string (the transport error, or Comfy's own hint) and
+null when the backend answers. **FOUR** probes had the defect, not one —
+`comfy-probe.js`, `catalog-vram-probe.js`, `handoff-probe.js` and
+`oom-probe.js` all tested `if (err)` alone; all four now route through
+the helper. `comfy-install.js` was already correct (`!!(st && st.online)`).
+
+**The panel audit this filing asked for came back clean**, and is written
+down so it is not repeated: `main.js:1499` (the Settings "Test" button)
+already tests `st && st.online`, and `tools.js` `comfy_status` hands the
+whole status object — `online`, `hint` — to the model rather than
+judging it. Neither has the defect.
+
+En route, a second inaccuracy in the same message: `comfy-probe.js` was
+the only probe not loading `setup.js`, so `Comfy.status` could not ask
+`Setup.findComfyInstall` anything and EVERY down verdict ended "…or
+install the hidden backend" — naming as the fix a thing installed on
+2026-09-09. It loads `setup.js` now, and the probe adds the lever its
+own caller actually has (`--boot`) after the panel's hint.
+
+Verified against the real machine, not only stubs: with the managed
+backend genuinely down, the probe FAILS at reachability and stops, and
+`--boot` reaches the boot branch it could never reach before. Stub
+back-fill: `tests/test-probe-reachability.js`, in three layers (the
+helper on fakes; a source guard that any script calling `Comfy.status`
+must test `.online`, which is what catches the fifth probe copied from
+the fourth; and comfy-probe end-to-end against an OS-allocated dead
+port). Negative control run: reverting `comfy-probe.js` alone makes 7 of
+its assertions fail, including both halves of the contradiction.
+
+The original filing follows.
 
 Measured 2026-09-09 with nothing on the port:
 
@@ -4529,6 +4563,31 @@ A stubbed test belongs with the fix: a `Comfy.status` stub returning
 `{online:false}` must make the probe's reachability verdict FAIL. This
 pass did not write it — the fix is a probe/panel change and the item was
 §17f; filing it rather than bundling it is the §17j lesson applied.
+
+## 17o. `handoff-probe.js` and `oom-probe.js` ask `s.comfyUrl`, so in managed mode they measure the wrong backend (filed 2026-09-09, local session)
+
+Found while fixing §17n, in the same callbacks. Both probes do
+
+    Comfy.status(s.comfyUrl, …)
+
+and then hand the card to whatever ComfyUI that turns out to be. This is
+§17h's defect in two more files: `comfyUrl` is the **"use my own
+ComfyUI"** setting, and in managed mode `Comfy.backendUrl(s)` — not
+`comfyUrl` — is the backend. `comfy-probe.js` and `catalog-vram-probe.js`
+already carry the comment explaining why, verbatim; these two never got
+it.
+
+Consequence is worse here than a wrong port. Both probes exist to measure
+a VRAM handoff: the chat model is stopped, ComfyUI is asked to render,
+and the card is watched. Pointed at a backend that is not the one the
+panel would use, the numbers are about a different process — and if
+nothing is on `comfyUrl` at all, the probe now stops at reachability
+(§17n) instead of quietly measuring nothing.
+
+**Deliberately not fixed in the §17n pass**: that pass's item was the
+online check, the fix here is the §17h/§17m resolution rule, and bundling
+a second change into a verified one is the §17j lesson. Do all three
+together — one rule, four call sites, one test.
 
 ## 17h. `weight-availability-probe.js` cannot see the managed backend without being told (filed 2026-09-09, local session)
 

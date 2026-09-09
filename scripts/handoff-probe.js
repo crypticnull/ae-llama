@@ -46,6 +46,7 @@
 const fs = require("fs");
 const path = require("path");
 const { execFile } = require("child_process");
+const managed = require("./lib/comfy-managed.js");
 
 const ROOT = path.join(__dirname, "..");
 const EXT = path.join(ROOT, "extension");
@@ -481,9 +482,12 @@ detectGpu(function (gpu) {
   say("info", "chat model: " + s.modelPath);
   say("info", "pause mode: " + s.comfyPauseLlm);
 
-  Comfy.status(s.comfyUrl, function (err, st) {
-    if (err) {
-      verdict(false, "ComfyUI reachable at " + s.comfyUrl, err.message);
+  // NOT `if (err)`: Comfy.status reports a DOWN backend as
+  // cb(null, {online:false, hint}) so the panel can show the hint, so a
+  // caller testing only `err` printed PASS with nothing listening (§17n).
+  managed.reachable(Comfy, s.comfyUrl, s, function (down, st) {
+    if (down) {
+      verdict(false, "ComfyUI reachable at " + s.comfyUrl, down);
       say("error", "Nothing to hand the card to — stopping.");
       finish();
       return;

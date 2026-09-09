@@ -185,11 +185,44 @@ function boot(Comfy, url, settings, say, cb) {
     function (err, res) { cb(err, res); }, settings);
 }
 
+/**
+ * Is the backend at `url` actually answering? cb(down, st).
+ *
+ * §17n, measured 2026-09-09: `Comfy.status` does NOT report a down
+ * backend as an error. It calls back `cb(null, {online:false, hint:...})`
+ * on purpose, because the PANEL wants the hint text rather than an
+ * exception. Every probe here tested only `if (err)`, so nothing
+ * listening took the SUCCESS path and printed
+ *
+ *     == PASS ComfyUI reachable - queue running=0 pending=0
+ *
+ * where both counts are the `|| 0` on an undefined, not a reading. One
+ * run then contradicted itself two verdicts later with "ComfyUI is not
+ * running". Worse, `--boot` lived inside the same dead `if (err)`
+ * branch, so it could never boot the backend it exists to boot.
+ *
+ * `down` is a STRING when the backend is not answering - the transport
+ * error, or Comfy's own hint, which is the actionable half - and null
+ * when it is up. Asked in ONE place so the probes cannot drift apart
+ * again.
+ */
+function reachable(Comfy, url, settings, cb) {
+  Comfy.status(url, function (err, st) {
+    if (err) { cb(err.message || String(err), st || null); return; }
+    if (!st || !st.online) {
+      cb((st && st.hint) || ("nothing is answering at " + url), st || null);
+      return;
+    }
+    cb(null, st);
+  }, settings);
+}
+
 module.exports = {
   PID_KEY: PID_KEY,
   makeStorage: makeStorage,
   pidIsComfy: pidIsComfy,
   stopByPort: stopByPort,
   stop: stop,
-  boot: boot
+  boot: boot,
+  reachable: reachable
 };

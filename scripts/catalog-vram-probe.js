@@ -621,8 +621,10 @@ readCard(function (card) {
   // never consulted, so a probe reading comfyUrl measures one instance
   // while the generation runs on another.
   const URL = Comfy.backendUrl(S);
-  Comfy.status(URL, function (err, st) {
-    if (err) {
+  // NOT `if (err)`: a down backend calls back cb(null, {online:false}),
+  // so this branch was unreachable and --boot with it (§17n).
+  managed.reachable(Comfy, URL, S, function (down, st) {
+    if (down) {
       if (OPT.boot) {
         say("info", "--boot: bringing the managed backend up…");
         managed.boot(Comfy, URL, S, say, function (bErr) {
@@ -637,7 +639,7 @@ readCard(function (card) {
         });
         return;
       }
-      verdict(false, "ComfyUI reachable at " + URL, err.message);
+      verdict(false, "ComfyUI reachable at " + URL, down);
       say("error", "Nothing is answering. Pass --boot to start the " +
                    "MANAGED backend (0.12.0+), or start one by hand. " +
                    "0.10.9 measured that ensureRunning cannot start the " +

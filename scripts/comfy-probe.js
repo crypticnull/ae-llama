@@ -229,6 +229,13 @@ function loadPanelFile(rel) {
 }
 loadPanelFile("settings.js");
 loadPanelFile("tiers.js");
+// setup.js is not optional decoration: Comfy.status asks
+// Setup.findComfyInstall whether the hidden backend exists, and without
+// it every down-verdict here ended "…or install the hidden backend",
+// naming as the fix a thing that was installed weeks ago. The other
+// three probes have always loaded it; this one did not, and the down
+// message only became load-bearing when it became the VERDICT (§17n).
+loadPanelFile("setup.js");
 loadPanelFile("llama.js");
 loadPanelFile("comfy.js");
 loadPanelFile("tools.js");
@@ -363,8 +370,12 @@ function stepStatus(next) {
   const URL = Comfy.backendUrl(S);
   say("info", "ComfyUI at " + URL + "  (backend: " +
               Comfy.backendMode(S) + ")");
-  Comfy.status(URL, function (err, st) {
-    if (err) {
+  // NOT `if (err)`. A down backend is reported as cb(null, {online:false})
+  // — see managed.reachable, §17n. Testing only `err` made this print PASS
+  // with nothing listening, and put `--boot` in a branch it could never
+  // reach.
+  managed.reachable(Comfy, URL, S, function (down, st) {
+    if (down) {
       if (OPT.boot) {
         say("info", "--boot: bringing the managed backend up…");
         managed.boot(Comfy, URL, S, say, function (bErr) {
@@ -380,8 +391,12 @@ function stepStatus(next) {
         });
         return;
       }
-      verdict(false, "ComfyUI reachable", err.message);
-      say("error", "Nothing to generate with — stopping.");
+      verdict(false, "ComfyUI reachable", down);
+      // The hint above is the PANEL's advice ("it boots on the next
+      // generation request"), which is not this caller's lever. Name the
+      // one it has, the way catalog-vram-probe already does.
+      say("error", "Nothing to generate with — stopping. Pass --boot to " +
+                   "start the MANAGED backend, or start one by hand.");
       finish();
       return;
     }

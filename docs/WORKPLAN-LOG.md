@@ -21368,3 +21368,110 @@ managed backend was booted by this pass and was still answering on 8288
 at the end of it — but see §17k: it has died silently four times in three
 days, so a later pass finding it down should not read this line as
 evidence it stayed up.
+
+## 2026-09-09 (local session) — a probe that cannot reach the backend now says so, and `--boot` can finally boot (NEXT UP 1c / §17n)
+
+**Item: NEXT UP 1c (§17n).** Harness green first (770/770), so the list
+applied and 1c was START HERE.
+
+**The filing said one probe. It was four.** `Comfy.status` reports a DOWN
+backend as `cb(null, {online:false, hint:…})` on purpose — the panel
+wants the hint text, not an exception — and every probe that tested
+`if (err)` alone therefore took the SUCCESS path with nothing listening.
+`comfy-probe.js`, `catalog-vram-probe.js`, `handoff-probe.js` and
+`oom-probe.js` all had it. `comfy-install.js` did not: it already asked
+`!!(st && st.online)`, which is the shape the other four now share.
+
+Fixed at the root by adding the question to the place the probes already
+share: `managed.reachable(Comfy, url, settings, cb)` in
+`scripts/lib/comfy-managed.js`. `down` is a STRING when the backend is
+not answering — the transport error, or Comfy's own hint, which is the
+actionable half — and null when it answers. Four copies of `if (err)` are
+now one call, which is the same reason boot/stop live in that file.
+
+**The panel audit §17n asked for came back CLEAN, and here it is written
+down so nobody re-does it.** `main.js:1499` (Settings → Test) already
+tests `st && st.online` and prints the hint on the else. `tools.js`
+`comfy_status` hands the model the whole status object — `online`,
+`hint`, `foundAt` — rather than judging it, so the model sees
+`online:false` and the reason. Neither is the §17n defect. Those are the
+only two panel callers.
+
+**A second wrong sentence in the same message, found by running it.**
+With the real settings and the backend really down, the new FAIL read
+"…or install the hidden backend in Settings → ComfyUI". The hidden
+backend was installed this morning. Cause: `comfy-probe.js` is the ONLY
+probe that never loaded `setup.js`, so `Comfy.status` could not ask
+`Setup.findComfyInstall` anything and fell through to the canned
+not-installed hint. catalog-vram, weight-availability and comfy-install
+have always loaded it. It loads it now, and the verdict became "Hidden
+backend installed — it boots automatically on the next generation
+request." That hint is the PANEL's lever, not a probe caller's, so the
+error line after it now names `--boot` the way catalog-vram-probe's
+already did. This mattered only because §17n made the hint the VERDICT:
+before, nothing printed it.
+
+**Real-machine verification, and it caught the thing stubs cannot.** The
+managed backend was down when this pass started (booted by the previous
+pass at ~08:0x, gone by 08:40 — §17k again, a fourth silent death, and
+the freshest datapoint yet on how fast it goes).
+
+- `node scripts/comfy-probe.js --no-ae` → `FAIL ComfyUI reachable`, stops
+  there, exit 1. Before the fix this same state printed `PASS ComfyUI
+  reachable — queue running=0 pending=0`.
+- `node scripts/comfy-probe.js --no-ae --boot` → `-- --boot: bringing the
+  managed backend up…` / `PASS ComfyUI reachable — booted by --boot`, and
+  then all the way through: H3 i2v rendered in 22s, VRAM peak 31625 MB
+  (idle 4825), a 19778-byte mp4 with an `ftyp` box, `COMFY PROBE PASSED`,
+  exit 0. **That branch had never once executed.** It is the first time
+  `--boot` has booted anything, which is the whole reason the item was
+  filed.
+- The probe stopped the backend it booted (pid 50800), so the machine is
+  left as it was found: backend down.
+
+**Stub back-fill: `tests/test-probe-reachability.js`, three layers**,
+because the fix has three ways to come undone. (1) `managed.reachable` on
+fakes — `online:false` is down, a hintless down still explains itself and
+names the URL, a null status object is down, a transport error passes
+through unchanged, an online backend keeps its real queue counts, and the
+caller's settings are forwarded to `status()` rather than re-read from a
+global the probes have already overridden. (2) A SOURCE guard: any script
+under `scripts/` that calls `Comfy.status` directly must test `.online`,
+and the four probes must route through the helper. This is the layer that
+catches the fifth probe someone writes by copying the fourth — which is
+exactly how there came to be four. (3) End to end: `comfy-probe.js`
+spawned against an OS-allocated dead port (`listen(0)`, read back,
+released — never a hardcoded number, which is how a test starts passing
+for the wrong reason on one machine) with a temp `APPDATA` holding
+`comfyBackend: "own"`. Deliberately "own": in managed mode the resolved
+port may genuinely be UP on this machine and a verdict that depends on
+that is worse than no verdict.
+
+**Negative control run, so the test is known to test something.** With
+`scripts/comfy-probe.js` alone stashed, 7 assertions fail — including
+both halves of the contradiction (`FAIL ComfyUI reachable` absent AND
+`PASS ComfyUI reachable` present) and "no queue counts from a backend
+that never answered". Worth noting what did NOT fail: "the probe exits
+non-zero" passed even on the broken code, because it went on to fail at
+generation instead. An exit code alone would never have caught this.
+
+**Results.** Stubbed suite 84/84 files green (83 + the new one). Real-AE
+harness 770/770, before and after — nothing here touches the AE half, and
+it was re-run because the rule is that it is re-run. **NO version bump:
+nothing under `extension/` changed.** Five files, all in `scripts/`, plus
+`tests/` and docs. `docs/CAPABILITIES.md` untouched for the same reason —
+no user-visible behaviour moved.
+
+**Filed as WORK: §17o**, found in the same callbacks. `handoff-probe.js`
+and `oom-probe.js` call `Comfy.status(s.comfyUrl, …)` — the "use my own
+ComfyUI" setting — instead of `Comfy.backendUrl(s)`, so in managed mode
+they hand the card to a backend that is not the one the panel uses, and
+both exist to MEASURE that handoff. It is §17h/§17m's defect in two more
+files; NEXT UP 1d now carries all three so one resolution rule fixes four
+call sites at once. Not bundled here on purpose (§17j): this pass's item
+was the online check, and a verified fix should not arrive carrying an
+unverified one.
+
+**State left behind.** AE running and untouched, harness green, managed
+backend DOWN (stopped by the probe that booted it — the correct
+behaviour, not a failure). NEXT UP 1c struck, 1d promoted to START HERE.
