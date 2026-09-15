@@ -53,29 +53,30 @@ every pass and finished work costs the same context as live work.
 |---|---|---|---|---|
 | 1 | **Confirm the backend did not outlive the loop.** The teardown added 2026-09-09 calls `comfy-install.js --stop` at loop exit. Check this morning's log for a `Backend:` line and that the card was released. If it is missing or the card is still held, that is the item. | §17q | nothing | no |
 | 2 | **Reserve VRAM for the desktop and After Effects before sizing the chat model.** Field incident 2026-09-15: AE plus the 32B model held 28,804 of 32,607 MiB and the owner's display went black with no driver reset logged; stopping the model freed it. A 12 GB buyer hits this sooner. Spec and numbers in §16b. | §16b | AE, chat model | yes |
-| 3 | **fp8 Wan 2.2 5B as a second entry, then MEASURE it.** The §18 P10 pattern: the shipped Wan graph with the diffusion filename swapped and nothing else. Cheapest route to a video option under 32 GB. | §18 P7c step 1 | backend, disk | yes |
-| 4 | **Settle what `ltx-small` is, then measure it.** The vendor's LTX is 2.3-**22B** — larger than Wan, not smaller. Ask a RUNNING backend's `/object_info` whether LTXV 2B nodes exist; the repo fixture says zero and is wrong (§17l). | §18 P7c step 2 | backend, disk | yes |
-| 5 | **Quantized video weights: survey what exists and what NODES it needs.** GGUF Q4/Q5 builds are how an 8 GB card runs a model this size. Ask a RUNNING backend's `/object_info` which GGUF loaders exist and which pack owns them — if they are custom, §22d is on the critical path for low-end video (see §18 P7a DECIDED). Report, do not pin. | §18 P7c step 4 | backend | no |
-| 6 | **SageAttention + Triton (§13a).** Owner-specified 2026-09-03 and never queued. §13's own header: on 8-12 GB cards this is the difference between video being usable and not. Measure-first; it is a VRAM lever on the §18 P7a gap. | §13a | backend, disk | maybe |
-| 7 | **KV-cache quantization for llama-server (§13b).** Owner approved 2026-09-15 as a lever of §24: the fixed prompt currently leaves ~800 tokens of conversation at 16K. Measure llama-server VRAM at each window size, fp16 vs quantized KV, through a standalone launcher; then gate on `chat-probe` tool-choice accuracy. It roughly halves what a window costs on every card, which is the only context relief an 8-12 GB buyer can get. | §13b, §24 | chat model | yes |
-| 8 | **Routing step 1: split the rules block per tool** — a data move whose rendered prompt must stay BYTE-IDENTICAL to today's. Owner-approved design, `docs/proposals/prompt-routing-DESIGN.md`. | §24a | nothing | no |
-| 9 | **Routing step 2: the router behind a default-OFF `route` opt**, mirrored as a `chat-probe` flag, with its own CI ceilings. Falls back to today's whole prompt when nothing matches, so it cannot be less accurate than today. | §24b | nothing | no |
-| 10 | **Routing step 3: per-round extension and the sticky set, in BOTH `main.js` and `chat-probe.js`**, which each build the prompt once per turn. | §24c | nothing | no |
-| 11 | **Routing step 4: MEASURE routed vs all on the §8 paraphrase matrix, same night, same model.** Pass bar in DESIGN: zero canonical regressions, zero new HARM, misses ≤ all + 2. Only a green 16K AND 12K flips the default — that flip is the MINOR bump. | §24d | chat model | at flip |
-| 12 | **Cap the injected clip length at 6 s** when the user names none (owner decided 2026-09-09; 6 not 5 — the three shipped video templates are authored at 5.04/5.17 and a 5.00 cap invalidates their measured blocks). Spec in §18 P3a(b). | §18 P3a (b) | nothing | yes |
-| 13 | **Roadmap group A: generation lands in the COMP, at the comp's size.** Owner promoted 2026-09-09 as first of the expansion work. Shared, core-only, zero per-template cost. | §23c | AE | yes |
-| 14 | The panel can quote an ETA LONGER than `comfyTimeoutSec` and then cancel the job at 600 s, having promised a finish. Warn when the estimate passes the timeout, and put the estimate into the timeout message. | §18 P3c | nothing | yes |
-| 15 | Pin the invariant the whole install plan rests on: refuse a BUNDLED manifest that names a non-core node pack. True today, guaranteed by nothing. | §22a | nothing | no |
-| 16 | Tee the harness's stdout into the loop log. `Running self-test via` and `Crash flag:` appear ZERO times across the whole 2026-09-09 night, so a killed pass leaves no record of whether its self-test was green. | §20e | nothing | no |
-| 17 | A guard test for the pass invocation, so a future brief edit cannot re-inject a bare `--` and silently drop the bypass flag again. | §20d | nothing | no |
-| 18 | §21 leftovers: the watchdog rule keys on the word "recover" and can never match the real dialog; `Test-AellAeRunning` is version-blind; stale `CrashOccurred = 1` still sits on 26.2. | §21 | nothing | no |
-| 19 | The managed backend dies silently within the half hour — measure the cause before fixing it. | §17k | backend | maybe |
-| 20 | **No shipped template can take a reference image any more** — i2v left the bundle with the authored H3 graph. | §18 P9a | nothing | yes |
-| 21 | `download-gen-weight` re-downloads a weight already present in another `comfyModelRoots` root (6.4 GB wasted, measured; the next one is 26 GB). | §18 P7b | nothing | yes |
-| 22 | Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire. | §17i | nothing | yes |
-| 23 | The vendor-enum fixture is a hand-taken snapshot with nothing forcing a refresh when the vendor build moves. | §17l | nothing | no |
-| 24 | krea2 and ltx-small are the only entries EXEMPT from "a gate must hold its biggest weight file", because their files carry no sizes. | §18 P8a | nothing | yes |
-| 25 | `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url`. | §17h | nothing | no |
+| 3 | **Measure the §16b reserve on the owner's four real projects** — copies only, originals hashed before and after, close without saving. The exact eight-step procedure is in §16b; follow it to the letter. Paths are in the git-ignored `local/real-projects.json` and must never be committed. Nothing else loaded on the card while measuring. | §16b | AE | no |
+| 4 | **fp8 Wan 2.2 5B as a second entry, then MEASURE it.** The §18 P10 pattern: the shipped Wan graph with the diffusion filename swapped and nothing else. Cheapest route to a video option under 32 GB. | §18 P7c step 1 | backend, disk | yes |
+| 5 | **Settle what `ltx-small` is, then measure it.** The vendor's LTX is 2.3-**22B** — larger than Wan, not smaller. Ask a RUNNING backend's `/object_info` whether LTXV 2B nodes exist; the repo fixture says zero and is wrong (§17l). | §18 P7c step 2 | backend, disk | yes |
+| 6 | **Quantized video weights: survey what exists and what NODES it needs.** GGUF Q4/Q5 builds are how an 8 GB card runs a model this size. Ask a RUNNING backend's `/object_info` which GGUF loaders exist and which pack owns them — if they are custom, §22d is on the critical path for low-end video (see §18 P7a DECIDED). Report, do not pin. | §18 P7c step 4 | backend | no |
+| 7 | **SageAttention + Triton (§13a).** Owner-specified 2026-09-03 and never queued. §13's own header: on 8-12 GB cards this is the difference between video being usable and not. Measure-first; it is a VRAM lever on the §18 P7a gap. | §13a | backend, disk | maybe |
+| 8 | **KV-cache quantization for llama-server (§13b).** Owner approved 2026-09-15 as a lever of §24: the fixed prompt currently leaves ~800 tokens of conversation at 16K. Measure llama-server VRAM at each window size, fp16 vs quantized KV, through a standalone launcher; then gate on `chat-probe` tool-choice accuracy. It roughly halves what a window costs on every card, which is the only context relief an 8-12 GB buyer can get. | §13b, §24 | chat model | yes |
+| 9 | **Routing step 1: split the rules block per tool** — a data move whose rendered prompt must stay BYTE-IDENTICAL to today's. Owner-approved design, `docs/proposals/prompt-routing-DESIGN.md`. | §24a | nothing | no |
+| 10 | **Routing step 2: the router behind a default-OFF `route` opt**, mirrored as a `chat-probe` flag, with its own CI ceilings. Falls back to today's whole prompt when nothing matches, so it cannot be less accurate than today. | §24b | nothing | no |
+| 11 | **Routing step 3: per-round extension and the sticky set, in BOTH `main.js` and `chat-probe.js`**, which each build the prompt once per turn. | §24c | nothing | no |
+| 12 | **Routing step 4: MEASURE routed vs all on the §8 paraphrase matrix, same night, same model.** Pass bar in DESIGN: zero canonical regressions, zero new HARM, misses ≤ all + 2. Only a green 16K AND 12K flips the default — that flip is the MINOR bump. | §24d | chat model | at flip |
+| 13 | **Cap the injected clip length at 6 s** when the user names none (owner decided 2026-09-09; 6 not 5 — the three shipped video templates are authored at 5.04/5.17 and a 5.00 cap invalidates their measured blocks). Spec in §18 P3a(b). | §18 P3a (b) | nothing | yes |
+| 14 | **Roadmap group A: generation lands in the COMP, at the comp's size.** Owner promoted 2026-09-09 as first of the expansion work. Shared, core-only, zero per-template cost. | §23c | AE | yes |
+| 15 | The panel can quote an ETA LONGER than `comfyTimeoutSec` and then cancel the job at 600 s, having promised a finish. Warn when the estimate passes the timeout, and put the estimate into the timeout message. | §18 P3c | nothing | yes |
+| 16 | Pin the invariant the whole install plan rests on: refuse a BUNDLED manifest that names a non-core node pack. True today, guaranteed by nothing. | §22a | nothing | no |
+| 17 | Tee the harness's stdout into the loop log. `Running self-test via` and `Crash flag:` appear ZERO times across the whole 2026-09-09 night, so a killed pass leaves no record of whether its self-test was green. | §20e | nothing | no |
+| 18 | A guard test for the pass invocation, so a future brief edit cannot re-inject a bare `--` and silently drop the bypass flag again. | §20d | nothing | no |
+| 19 | §21 leftovers: the watchdog rule keys on the word "recover" and can never match the real dialog; `Test-AellAeRunning` is version-blind; stale `CrashOccurred = 1` still sits on 26.2. | §21 | nothing | no |
+| 20 | The managed backend dies silently within the half hour — measure the cause before fixing it. | §17k | backend | maybe |
+| 21 | **No shipped template can take a reference image any more** — i2v left the bundle with the authored H3 graph. | §18 P9a | nothing | yes |
+| 22 | `download-gen-weight` re-downloads a weight already present in another `comfyModelRoots` root (6.4 GB wasted, measured; the next one is 26 GB). | §18 P7b | nothing | yes |
+| 23 | Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire. | §17i | nothing | yes |
+| 24 | The vendor-enum fixture is a hand-taken snapshot with nothing forcing a refresh when the vendor build moves. | §17l | nothing | no |
+| 25 | krea2 and ltx-small are the only entries EXEMPT from "a gate must hold its biggest weight file", because their files carry no sizes. | §18 P8a | nothing | yes |
+| 26 | `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url`. | §17h | nothing | no |
 
 **§18 P7a is now HALF ANSWERED.** The owner approved options 1 AND 2 on
 2026-09-09 — "give even the lowest end cards an option here if they're
@@ -3316,6 +3317,57 @@ The panel exists inside After Effects, so a model that starves the host
 has broken the product even when the model itself runs. The AMOUNT is
 still measured (AE's working footprint on a real project plus the
 compositor's), not guessed — only its existence is settled.
+
+### 16b measurement: four REAL projects, owner-approved 2026-09-15 — the originals must survive untouched
+
+The owner supplied four real After Effects projects, which ends §16f's
+"the repo holds no `.aep` fixture". Paths, SHA-256 baselines and sizes
+live in **`local/real-projects.json`, which git ignores** — two carry
+client names. **Never write a project's name or path into a committed
+file.** Refer to them as A-D:
+
+| id | project file | folder | tests |
+|---|---|---|---|
+| A | 460 MB | 23.2 GB, 320 files | the heavy end |
+| B | 3.1 MB | 0.1 GB, 405 files | the light end |
+| C | 31 MB | 0.4 GB, 1,702 files | many small assets |
+| D | 5.9 MB | 5.8 GB, 102 files | video-heavy |
+
+Owner's condition, verbatim in effect: **do not save over them or destroy
+them in any way; they must be safely maintained.** So:
+
+1. **Hash every original at the START of the pass** and keep that as the
+   night's baseline. A mismatch against `local/real-projects.json` is NOT
+   an error — the owner edits his own projects — but record it.
+2. **Never open an original.** Copy the `.aep` to `local/scratch/` and open
+   the copy. This is not caution for its own sake: After Effects writes its
+   Auto-Save folder BESIDE whichever project is open, so opening an
+   original would write into the owner's project folder even with no save.
+   Footage stays where it is; AE resolves it by absolute path.
+3. Open through ExtendScript with `app.beginSuppressDialogs()` —
+   older-version conversion and missing-footage prompts are modal and
+   would stall the host.
+4. Measure: `AfterFX` private bytes and working set, and the card's total
+   `memory.used` (per-process VRAM reads `[N/A]` under WDDM, so it is a
+   before/after delta with nothing else loaded — no llama-server, no
+   backend). Record time to open, item and comp counts, missing-footage
+   count (old backups may be offline, which UNDERSTATES the footprint —
+   say so), project bit depth and the renderer.
+5. Optionally render ONE frame of the largest comp with `saveFrameToPng`
+   into `local/scratch/`. Opening alone understates a working footprint;
+   one frame measures it. It writes nothing near the original.
+6. Close with `app.project.close(CloseOptions.DO_NOT_SAVE_CHANGES)`, then
+   `app.newProject()`. No save modal is ever raised.
+7. **Never** run the self-test or any panel tool inside these projects,
+   never File > Save, never Collect Files, never touch the originals'
+   folders.
+8. Delete the scratch copies, then **re-hash every original**. Any
+   difference from step 1's hash: STOP the loop, log it prominently, and
+   do nothing else. That hash is the proof the owner asked for.
+
+Commit only the A-D numbers. The reserve is then sized from them: what AE
+costs empty, what it costs per project weight, and what the compositor
+needs on top.
 
 Likely cause, not proven: under ~4 GB left for Windows' own compositor,
 which logs nothing when it cannot allocate. **If it happens on a 32 GB

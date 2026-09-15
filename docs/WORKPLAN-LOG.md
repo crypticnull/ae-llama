@@ -23499,3 +23499,34 @@ what the panel does until §24d is green.
 **Left for the owner:** §24j, what window the 4-6 GB tiers honestly get.
 
 No `extension/` change, so **no version bump**.
+
+## 2026-09-15 (local session) — four real projects for the §16b reserve, and the rules that keep them safe
+
+The owner supplied four real After Effects projects so the always-on VRAM
+reserve can be sized from real work rather than empty scratch comps,
+ending §16f's "the repo holds no `.aep` fixture". He called them random;
+they are a better spread than a chosen set would have been — project
+files from 3.1 MB to 460 MB, folders from 0.1 GB to 23.2 GB, one with
+1,702 small assets and one video-heavy.
+
+**Kept out of git.** Paths, sizes and SHA-256 baselines are in
+`local/real-projects.json`; `local/` is newly in `.gitignore`, verified
+with `git check-ignore` and an empty `git status`. Two of the projects
+carry client names, and a commercial product repository is no place for
+them. Committed docs call them A-D.
+
+**The owner's condition is the spec:** do not save over them or destroy
+them in any way. The eight-step procedure is in §16b and queued as NEXT
+UP item 3. The design decision worth recording is that **originals are
+never opened, only copies** — and not out of general caution. After
+Effects writes its Auto-Save folder beside whichever project is open, so
+opening an original would write into the owner's project folder with no
+save ever happening. Everything else follows from that: dialogs
+suppressed, close with `DO_NOT_SAVE_CHANGES`, no panel tool or self-test
+inside them, and a re-hash at the end that halts the loop on any
+difference.
+
+Baselines taken now, in the daytime, by hashing only — nothing was
+opened.
+
+No `extension/` change, so **no version bump**.

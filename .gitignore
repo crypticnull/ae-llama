@@ -21,3 +21,7 @@ logs/
 # to the script directory at import time, and Python leaves its cache there too
 scripts/web/
 scripts/__pycache__/
+
+# Owner's real After Effects projects and anything derived from them.
+# Client names and paths must never be committed (WORKPLAN 16b).
+local/
