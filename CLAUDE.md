@@ -218,6 +218,12 @@ it launches AE, boots the backend and runs the harness by design.
   (buildSystemPrompt().length before/after) and paid for by a cut;
   rules carry phrase lists, docs carry one phrase; the model's replies
   are receipts, not prose. See WORKPLAN roadmap item 13.
+  **Owner, 2026-09-15:** "the AI model itself doesn't need to be crazy
+  smart. It just needs to be able to run the tools." Measured the same
+  day, a fresh session had ~800 tokens left for the whole conversation at
+  16K. So the prompt must make tool choice easy for a small, quantized
+  model on an 8-12 GB card at its default window; raising context is not
+  the fix. See WORKPLAN §24.
 - Premiere has no `AfterFX -r` equivalent, and its script platform is
   being retired: Adobe's doc sources say Premiere ExtendScript is
   supported "through September 2026" and CEP "for a calendar year"

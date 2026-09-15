@@ -23378,3 +23378,51 @@ backends and community packs is the job rather than a detour — bounded
 only by §22a keeping the basics core-only.
 
 No `extension/` change, so **no version bump**.
+
+## 2026-09-15 (local session) — §24 filed: the prompt leaves ~800 tokens for the conversation, and §16e is reopened
+
+**What the owner saw.** A fresh panel session, one command — save a PNG
+of the current comp. The command worked. The panel then reported tool
+docs and project state at ~12,242 tokens of the 16,384 window, and cut an
+ordinary `snapshot_frame` result to fit on the very first turn.
+
+**The arithmetic behind it.** 16,384 - ~12,242 fixed - 3,328 reply
+reserve = **~800 tokens for everything the user types and every tool
+result.** That is not a tuning problem; the default window is spent
+before the conversation starts.
+
+**Owner principle, now in CLAUDE.md:** *"the AI model itself doesn't need
+to be crazy smart. It just needs to be able to run the tools"* — and the
+buyer on an 8-12 GB card "can't just raise" the context. So the fix is the
+prompt, not the window, and a small or heavily quantized model is
+acceptable.
+
+**Four levers approved:** split the rules block per tool; route so only
+the relevant tools and their rules render; KV-cache quantization (§13b);
+a result governor for short tool results.
+
+**§16e reopened, deliberately.** §16e and REFINED §6 concluded routing
+moves the floor one rung and never reaches 8K, because the rules block
+names 57 of 79 tools and must render whole. That was correct under its
+assumption, and the assumption is the thing the owner has now changed. A
+settled bound that rests on a design choice is only settled while the
+choice stands. Its other constraints — closure, the schema enum question,
+per-round extension by redirect names, the router as a mirrored
+`chat-probe` flag, and its own CI ceilings — carry forward into the brief
+unchanged.
+
+**A trap recorded for the design:** `promptModeFor` returns
+`compact: ctx < 24576`, so raising a window to 24K switches to the full
+docs and eats most of the gain. Raising context is not a clean escape
+even on a card that could afford it.
+
+**Queued now, independent of the design:** §13b as NEXT UP item 6.
+Measuring llama-server VRAM per window size with fp16 vs quantized KV
+needs no design decision and is the only context relief an 8-12 GB buyer
+can ever get, so it should not wait.
+
+**Design pass briefed:** `docs/proposals/prompt-routing-BUILD-PROMPT.md`,
+deliverable `prompt-routing-DESIGN.md`, work items to land as §24a
+onward. Running in the background under the daytime rule.
+
+No `extension/` change, so **no version bump**.

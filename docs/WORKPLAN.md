@@ -56,20 +56,21 @@ every pass and finished work costs the same context as live work.
 | 3 | **Settle what `ltx-small` is, then measure it.** The vendor's LTX is 2.3-**22B** — larger than Wan, not smaller. Ask a RUNNING backend's `/object_info` whether LTXV 2B nodes exist; the repo fixture says zero and is wrong (§17l). | §18 P7c step 2 | backend, disk | yes |
 | 4 | **Quantized video weights: survey what exists and what NODES it needs.** GGUF Q4/Q5 builds are how an 8 GB card runs a model this size. Ask a RUNNING backend's `/object_info` which GGUF loaders exist and which pack owns them — if they are custom, §22d is on the critical path for low-end video (see §18 P7a DECIDED). Report, do not pin. | §18 P7c step 4 | backend | no |
 | 5 | **SageAttention + Triton (§13a).** Owner-specified 2026-09-03 and never queued. §13's own header: on 8-12 GB cards this is the difference between video being usable and not. Measure-first; it is a VRAM lever on the §18 P7a gap. | §13a | backend, disk | maybe |
-| 6 | **Cap the injected clip length at 6 s** when the user names none (owner decided 2026-09-09; 6 not 5 — the three shipped video templates are authored at 5.04/5.17 and a 5.00 cap invalidates their measured blocks). Spec in §18 P3a(b). | §18 P3a (b) | nothing | yes |
-| 7 | **Roadmap group A: generation lands in the COMP, at the comp's size.** Owner promoted 2026-09-09 as first of the expansion work. Shared, core-only, zero per-template cost. | §23c | AE | yes |
-| 8 | The panel can quote an ETA LONGER than `comfyTimeoutSec` and then cancel the job at 600 s, having promised a finish. Warn when the estimate passes the timeout, and put the estimate into the timeout message. | §18 P3c | nothing | yes |
-| 9 | Pin the invariant the whole install plan rests on: refuse a BUNDLED manifest that names a non-core node pack. True today, guaranteed by nothing. | §22a | nothing | no |
-| 10 | Tee the harness's stdout into the loop log. `Running self-test via` and `Crash flag:` appear ZERO times across the whole 2026-09-09 night, so a killed pass leaves no record of whether its self-test was green. | §20e | nothing | no |
-| 11 | A guard test for the pass invocation, so a future brief edit cannot re-inject a bare `--` and silently drop the bypass flag again. | §20d | nothing | no |
-| 12 | §21 leftovers: the watchdog rule keys on the word "recover" and can never match the real dialog; `Test-AellAeRunning` is version-blind; stale `CrashOccurred = 1` still sits on 26.2. | §21 | nothing | no |
-| 13 | The managed backend dies silently within the half hour — measure the cause before fixing it. | §17k | backend | maybe |
-| 14 | **No shipped template can take a reference image any more** — i2v left the bundle with the authored H3 graph. | §18 P9a | nothing | yes |
-| 15 | `download-gen-weight` re-downloads a weight already present in another `comfyModelRoots` root (6.4 GB wasted, measured; the next one is 26 GB). | §18 P7b | nothing | yes |
-| 16 | Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire. | §17i | nothing | yes |
-| 17 | The vendor-enum fixture is a hand-taken snapshot with nothing forcing a refresh when the vendor build moves. | §17l | nothing | no |
-| 18 | krea2 and ltx-small are the only entries EXEMPT from "a gate must hold its biggest weight file", because their files carry no sizes. | §18 P8a | nothing | yes |
-| 19 | `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url`. | §17h | nothing | no |
+| 6 | **KV-cache quantization for llama-server (§13b).** Owner approved 2026-09-15 as a lever of §24: the fixed prompt currently leaves ~800 tokens of conversation at 16K. Measure llama-server VRAM at each window size, fp16 vs quantized KV, through a standalone launcher; then gate on `chat-probe` tool-choice accuracy. It roughly halves what a window costs on every card, which is the only context relief an 8-12 GB buyer can get. | §13b, §24 | chat model | yes |
+| 7 | **Cap the injected clip length at 6 s** when the user names none (owner decided 2026-09-09; 6 not 5 — the three shipped video templates are authored at 5.04/5.17 and a 5.00 cap invalidates their measured blocks). Spec in §18 P3a(b). | §18 P3a (b) | nothing | yes |
+| 8 | **Roadmap group A: generation lands in the COMP, at the comp's size.** Owner promoted 2026-09-09 as first of the expansion work. Shared, core-only, zero per-template cost. | §23c | AE | yes |
+| 9 | The panel can quote an ETA LONGER than `comfyTimeoutSec` and then cancel the job at 600 s, having promised a finish. Warn when the estimate passes the timeout, and put the estimate into the timeout message. | §18 P3c | nothing | yes |
+| 10 | Pin the invariant the whole install plan rests on: refuse a BUNDLED manifest that names a non-core node pack. True today, guaranteed by nothing. | §22a | nothing | no |
+| 11 | Tee the harness's stdout into the loop log. `Running self-test via` and `Crash flag:` appear ZERO times across the whole 2026-09-09 night, so a killed pass leaves no record of whether its self-test was green. | §20e | nothing | no |
+| 12 | A guard test for the pass invocation, so a future brief edit cannot re-inject a bare `--` and silently drop the bypass flag again. | §20d | nothing | no |
+| 13 | §21 leftovers: the watchdog rule keys on the word "recover" and can never match the real dialog; `Test-AellAeRunning` is version-blind; stale `CrashOccurred = 1` still sits on 26.2. | §21 | nothing | no |
+| 14 | The managed backend dies silently within the half hour — measure the cause before fixing it. | §17k | backend | maybe |
+| 15 | **No shipped template can take a reference image any more** — i2v left the bundle with the authored H3 graph. | §18 P9a | nothing | yes |
+| 16 | `download-gen-weight` re-downloads a weight already present in another `comfyModelRoots` root (6.4 GB wasted, measured; the next one is 26 GB). | §18 P7b | nothing | yes |
+| 17 | Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire. | §17i | nothing | yes |
+| 18 | The vendor-enum fixture is a hand-taken snapshot with nothing forcing a refresh when the vendor build moves. | §17l | nothing | no |
+| 19 | krea2 and ltx-small are the only entries EXEMPT from "a gate must hold its biggest weight file", because their files carry no sizes. | §18 P8a | nothing | yes |
+| 20 | `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url`. | §17h | nothing | no |
 
 **§18 P7a is now HALF ANSWERED.** The owner approved options 1 AND 2 on
 2026-09-09 — "give even the lowest end cards an option here if they're
@@ -3362,6 +3363,12 @@ failure mode is a modified project, not a wrong answer.
 
 ### 16e. Tool routing — bounded, and no longer a floor lever
 
+**REOPENED 2026-09-15 (§24).** The owner decided to split the rules block
+per tool. The bound below assumes the block stays whole, so it no longer
+settles anything — re-derive it under §24. The design constraints below
+(closure, schema enum, per-round extension, router as a `buildSystemPrompt`
+opt mirrored in `chat-probe`, its own CI ceilings) still stand.
+
 **Routing cannot reach 8K.** Preamble + rules to `Available tools:` is
 19,060 chars = 5,152 tokens; plus the 3,328-token reply reserve = 8,480
 > 8,192. `historyBudget(8192, rules-only).chars === 0` — with ZERO tool
@@ -4970,6 +4977,45 @@ entry, so it is the reference for what "works" means before any tiering
 is trusted. That is also why §18 P7's finding matters here: the floor is
 RESIDENT WEIGHTS, not the frame, so this machine can measure whether a
 bundle fits a smaller card without owning one.
+
+## 24. Prompt delivery: split the rules per tool, route, and shrink what the model reads (owner-approved 2026-09-15)
+
+**Measured 2026-09-15, fresh panel session, one command.** Tool docs +
+rules + project state came to **~12,242 tokens of the 16,384 window**
+before the user typed anything. With the 3,328-token reply reserve that
+leaves **~800 tokens for the whole conversation**, and an ordinary
+`snapshot_frame` result was cut to fit on the first turn. The command
+itself worked, which is the point: the tool-calling core is sound, and
+the prompt that feeds it is not.
+
+**Owner principle:** *"the AI model itself doesn't need to be crazy
+smart. It just needs to be able to run the tools"*, and *"if we're trying
+to give this to people with eight to twelve gigabyte cards, they can't
+just raise it."* Design for an 8-12 GB card at its default window.
+Raising context is not the fix; a small or heavily quantized model is
+acceptable.
+
+**Four levers, all approved:**
+
+1. Split the rules block per tool, so each phrase list lives with the tool
+   it routes to.
+2. Route: render only the tools relevant to this turn, plus their rules.
+3. KV-cache quantization (§13b) — queued in NEXT UP, measurable overnight
+   on its own.
+4. A result governor, so tool results arrive as short receipts.
+
+**§16e is reopened by this section.** Its bound (routing moves the floor
+one rung and never reaches 8K) follows from the rules block staying one
+indivisible block that names 57 of 79 tools. The owner decided to split
+it, so the bound must be re-derived rather than cited.
+
+**A trap to design around:** `promptModeFor` switches to the FULL docs at
+24,576, so raising a window to 24K eats most of its own gain.
+
+**Status:** design pass briefed by
+`docs/proposals/prompt-routing-BUILD-PROMPT.md`; deliverable
+`docs/proposals/prompt-routing-DESIGN.md`. Its work items land here as
+§24a onward. Nothing here is implemented until the design is reviewed.
 
 ## Out of scope for the local session (remote builds these)
 
