@@ -23445,3 +23445,13 @@ NEXT UP item 2 with the numbers attached. If a 32 GB card can be pushed
 there by the panel's own model, a 12 GB card gets there first.
 
 No `extension/` change, so **no version bump**.
+
+## 2026-09-15 (local session) — §16b decided: the VRAM reserve for After Effects is always on
+
+Owner: "we do need to reserve a small amount of VRAM for After Effects
+always." Recorded in §16b as unconditional — not a setting, not a tier
+option; every arbiter decision sizes against total VRAM minus the reserve.
+The amount stays a measurement, taken on a real project plus the
+compositor, not a guess. Only its existence is decided.
+
+No `extension/` change, so **no version bump**.

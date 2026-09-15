@@ -3304,6 +3304,15 @@ Stopping llama-server dropped the card to **5,572 MiB**, and
 `Win+Ctrl+Shift+B` (a graphics-driver restart that keeps every window)
 brought the picture back with After Effects still open and responding.
 
+**DECIDED by the owner, 2026-09-15: the reserve is ALWAYS on.** "We do
+need to reserve a small amount of VRAM for After Effects always." Not a
+setting a user can switch off and not a tier option: every card, every
+model, every arbiter decision sizes against total VRAM minus the reserve.
+The panel exists inside After Effects, so a model that starves the host
+has broken the product even when the model itself runs. The AMOUNT is
+still measured (AE's working footprint on a real project plus the
+compositor's), not guessed — only its existence is settled.
+
 Likely cause, not proven: under ~4 GB left for Windows' own compositor,
 which logs nothing when it cannot allocate. **If it happens on a 32 GB
 card it happens sooner on the 12 GB cards most buyers own.** The arbiter
