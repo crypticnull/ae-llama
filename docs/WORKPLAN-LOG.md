@@ -23426,3 +23426,22 @@ deliverable `prompt-routing-DESIGN.md`, work items to land as §24a
 onward. Running in the background under the daytime rule.
 
 No `extension/` change, so **no version bump**.
+
+## 2026-09-15 (local session) — the owner's display went black with the card at 28.8 of 32.6 GB; §16b promoted
+
+At 14:28 the owner's screen went black and froze while the machine stayed
+up and answered commands. After Effects (14:01) and the panel's 32B chat
+model (llama-server, 14:08) held 28,804 MiB of 32,607. **No GPU driver
+event was logged** — distinct from the 2026-09-13 TDR. Stopping
+llama-server dropped the card to 5,572 MiB; `Win+Ctrl+Shift+B` restarted
+the graphics driver and restored the display with After Effects still
+open and responding. The background design agent running at the time had
+launched no processes, verified.
+
+Likely cause, stated as likely: the compositor starved at under ~4 GB
+free, which Windows does not log. It is §16b ("Nothing reserves VRAM for
+After Effects") happening on the owner's own machine, so §16b moves to
+NEXT UP item 2 with the numbers attached. If a 32 GB card can be pushed
+there by the panel's own model, a 12 GB card gets there first.
+
+No `extension/` change, so **no version bump**.
