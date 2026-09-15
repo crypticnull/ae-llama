@@ -58,20 +58,24 @@ every pass and finished work costs the same context as live work.
 | 5 | **Quantized video weights: survey what exists and what NODES it needs.** GGUF Q4/Q5 builds are how an 8 GB card runs a model this size. Ask a RUNNING backend's `/object_info` which GGUF loaders exist and which pack owns them — if they are custom, §22d is on the critical path for low-end video (see §18 P7a DECIDED). Report, do not pin. | §18 P7c step 4 | backend | no |
 | 6 | **SageAttention + Triton (§13a).** Owner-specified 2026-09-03 and never queued. §13's own header: on 8-12 GB cards this is the difference between video being usable and not. Measure-first; it is a VRAM lever on the §18 P7a gap. | §13a | backend, disk | maybe |
 | 7 | **KV-cache quantization for llama-server (§13b).** Owner approved 2026-09-15 as a lever of §24: the fixed prompt currently leaves ~800 tokens of conversation at 16K. Measure llama-server VRAM at each window size, fp16 vs quantized KV, through a standalone launcher; then gate on `chat-probe` tool-choice accuracy. It roughly halves what a window costs on every card, which is the only context relief an 8-12 GB buyer can get. | §13b, §24 | chat model | yes |
-| 8 | **Cap the injected clip length at 6 s** when the user names none (owner decided 2026-09-09; 6 not 5 — the three shipped video templates are authored at 5.04/5.17 and a 5.00 cap invalidates their measured blocks). Spec in §18 P3a(b). | §18 P3a (b) | nothing | yes |
-| 9 | **Roadmap group A: generation lands in the COMP, at the comp's size.** Owner promoted 2026-09-09 as first of the expansion work. Shared, core-only, zero per-template cost. | §23c | AE | yes |
-| 10 | The panel can quote an ETA LONGER than `comfyTimeoutSec` and then cancel the job at 600 s, having promised a finish. Warn when the estimate passes the timeout, and put the estimate into the timeout message. | §18 P3c | nothing | yes |
-| 11 | Pin the invariant the whole install plan rests on: refuse a BUNDLED manifest that names a non-core node pack. True today, guaranteed by nothing. | §22a | nothing | no |
-| 12 | Tee the harness's stdout into the loop log. `Running self-test via` and `Crash flag:` appear ZERO times across the whole 2026-09-09 night, so a killed pass leaves no record of whether its self-test was green. | §20e | nothing | no |
-| 13 | A guard test for the pass invocation, so a future brief edit cannot re-inject a bare `--` and silently drop the bypass flag again. | §20d | nothing | no |
-| 14 | §21 leftovers: the watchdog rule keys on the word "recover" and can never match the real dialog; `Test-AellAeRunning` is version-blind; stale `CrashOccurred = 1` still sits on 26.2. | §21 | nothing | no |
-| 15 | The managed backend dies silently within the half hour — measure the cause before fixing it. | §17k | backend | maybe |
-| 16 | **No shipped template can take a reference image any more** — i2v left the bundle with the authored H3 graph. | §18 P9a | nothing | yes |
-| 17 | `download-gen-weight` re-downloads a weight already present in another `comfyModelRoots` root (6.4 GB wasted, measured; the next one is 26 GB). | §18 P7b | nothing | yes |
-| 18 | Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire. | §17i | nothing | yes |
-| 19 | The vendor-enum fixture is a hand-taken snapshot with nothing forcing a refresh when the vendor build moves. | §17l | nothing | no |
-| 20 | krea2 and ltx-small are the only entries EXEMPT from "a gate must hold its biggest weight file", because their files carry no sizes. | §18 P8a | nothing | yes |
-| 21 | `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url`. | §17h | nothing | no |
+| 8 | **Routing step 1: split the rules block per tool** — a data move whose rendered prompt must stay BYTE-IDENTICAL to today's. Owner-approved design, `docs/proposals/prompt-routing-DESIGN.md`. | §24a | nothing | no |
+| 9 | **Routing step 2: the router behind a default-OFF `route` opt**, mirrored as a `chat-probe` flag, with its own CI ceilings. Falls back to today's whole prompt when nothing matches, so it cannot be less accurate than today. | §24b | nothing | no |
+| 10 | **Routing step 3: per-round extension and the sticky set, in BOTH `main.js` and `chat-probe.js`**, which each build the prompt once per turn. | §24c | nothing | no |
+| 11 | **Routing step 4: MEASURE routed vs all on the §8 paraphrase matrix, same night, same model.** Pass bar in DESIGN: zero canonical regressions, zero new HARM, misses ≤ all + 2. Only a green 16K AND 12K flips the default — that flip is the MINOR bump. | §24d | chat model | at flip |
+| 12 | **Cap the injected clip length at 6 s** when the user names none (owner decided 2026-09-09; 6 not 5 — the three shipped video templates are authored at 5.04/5.17 and a 5.00 cap invalidates their measured blocks). Spec in §18 P3a(b). | §18 P3a (b) | nothing | yes |
+| 13 | **Roadmap group A: generation lands in the COMP, at the comp's size.** Owner promoted 2026-09-09 as first of the expansion work. Shared, core-only, zero per-template cost. | §23c | AE | yes |
+| 14 | The panel can quote an ETA LONGER than `comfyTimeoutSec` and then cancel the job at 600 s, having promised a finish. Warn when the estimate passes the timeout, and put the estimate into the timeout message. | §18 P3c | nothing | yes |
+| 15 | Pin the invariant the whole install plan rests on: refuse a BUNDLED manifest that names a non-core node pack. True today, guaranteed by nothing. | §22a | nothing | no |
+| 16 | Tee the harness's stdout into the loop log. `Running self-test via` and `Crash flag:` appear ZERO times across the whole 2026-09-09 night, so a killed pass leaves no record of whether its self-test was green. | §20e | nothing | no |
+| 17 | A guard test for the pass invocation, so a future brief edit cannot re-inject a bare `--` and silently drop the bypass flag again. | §20d | nothing | no |
+| 18 | §21 leftovers: the watchdog rule keys on the word "recover" and can never match the real dialog; `Test-AellAeRunning` is version-blind; stale `CrashOccurred = 1` still sits on 26.2. | §21 | nothing | no |
+| 19 | The managed backend dies silently within the half hour — measure the cause before fixing it. | §17k | backend | maybe |
+| 20 | **No shipped template can take a reference image any more** — i2v left the bundle with the authored H3 graph. | §18 P9a | nothing | yes |
+| 21 | `download-gen-weight` re-downloads a weight already present in another `comfyModelRoots` root (6.4 GB wasted, measured; the next one is 26 GB). | §18 P7b | nothing | yes |
+| 22 | Decide llama-server's lifetime: give it the same detach seam, or delete the reap that can never fire. | §17i | nothing | yes |
+| 23 | The vendor-enum fixture is a hand-taken snapshot with nothing forcing a refresh when the vendor build moves. | §17l | nothing | no |
+| 24 | krea2 and ltx-small are the only entries EXEMPT from "a gate must hold its biggest weight file", because their files carry no sizes. | §18 P8a | nothing | yes |
+| 25 | `weight-availability-probe.js` defaults to `comfyUrl`, so it cannot see the managed backend without `--url`. | §17h | nothing | no |
 
 **§18 P7a is now HALF ANSWERED.** The owner approved options 1 AND 2 on
 2026-09-09 — "give even the lowest end cards an option here if they're
@@ -5043,6 +5047,164 @@ it, so the bound must be re-derived rather than cited.
 `docs/proposals/prompt-routing-BUILD-PROMPT.md`; deliverable
 `docs/proposals/prompt-routing-DESIGN.md`. Its work items land here as
 §24a onward. Nothing here is implemented until the design is reviewed.
+
+**DESIGN FILED 2026-09-15 (daytime pass, nothing run).** Read
+`docs/proposals/prompt-routing-DESIGN.md` before taking any item below;
+it carries the reasons, the bullet-by-bullet decomposition of the rules
+block, the sizes, and the pass bars. The short form: a lexical trigger
+index per tool (deterministic, no model call, falls back to today's
+whole prompt when nothing matches); a core set of 7,959 chars ≈ 2,150
+tokens; routed prompts of 8,159-13,154 chars against today's 39,803;
+the 16K window goes from 306 chars of conversation (starved, the
+owner's measured case) to 19,754-23,399; 12K works on every example;
+**8K works only once the reply reserve scales with the window** — the
+four approved levers alone leave the 3,328-token reserve at 41% of an 8K
+window (DESIGN §9, lever 5). The order below is dependency order.
+
+### 24a. Split the rules block per tool — a data move, byte-identical output (takeable, no bump)
+
+`RULE_DEFS`: one entry per bullet with the text verbatim, `section`,
+`order` (its index today), `owners`, `uses`, `triggers`, `core`.
+`TOOL_DEFS` entries gain `triggers`, `rules`, `uses`. The
+classification of all 72 bullets is DESIGN §4 — 21 core, 18
+single-owner, 34 multi-owner (owners = tools the bullet tells the model
+to call; anti-targets are text, not `uses`), 3 standalone phrase-
+triggered behaviours (the "clean up this COMP: ask" bullet is the
+model). `buildSystemPrompt` with no `route` opt must produce **the same
+bytes as today** — pin it (DESIGN §13.1), so every existing ceiling
+and every `test-chat-probe.js` rules pin passes unchanged. Plus the
+closure lint (§13.5): every tool name appearing in any bullet is
+classified as owner, `uses` or anti-target. Triggers for the 22 tools
+the rules never name come from their docs and names (DESIGN §2); the
+trigger lint is §13.8. No wording changes in this item — moving a
+measured sentence is allowed, editing it is not.
+
+### 24b. The router, the `route` opt, the probe flag, and its own ceilings (takeable, no bump while default-off)
+
+`Tools.routeFor(text, history, lastResults)` as DESIGN §2: normalise,
+whole-word trigger match with light stemming and one edit-distance-1
+pass for the typo rows, score (N per N-word phrase, +10 literal name,
++2 sticky over the last three assistant turns), cap 12, union `uses`
+closure and the core set, `matched: false` when nothing scored.
+`buildSystemPrompt(state, {compact, route})`: absent/`"all"` = today;
+routed form renders core + routed bullets in original `order`, core +
+routed tools in `TOOL_DEFS` order, then ONE index line naming every
+un-rendered tool (1,195 chars for 70), extension tools appended after
+the routed set. `promptModeFor` returns `{compact, routed: true}` —
+`routed` is its own axis, so 24,576 no longer brings 79 tools back.
+Settings `promptRouting: "auto"|"all"` (default **"all"** until §24d
+flips it), mirrored as `chat-probe --route auto|all`; the probe logs
+the routed set and `matched` per round through `roundObserver`. Schema
+`enum` stays wide (all 79), pinned. CI (DESIGN §13): `CORE_CEILING`
+8,200, `ROUTED_WORST_CEILING` 14,000 computed over every matrix
+sentence, the group-union ceiling 12,500, the order test, the
+router-recall test with `expects:` metadata on every `chat-probe` step
+(100% recall or fall-through; fall-through ≤ 10% of sentences), and the
+starve rows at 16K and 12K. `describe_tools` is priced in DESIGN §6 and
+NOT built here.
+
+### 24c. Per-round extension and the sticky set, in BOTH callers (takeable, no bump while default-off)
+
+`main.js:639-641` and `chat-probe.js:619-621` build `system` once per
+user turn and reuse it across rounds. Rebuild it per round: round N+1's
+route = round N's route ∪ the tools the model CALLED in round N
+(rendered or not) ∪ every tool name string-matched in round N's TOOL
+RESULTS (`next:` hints, "To blur the picture: apply_effect" redirects).
+No model call. Extension tools render after the routed set so the
+prefix before them survives within the turn. The probe mirrors
+`sendMessage` by contract — change them together, and add the
+`test-chat-probe.js` assertion that both call sites carry the rebuild.
+
+### 24d. MEASURE routed vs all, then flip the default (overnight; the flip is the MINOR bump)
+
+DESIGN §14 nights B and C. Night B, 16K: `chat-probe --variants
+--isolate --route all` then `--route auto`, same night, same model,
+same rig. Pass bar: every canonical that passes under `all` passes
+under `auto`; HARM under `auto` is zero wherever it is zero under
+`all`; misses over the 140 paraphrases ≤ `all` + 2; seconds-per-round
+medians reported (the cache price, DESIGN §8); `context-budget-probe.js
+--no-chat` tokenizes the core prompt and example E's prompt, and
+`PROMPT_CHARS_PER_TOKEN` is re-pinned if chars/token < 3.7. A step
+where `auto` misses and `all` passes gets ONE trigger addition per
+pass and a re-run of that step's variants. Night C: the same matrix at
+`--ctx 12288 --route auto` against the same night's 16K run, same bar.
+Green on both → `promptRouting` defaults to `"auto"`, release notes,
+MINOR. Nothing below this line ships default-on before this item.
+
+### 24e. Lever 5: the reply reserve scales with the window (takeable after 24d, chat-probe gated, bumps)
+
+`llama.js` `max_tokens: 3072` and `REPLY_RESERVE_TOKENS = 3072 + 256`
+are fixed; at 8K that is 41% of the window and it is what starves 8K
+after routing (DESIGN §9). `max_tokens = clamp(ctx / 8, 1024, 3072)`,
+reserve = max_tokens + 256, `RESPONSE_SCHEMA` `maxItems` stepping with
+it (20 → 10 at 8K); `historyBudget` takes the reserve from the same
+function. `main.js` already answers a truncated reply with the
+compact-retry round, so the failure mode is one retry. Gate: night C's
+8K half — `--ctx 8192 --route auto`: "a second turn that refers back"
+passes, the batch-animation and cascade rows keep their verdicts, no
+context-400 retry on more than 10% of sentences. Starve row at 8,192
+added to `test-context-budget.js`.
+
+### 24f. Lever 6: the fixed caps follow the window (takeable after 24e, bumps)
+
+`STATE_BUDGET` 6,000 chars (20% of an 8K window) → ∝ ctx/16384 with a
+2,500 floor, the host's 40-row caps unchanged; `RESULTS_BUDGET` 6,000
+→ `min(6000, floor(historyBudget().chars / 2))` so a round's results
+never evict the user turn and reply before them; `LEDGER_BUDGET`
+reserved only once `fitHistory` has dropped something, not on every
+turn. `test-context-budget.js` and `test-tool-result-budget.js` rows at
+8,192 / 12,288 / 16,384.
+
+### 24g. Result governor: receipts at source, ceilings in CI (takeable, bumps; DESIGN §10)
+
+The governor exists (`compactToolResults` / `fitResult`); the handle
+the brief mentions was dropped by REFINED §5 and stays dropped — the
+re-query is the retrieval. Three things: (1) per-tool receipt ceilings
+in `test-tool-result-budget.js` off the canned host, the prompt's
+ratchet applied to results (400 chars for a mutating tool's `ok` unless
+it carries a list the model must read, then capped by count); (2)
+`grid_layout` / `stagger_layers` / `distribute_property` stop returning
+a `placed` row per layer — counts, the first few, the note; (3) `next:`
+hints never repeat a value already in the result (the three sites:
+`hostscript.jsx:4793, 10963, 12846` — `snapshot_frame` carries its path
+twice today) and `*Note` fields ≤ 120 chars. Verified in real AE on the
+three macro rows: same verdicts, smaller `TOOL RESULTS` messages.
+
+### 24h. §13b: the standalone KV-quant launcher, then the flags with a fallback (this IS NEXT UP item 6; spec in DESIGN §11)
+
+`scripts/kv-quant-probe.js`: `child_process.spawn` of `llama-server.exe`
+with explicit `-c`, `--flash-attn`, `--cache-type-k/-v`; `nvidia-smi
+memory.used` before load and at steady state (`catalog-vram-probe.js:312`
+shape); a fixed ~4K-token prompt to `/completion` for `timings`; over
+{7B, 32B} × {16384, 20480, 24576, 32768} × {fp16, q8_0/q8_0,
+q8_0/q4_0}; flag rejection detected and recorded. No `extension/`
+change, no bump. Then `chat-probe --variants` fp16 vs q8/q8 the same
+night: zero new HARM, zero canonical regressions, misses ≤ fp16 + 1,
+generation tok/s ≥ 90%. Green → `spawnServer` gains the flags with the
+detect-and-respawn fallback (§13b's own requirement), q8_0/q8_0 for
+every catalog model, never q4 V by default; bumps. Record ctx and KV
+type with every reading so §16d's 1,536 MiB constant can be split into
+KV and buffers. Expect the 3B to gain twice what the 7B gains per token
+(8 KV heads vs 4, est.) — the reading settles it.
+
+### 24i. Copy that changes with the flip (docs; rides §24d's bump)
+
+The starve notice (`main.js:704`) tells every default user to raise
+Context size — the advice §16 says the 8-12 GB buyer cannot follow, and
+after §24d usually unnecessary; reword to say what the panel now does
+and when raising still helps. `docs/CAPABILITIES.md` curated half,
+`docs/ORIENTATION.md` (the 16K default's rationale), and the
+`compactDesc` header comment in `tools.js` that describes the rules
+block as "never compacted" (true, and now also "routed").
+
+### 24j. OWNER: the 4-6 GB tiers' honest window (filed, not decided; §16's rule binds)
+
+DESIGN §12: on paper the 3B does not fit a 4 GB card at the shipping
+16,384 window at all (1,926 + 1,536 + 1,792 MiB of fp16 KV, est.), and
+8K with q8 KV is the only window with a chance there — which is why the
+8K floor in §24e is a product question. T1/T2 copy promises "light
+chat". After §24h's reading and §16f's AE reading, one owner decision
+on tier windows and copy, not two; nothing here rewrites tier text.
 
 ## Out of scope for the local session (remote builds these)
 

@@ -23455,3 +23455,47 @@ The amount stays a measurement, taken on a real project plus the
 compositor, not a guess. Only its existence is decided.
 
 No `extension/` change, so **no version bump**.
+
+## 2026-09-15 (local session) — §24 designed: a lexical router, and the 8K floor is the reply reserve now, not the rules
+
+Design pass delivered `docs/proposals/prompt-routing-DESIGN.md` and
+§24a-§24j. Checked before committing: 158 insertions and zero deletions
+to the workplan; its claim that the system prompt is built once per turn
+in both `main.js:639` and `chat-probe.js:619` holds at those lines; and
+the reply reserve it blames for 8K is real code —
+`REPLY_RESERVE_TOKENS = 3072 + 256` in `tools.js`, `max_tokens: 3072` in
+`llama.js`, fixed whatever the window.
+
+**Router:** a lexical trigger index per tool, panel-side, no model call —
+the owner's keyword-list idea, made precise (whole-word phrases, light
+stemming, one edit-distance pass for typos, scored, capped at 12, plus
+closure and a core set). **When nothing matches it renders today's whole
+prompt**, so it cannot be less accurate than today on a sentence it does
+not recognise. Rejected with reasons: a router model call (a round trip
+per turn, its own index prompt, non-deterministic, and it asks the small
+model to be clever) and embeddings (a second model, VRAM, a dependency,
+and scores nobody can fix by adding a phrase).
+
+**Core set: ~2,150 tokens always rendered**, against ~10,700 today.
+Routed prompts on five sized examples come to ~2,200-3,560 tokens.
+
+**The floor, re-derived.** At 16K the conversation goes from 306 chars of
+history (the owner's measured starved state) to ~20-23K chars. 12K works
+on every example. **8K still does not**, and the reason moved: the fixed
+3,328-token reply reserve is 41% of an 8K window. Scaling it with the
+window (§24e) makes 8K work. So §16e was right that routing alone never
+reaches 8K — wrong only about why.
+
+**Pass bar before the default flips:** zero canonical regressions, zero
+new HARM, total paraphrase misses no worse than all-tools plus two, 100%
+router recall over the matrix in CI. 16K and 12K must both be green; the
+flip is the MINOR bump.
+
+**Queued tonight:** §24a (split the rules, byte-identical output), §24b
+(router default-off), §24c (per-round extension in both callers), §24d
+(the measurement), right after §13b. Default-off means none of it changes
+what the panel does until §24d is green.
+
+**Left for the owner:** §24j, what window the 4-6 GB tiers honestly get.
+
+No `extension/` change, so **no version bump**.
