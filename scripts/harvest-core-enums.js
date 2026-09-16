@@ -106,6 +106,15 @@ function shippedLiterals() {
 
 (async function main() {
   const stats = await get(url + "/system_stats").catch(() => null);
+  const version = (stats && stats.system && stats.system.comfyui_version) ||
+    (stats && stats.comfyui_version) || null;
+  // The version is what lets comfy-install.js name a stale fixture
+  // (lib/enum-fixture-drift.js, WORKPLAN §17l). A fixture without one can
+  // never be checked, so refuse to write it rather than record "unknown".
+  if (!version) {
+    throw new Error(url + "/system_stats gave no comfyui_version; not " +
+      "writing a fixture whose build cannot be named");
+  }
   const pairs = shippedLiterals();
   const enums = {};
   const skipped = {};
@@ -141,8 +150,7 @@ function shippedLiterals() {
       "and carries pack-contributed values a buyer does not have.",
     harvestedFrom: url,
     harvestedOn: new Date().toISOString().slice(0, 10),
-    comfyuiVersion: (stats && stats.system && stats.system.comfyui_version) ||
-      (stats && stats.comfyui_version) || "unknown",
+    comfyuiVersion: version,
     classesNotInThisBuild: absentClasses,
     skippedInstallDependent: skipped,
     enums: enums

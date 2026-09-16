@@ -27212,3 +27212,19 @@ No `extension/` change, so **no version bump**.
 
 - Kept both halves instead of choosing one of the two options offered. The reason is above.
 - No bump, despite the row's "bumps: yes": nothing in it changes behaviour.
+
+## 2026-09-16 (local session) - the vendor-enum fixture now names a stale build (NEXT UP 27, §17l)
+
+**Item:** NEXT UP 27. DAYTIME pass, started 10:57 EDT, inside the `-UntilHour 17` daytime loop. Items above it need AE, a backend, the chat model or the owner.
+
+**Harness: NOT RUN, on purpose**, same reading as the earlier daytime passes (17a is unanswered and CLAUDE.md's daytime rule is the written one). AE was running and was not touched. No backend, no GPU, no network. Nothing in extension/ changed, so **no bump**.
+
+**Changed.**
+- `scripts/lib/enum-fixture-drift.js` (new): `installedVersion(mainPy)` reads `comfyui_version.py` beside main.py (the vendor build writes `__version__ = "0.34.0"`, read off the real managed install), `fixtureVersion()` treats "unknown" as none, `driftNote(fixture, installed)` is null only on an exact match. An unreadable side says UNKNOWN, never "matches".
+- `scripts/comfy-install.js reportInstall`: warns with both versions and the re-harvest command on drift, else one info line. Runs in every mode including `--check`.
+- `scripts/harvest-core-enums.js`: throws instead of writing `comfyuiVersion: "unknown"`, since a fixture without a version can never be checked.
+- `tests/test-enum-fixture-drift.js`: 12 checks. 2 fail with the old scripts restored (the wiring checks). Also green: test-comfy-enum-values, test-comfy-install, test-probe-reachability, test-probe-backend-url, test-source-control-chars.
+
+**Real install, read-only:** installed 0.34.0, fixture 0.34.0, no note.
+
+**Decisions made unattended.** Went with option 1 of §17l (warn when the version moves) over option 2 (re-harvest during the install check), because a re-harvest needs a booted backend and rewrites a committed file, and `--check` must not do either. It is a warning, not a FAIL, because the install itself is fine and only the test reference is stale. Limit: the panel's Settings install button does not run the check. Only the CLI does, and that is the path a pass uses to install or upgrade.

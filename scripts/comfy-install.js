@@ -63,6 +63,7 @@ function say(kind, msg) { console.log("[" + kind + "] " + msg); }
 // in scripts/lib/comfy-managed.js — three scripts need them and three
 // copies is how copies drift. Its header carries the reasoning.
 const managed = require("./lib/comfy-managed.js");
+const enumDrift = require("./lib/enum-fixture-drift.js");
 let pidFile = null;            // set once Settings.dataRoot() is loadable
 const storage = managed.makeStorage(function () { return pidFile; });
 
@@ -168,6 +169,14 @@ function reportInstall(inst) {
   verdict(fs.existsSync(inst.python), "it carries its own python",
           inst.python);
   verdict(fs.existsSync(inst.mainPy), "and ComfyUI's main.py", inst.mainPy);
+  // §17l: the enum fixture is a snapshot of one vendor build and the
+  // installer takes /releases/latest, so a new build is the moment it
+  // goes stale. A warning, not a FAIL: the install itself is fine.
+  const drift = enumDrift.driftNote(enumDrift.fixtureVersion(),
+                                    enumDrift.installedVersion(inst.mainPy));
+  if (drift) say("warn", drift);
+  else say("info", "enum fixture matches the installed ComfyUI " +
+                   enumDrift.fixtureVersion());
   // The torch/python this build pins is §13a step 1's measurement, taken
   // here for free — the wheel selection keys on exactly these numbers.
   try {
