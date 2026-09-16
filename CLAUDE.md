@@ -118,6 +118,21 @@ by trying to play a game. `run-local-agent.ps1` now stops it in teardown
 None of this constrains the overnight loop itself. That IS the window:
 it launches AE, boots the backend and runs the harness by design.
 
+**The rule is about UNATTENDED daytime work, not about the clock. A loop
+the owner started IS the permission** (answered 2026-09-16, §17a). If
+`run-local-agent.ps1` is running, its passes may launch AE, boot the
+backend, run the harness and use the GPU whatever the hour — he started
+it, on his machine, knowing what it does. The loop logs its stop time, so
+a pass can see the window it is working in.
+
+What the rule still forbids is an INTERACTIVE session helping itself to
+the machine during the day without asking. That is the case that cost the
+owner his GPU on 2026-09-09 and his display on 2026-09-15.
+
+**If a daytime loop's queue empties, say so and stop taking passes** —
+an empty loop burning the card while he works is the thing the rule
+exists to prevent.
+
 ## Verify changes
 
 1. **Stubbed suite (fast, no AE):** `node tests/test-<name>.js` for each
