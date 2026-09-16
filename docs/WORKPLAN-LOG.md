@@ -25790,3 +25790,71 @@ rest struck. AE left running (pid 40976), untouched.
 
 Nothing new. Still open from the row: whether any buyer runs their own
 ComfyUI with this panel at all.
+
+## 2026-09-16 (local session) - vram-headroom bounds the card for sdxl, krea2 and ltx-small but not for Wan, and costs sdxl 3x, so it is not shipped
+
+**Item:** NEXT UP 5a-5 / WORKPLAN 18 P7c step 2g - what bounds
+DynamicVRAM when the card is under pressure. Items above it: 3 blocked
+on the owner, 5a-4e owner-only, the rest struck.
+
+**Harness: 770/770 PASSED** at the start. No `extension/` change, so no
+bump and no second harness run needed for the tree. AE left running,
+untouched.
+
+### Method
+
+Git-ignored `local/headroom-run.sh`: `scripts/vram-ballast.py` for the
+room, then the vendor `main.py` booted with exactly the shipped
+`managedBootArgs` (`--disable-pinned-memory` included) plus `$EXTRA`,
+then `catalog-vram-probe.js --entry` (250 ms nvidia-smi curve), kill by
+port. Min free = 32 607 - peak. Identity: png md5, `ffmpeg -f md5` over
+decoded frames. Seed 12345, shipped graphs. Backend logs
+`local/backend-hr-*.log`.
+
+### Measured (RTX 5090)
+
+| entry | room MiB | flag | min free MiB | prompt s | output |
+|---|---|---|---|---|---|
+| ltx-small | 8 756 | none | 1 162 | 13.57 | 45630f... (reference) |
+| ltx-small | 8 756 | `--vram-headroom 4` | **4 682** | 14.82 | identical |
+| ltx-small | 4 966 | `--vram-headroom 4` | 3 429 | 21.34 (5a-3 unflagged 12.69) | identical |
+| sdxl | 8 756 | none | 1 130 | 4.25 | 72bfc2... |
+| sdxl | 8 756 | `--vram-headroom 2` | 2 634 | 6.30 | identical |
+| sdxl | 8 756 | `--vram-headroom 4` | 4 714 | **12.54** | identical |
+| sdxl | 4 966 | none | 691 | 11.46 | identical |
+| sdxl | 4 966 | `--vram-headroom 4` | 3 027 | 17.47 | identical |
+| krea2 | 8 756 | `--vram-headroom 4` | 4 286 | 12.24 (5a-4d unflagged 10.83) | 18f456... identical |
+| wan22-5b-fp8 | 4 966 | `--vram-headroom 4` | **624** | 131.44 (5a-4c unflagged 132.32) | ab4fa5... identical |
+
+### Reading
+
+- The flag works where the job is mostly WEIGHTS: aimdo keeps the
+  requested amount free (to within ~1 GB when room is tight) by streaming
+  more, and pays in speed. It never changed an output.
+- It does nothing for Wan. The low point sits in the sampling hump
+  (3.3-112 s) while only 4 768 MB of WAN22 weights are staged: that is
+  activation/working memory at 1280x704x121, which DynamicVRAM cannot
+  evict.
+- sdxl pays 3x at `4` on a 12 GB card's room (4.25 -> 12.54 s), 1.5x at `2`.
+
+### Decided, and what I assumed
+
+- **Not shipped.** The one symptom it protects against (display blackout
+  at ~1 GB free) is unproven: runs tonight and on 5a-3/5a-4 went to
+  600-1 100 MiB free with no display event in the System log, and the
+  09-15 blackout happened at 3 803 free with its cause unknown. A proven
+  3x on the most common image entry for an unproven protection that also
+  skips the video entry that fills the card most is the wrong trade for a
+  pass to make. The row was marked OWNER EYE; it goes back to him as a
+  decision with the numbers.
+- I did not watch the screen (unattended), so "no blackout" is only "no
+  logged driver event".
+- Host-RAM half of the row was already answered by 5a-4b/5a-4d.
+
+### Filed (WORKPLAN NEXT UP)
+
+- 5a-5 struck as MEASURED with the table.
+- **5a-5b OWNER:** ship `--vram-headroom` at 4, 2 or not at all.
+- **5a-5c OWNER EYE:** does the display survive a Wan run at ~600 MiB
+  free? Needs someone at the monitor; decides whether Wan at gate 12
+  needs a smaller working set.
