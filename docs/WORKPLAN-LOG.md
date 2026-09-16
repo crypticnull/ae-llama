@@ -26583,3 +26583,34 @@ real bump.
 ### Open
 
 - NEXT UP 9b (triggers + trigger lint), then 10 (router).
+
+## 2026-09-16 (local session) — owner closes video below 8 GB; the loop's own blindness goes to the top of the queue
+
+**Owner, 2026-09-16: "Don't worry about trying to cram video into 4-6gb
+cards."** Filed as §18 P7d and CLOSED. The reach campaign stops at 8 GB,
+which is a finish line: 8 GB runs ltx-small-distilled in 12 s, ltx-small
+in 24 s and wan22-5b in ~131 s, all measured at that card's room. Below
+it, §18 P7a's honest refusal stands. No pass may spend time measuring,
+quantizing or tiling toward video on a 4 or 6 GB card. This does NOT
+answer §24j, which is about the CHAT window those tiers get and is still
+open.
+
+**The loop's logging is now queue items 1 and 2**, because last night it
+was the only thing that made a good night hard to read. Both runs wrote
+16 lines and then went silent right after the census line, while passes
+ran and committed for hours — no verdicts, no §20a heartbeats, no §20b
+timeout line, no `Backend:` line. Fresh 0-iteration runs log fine, so the
+writer dies once a pass starts. The instruction attached to the item is
+to find the cause rather than build another heartbeat on top of a dead
+writer, which is how §20a came to exist in the first place.
+
+Filed with it: the first loop exited at 01:39 after six passes with no
+log line and no error, and was restarted by hand. The second ran 6.5
+hours cleanly on the same script, so it is not the environment. A silent
+exit costs a night.
+
+**Today's run is an owner-authorised daytime exception.** He is at work
+and asked for the loop to run until 17:00. The CLAUDE.md daytime rule is
+unchanged for every other day.
+
+No `extension/` change, so **no version bump**.
