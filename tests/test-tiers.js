@@ -119,9 +119,10 @@ const T = window.Tiers;
   // Its gate moved again the same day, 16 -> 12 (18 P7c step 2f): a
   // ballasted 5090 left the backend what a 12 GB card has and the job
   // shrank to fit in the same 12 s. Still not 6.
+  // And 12 -> 8 (NEXT UP 5b-1), with recommendFromGB 12. Still not 6.
   assert(t2.video === null,
-         "6 GB gets no video: the smallest video entry, LTX-Video 2B, is " +
-         "gated at 12 GB (got " +
+         "6 GB gets no video: the smallest video gate is 8 GB and the " +
+         "video defaults start at 12 (got " +
          (t2.video && t2.video.name) + ")");
 
   const t3 = rec(8, 8.9);
@@ -159,10 +160,15 @@ const T = window.Tiers;
   // and the ~9.7 GB of pinned host RAM it staged into was never
   // constrained. So this row still asserts null, until step 2g measures
   // exactly that.
+  //
+  // Step 2g measured it (NEXT UP 5b, 5b-1): at 841 MiB of room both LTX
+  // entries render identical clips (distilled 12 s, ltx-small 24 s, twice),
+  // so both are GATED at 8. The row stays null anyway, because both carry
+  // recommendFromGB 12: giving 8 GB its first video DEFAULT is the owner's
+  // tier call (WORKPLAN 5a-4e / 5c), not something a measurement decides.
   assert(t3.video === null,
-         "8 GB gets no video at all — Wan 2.2 5B measured 26 187 MiB and " +
-         "LTX-Video 2B is gated at 12 until an 8 GB card with AE is " +
-         "measured (got " +
+         "8 GB gets no video DEFAULT — both LTX-Video 2B entries are gated " +
+         "at 8 but held at recommendFromGB 12 for the owner (got " +
          (t3.video && t3.video.name) + ")");
 
   // THE POSITIVE HALF of the same 2026-09-16 measurement, and the reason
@@ -183,16 +189,20 @@ const T = window.Tiers;
   // row CLAUDE.md's "reach is a feature" is about: a 12 GB card is the
   // common case on aescripts, and it has video now.
   const t12 = rec(12, 8.9);
+  // The gate has since moved 12 -> 8 (NEXT UP 5b-1, 841 MiB of room, 24 s
+  // twice, identical); recommendFromGB 12 is what keeps THIS row where it
+  // was, so the row pins both numbers.
   assert(t12.video && t12.video.name === "ltx-small" &&
-         t12.video.measured === true && t12.video.minVramGB === 12,
-         "12 GB gets video: LTX-Video 2B, run on a ballasted card with a " +
-         "12 GB card's room in 12.46 s, gate 12 (got " +
+         t12.video.measured === true && t12.video.minVramGB === 8 &&
+         t12.video.recommendFromGB === 12,
+         "12 GB gets video: LTX-Video 2B, gated at 8 on a ballasted 8 GB " +
+         "card's room, recommended from 12 (got " +
          JSON.stringify(t12.video && { n: t12.video.name,
-           g: t12.video.minVramGB }) + ")");
+           g: t12.video.minVramGB, r: t12.video.recommendFromGB }) + ")");
   const t16 = rec(16, 8.9);
   assert(t16.video && t16.video.name === "ltx-small" &&
-         t16.video.measured === true && t16.video.minVramGB === 12,
-         "16 GB gets video: LTX-Video 2B, MEASURED, gate 12 (got " +
+         t16.video.measured === true && t16.video.minVramGB === 8,
+         "16 GB gets video: LTX-Video 2B, MEASURED, gate 8 (got " +
          JSON.stringify(t16.video &&
          { n: t16.video.name, m: t16.video.measured,
            g: t16.video.minVramGB }) + ")");
@@ -299,6 +309,28 @@ const T = window.Tiers;
       assert(lifted === (g === 8 || g === 10),
              g + " GB: without recommendFromGB the distilled entry is the " +
              "video default exactly on 8 and 10 GB (got " + sv + ")");
+    });
+  }
+
+  // ltx-small's own gate moved 12 -> 8 (NEXT UP 5b-1) the same way. Every
+  // size must pick what it picked when the entry was gated at 12 with no
+  // hold, so the move is a GATE fact and not a default change by stealth.
+  {
+    const n = (x) => (x ? x.name : null);
+    const old = cat.map((e) => {
+      const c = Object.assign({}, e);
+      if (c.name === "ltx-small") {
+        c.minVramGB = 12; delete c.recommendFromGB; delete c.constrainedFit;
+      }
+      return c;
+    });
+    [4, 6, 8, 10, 12, 16, 20, 24, 32, 48, 96].forEach((g) => {
+      const gpu = { hasNvidia: true, vramGB: g, computeCap: 8.9 };
+      const a = T.recommendGen(cat, gpu, {}), b = T.recommendGen(old, gpu, {});
+      assert(n(a.image) === n(b.image) && n(a.video) === n(b.video),
+             g + " GB: ltx-small at gate 8 moves no default (" +
+             n(a.image) + "/" + n(a.video) + " vs " + n(b.image) + "/" +
+             n(b.video) + ")");
     });
   }
 

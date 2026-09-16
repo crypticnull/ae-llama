@@ -25951,3 +25951,56 @@ recorded. `docs/CAPABILITIES.md` template list updated.
   its measuredSeconds 14, so it passes the gate-8 bar too. Not moved
   tonight (one item).
 - **5a-4e extended:** the 8 GB video default is now a one-field decision.
+
+## 2026-09-16 (local session) - ltx-small's gate moves 12 -> 8 on a second identical 24 s run at an 8 GB card's room, defaults held
+
+**Item:** NEXT UP 5b-1 / WORKPLAN 18 P7c step 2g. Items above it: 3,
+5a-4e, 5a-5b, 5a-5c are owner-only, the rest struck. Not attempted before
+(filed by the previous pass tonight).
+
+**Harness: 770/770 PASSED** at the start and again after the change.
+Full stubbed suite 91/91. AE left running, untouched. Backend stopped by
+the probe's `--stop`; card back to 1 172 MiB (1 204 after the harness).
+
+### Rerun first
+
+The item said 24 s at 1.7x is the closest to the 2x bar of any gate moved
+so far, so consider re-running. Done, same `local/gate-run.sh ltx-small
+841`: shipped boot (`--disable-pinned-memory` confirmed in the captured
+command line), seed 12345, 768x512 x 97.
+
+| run | room MiB | delta MiB | s | shared max MiB | decoded md5 |
+|---|---|---|---|---|---|
+| 5b pass | 841 | 58 | 24 | 1 406 | 45630fe2... |
+| tonight | 841 | 67 | 24 | 1 637 | 45630fe2... |
+
+Transcript `logs/catalog-vram-probe-2026-09-16T10-14-39.md`. 24 s is 1.7x
+the cold measuredSeconds 14 and 2.0x the warm 12.28; the catalog bar is
+against measuredSeconds, so it passes. Assumed: that bar is the right one
+(it is the one the test enforces and the one every other move used).
+
+### Changed
+
+`extension/js/version.js` ltx-small: `minVramGB 12 -> 8`,
+`recommendFromGB 12`, `constrainedFit {roomMB 841, seconds 24,
+identical, on: ... --disable-pinned-memory (0.12.26)}`. The "NOT 8, yet"
+comment paragraph replaced with the readings. 0.12.31.
+
+Checked, not assumed: at 12 GB and up ltx-small and ltx-small-distilled
+now tie on floor (both recommendFromGB 12) and ltx-small wins on sizeMB
+(10 965 vs 9 173), which is the rung ABOVE the held/measured rungs, so
+the default stays ltx-small.
+
+### Tests
+
+`test-tiers.js`: the 12/16 GB rows pin gate 8 + recommendFromGB 12; new
+block checks every size 4-96 GB picks the same image/video as the old
+gate-12, no-hold entry. 6 and 8 GB null rows' messages say why they are
+still null (held for the owner, not unmeasured). `test-model-catalog.js`
+8 GB combo message and comment updated the same way.
+
+### Filed
+
+WORKPLAN 5b-1 struck. 5a-4e extended: the 8 GB video default is now a
+one-field decision on EITHER LTX entry (ltx-small 24 s, distilled 12 s).
+Nothing blocked.

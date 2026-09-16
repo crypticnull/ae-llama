@@ -108,6 +108,10 @@ assert(cOver.length === 1 && cOver[0].name === "y",
 // change hands an 8 GB card a video entry again, it must be because
 // something was MEASURED to fit, and this assertion is what forces that
 // to be said out loud. 18 P7c step 2a is the next lever on it.
+// 2026-09-16, later: it was measured. ltx-small and ltx-small-distilled
+// both render identical clips at an 8 GB card's room (NEXT UP 5b, 5b-1)
+// and are gated at 8, but recommendFromGB 12 holds the DEFAULT, so this
+// row is still null until the owner decides 5a-4e.
 // See WORKPLAN 18 P7, 18 P6a and 18 P7c.
 const combo = window.Setup.recommendSetup(null,
   { hasNvidia: true, name: "RTX 4060", vramGB: 8, computeCap: 8.9 });
@@ -116,8 +120,8 @@ assert(combo.tier.id === "T3" && combo.chat &&
        combo.gen.image && combo.gen.image.name === "sd15" &&
        combo.gen.video === null,
        "recommendSetup(8GB): T3, 7B chat, sd15 images, and NO video at " +
-       "all -- Wan 2.2 5B measured 26 187 MiB and LTX-Video 2B is gated " +
-       "at 12 (18 P7c step 2f), and 8 GB is not measured (got " +
+       "all -- both LTX-Video 2B entries are GATED at 8 (NEXT UP 5b, 5b-1) " +
+       "but held at recommendFromGB 12 for the owner's tier call (got " +
        JSON.stringify({ t: combo.tier.id,
                         c: combo.chat && combo.chat.name,
                         i: combo.gen.image && combo.gen.image.name,

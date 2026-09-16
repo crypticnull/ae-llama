@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.12.30",
+    VERSION: "0.12.31",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -349,11 +349,28 @@
         // has after AE and the tiers.js DESKTOP_FREE_MB floor, and that ran
         // in 12.69 s. Nothing was bought with time.
         //
-        // NOT 8, yet: an 8 GB card with AE and that desktop floor leaves
-        // under 1 GB, which was not run, and the pinned staging costs
-        // ~9.7 GB of SYSTEM RAM that no run here constrained (62 GB box).
-        // Both are WORKPLAN 18 P7c step 2g.
-        kind: "video", sizeMB: 10965, minVramGB: 12, measured: true,
+        // GATE 12 -> 8, MEASURED 2026-09-16 (NEXT UP 5b-1), on the shipped
+        // unpinned boot (0.12.26), which also retired the pinned-RAM caveat
+        // this paragraph used to carry. An 8 GB card minus AE (3 255) minus
+        // the DESKTOP_FREE_MB floor leaves 841 MiB. Run there TWICE:
+        //
+        //   room left for the backend   delta MiB   s    clip
+        //     841 (8 GB - AE - desktop)       58    24   identical
+        //     841, rerun                      67    24   identical
+        //
+        // 24 s is 1.7x the cold 14 s (2.0x the warm 12), inside the 2x
+        // bar and the closest to it of any gate moved so far, so it was
+        // rerun before moving rather than read once. ~1.6 GB spilled into
+        // WDDM shared memory, which is the driver fallback a real 8 GB card
+        // uses too. recommendFromGB 12 holds every default: at 8 and 10 GB
+        // this would otherwise be the first video default (the owner's
+        // 5a-4e/5c question), and at 12 and up it still beats
+        // ltx-small-distilled on download size, as before.
+        kind: "video", sizeMB: 10965, minVramGB: 8, recommendFromGB: 12,
+        constrainedFit: { roomMB: 841, seconds: 24, identical: true,
+                          on: "RTX 5090 ballasted to the room by scripts/vram-ballast.py, " +
+                    "managed backend --disable-pinned-memory (0.12.26), 2026-09-16" },
+        measured: true,
         measuredVramMB: 10394, measuredSeconds: 14,
         measuredAt: "768x512 x 97 frames = 4.04 s at the template's 24 fps " +
                     "(the authored latent), seed 12345",
