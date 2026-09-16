@@ -158,3 +158,41 @@ r3/r4's values, and it is written here so it can be overturned.
 re-graded shipped 16K range. Green if the 4-run means give pass >= 53, miss
 <= 18, HARM <= 28, canonical not passing <= 14, AND no row fails in more
 of the 4 runs than it fails in the 4 shipped runs plus 1.
+
+## 11b-2, q8_0 32K r1+r2: RED by the declared bar, but the bar mixed two prompts (loop pass, 15:20-15:45 EDT)
+
+Server `kv-quant-probe.js --serve --models 7B --ctx 32768 --kv q8_0` (n_ctx
+32768, 4 slots, build b10240), probe `--ctx 32768 --temperature 0
+--variants --steps 1-11,15-36`, `--rig-check` before each run, nothing
+else on 8737, server stopped by PID after. Counted from each transcript's
+`## N. scenario — verdict` headings (the same count reproduces r4's
+53/18/28/14).
+
+| run | transcript | pass | miss | HARM | canonical not passing |
+|---|---|---|---|---|---|
+| q8_0 32K T0 r1 | 19-27-51 | 55 | 14 | 30 | 12 |
+| q8_0 32K T0 r2 | 19-35-30 | 56 | 15 | 28 | 10 |
+
+- 2-run means: pass 55.5, miss 14.5, **HARM 29** (bar <= 28), canonical 11.
+- **Per-row clause already failed, so r3/r4 cannot make it green.** Three
+  rows fail in 2 of 2 here and in 0 of 4 shipped runs (allowed: 1):
+  `take a mask off again / typo` (miss, miss: mask mode/feather changed,
+  mask left), `un-animate the squares / canonical` (HARM, miss: keyed
+  opacity 100 instead of removing keys), `an effect on everything except
+  one layer / casual` (HARM, miss: built a null + slider rig, no drop
+  shadow). Transcripts read; the judges are right on all six. None of the
+  three failed in any q8_0 16K run except un-animate once (r2).
+- **But this does not say q8_0 hurts at 32K.** The transcript headers
+  differ: every 16K run says `tool docs: COMPACT (Tools.promptModeFor)`,
+  both 32K runs say `tool docs: FULL`. The panel does the same switch, so
+  the 32K runs graded a different system prompt as well as a different
+  KV type and window, against a baseline that had neither. The bar
+  declared above compared across prompt modes and could not isolate the
+  KV type. That is my miss in declaring it.
+- **What the 32K runs do say:** at 32K with q8_0 KV, the model this panel
+  ships behaves no better than at 16K and has three new failure rows. A
+  shipped (f16) 32K pair on the same FULL prompt is the only thing that
+  separates "q8_0 at 32K" from "FULL docs at 32K"; if f16 32K fails the
+  same rows, the regression is `promptModeFor`'s FULL mode, which is the
+  mode a user gets by raising Context size.
+- r3/r4 not run: no result could turn this bar green.

@@ -27652,3 +27652,19 @@ SUPERSEDES: 27609,27624 -- that entry's q8_0 r1/r2 totals (HARM 22/31, pass 57/5
 **Assumed:** refuse rather than run the understood part. A partial run is the exact failure this item came from (a whole run that measured the wrong steps).
 
 **Note for 11b-2:** its row still spells `--steps` as a literal list; that still works, and ranges are now also safe.
+
+## 2026-09-16 (local session) - KV quant 11b-2, q8_0 32K r1+r2: RED by its bar, but the bar compared FULL-docs 32K against COMPACT-docs 16K (NEXT UP 11b-2, §13b)
+
+SUPERSEDES: 27624,27641 -- that entry's "Bar for q8_0 32K, declared before any 32K run" (in the measured doc) graded 32K against shipped 16K; `Tools.promptModeFor` gives FULL tool docs at ctx >= 24576, so that bar cannot isolate the KV type. Its q8_0 16K GREEN stands.
+
+**Item:** NEXT UP 11b-2 (rows above it are owner-only, blocked or struck). Pass started 15:20 EDT, daytime; `run-local-agent.ps1` PID 47376 (-UntilHour 17) is running, so the owner-started loop is the permission (17a).
+
+**Harness: 770/770 PASSED** at the start. Nothing under extension/ changed (docs only), so **no bump** and no re-run.
+
+**Measured:** q8_0 KV at 32K (server n_ctx 32768, 4 slots, build b10240; probe `--ctx 32768 --temperature 0 --variants --steps 1-11,15-36`, the range form now that NEXT UP 33 landed), 7B Q4_K_M, `--rig-check` before each run, nothing else on 8737. r1 `logs/chat-probe-2026-09-16T19-27-51.md` 55/14/30/12, r2 `19-35-30.md` 56/15/28/10 (pass/miss/HARM/canonical not passing). Server stopped by PID (llama-server 47820, node parent 23412); nothing left listening on 8737; AE 9580 untouched.
+
+**Reading:** by the declared bar, RED and final after two runs: HARM mean 29 > 28, and three rows fail 2 of 2 against 0 of 4 shipped (allowed 1), so r3/r4 cannot turn it green and were not run: `take a mask off again / typo`, `un-animate the squares / canonical`, `an effect on everything except one layer / casual`. I read all six transcripts and the judges are right. **But the transcript headers show `tool docs: FULL` at 32K and `COMPACT` in every 16K run** (`promptModeFor`: compact below 24576). So this measured "FULL prompt + 32K + q8_0" against "COMPACT prompt + 16K + f16". It is not evidence that q8_0 hurts. I declared the bar in the previous pass without checking this, and that miss is mine.
+
+**Changed:** docs only. Measured doc gets a 32K section. WORKPLAN 11b-2 now says q4_0 16K next, then a shipped f16 32K pair (lower priority: it only matters if the owner raises the 16384 default) to separate KV type from prompt mode. If f16 32K fails the same rows, the regression is FULL mode, which is what a user gets by raising Context size, and that becomes a §24 filing. 11c's needs changed from `11b-2` to `AE, chat model`.
+
+**Assumed:** (1) Dropping r3/r4 is right, because no result could pass the per-row clause. (2) 11c may ship q8_0 at 16K on its GREEN now without waiting for q4_0, since q4_0 would be a further step and not a precondition. The owner or a later pass can put the gate back. (3) Counting verdicts from the `## N. scenario — verdict` headings reproduces the recorded r4 totals exactly (53/18/28/14), so I used that count and not variants-compare.
