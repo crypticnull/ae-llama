@@ -523,7 +523,15 @@ if (krea2) {
 // the gate is 32 (WORKPLAN 18 P7). The list stays, and stays checked in
 // BOTH directions, because the rule it encodes is the cheap one — it
 // needs no GPU, and it is what caught wan22-5b before any card did.
-const GATE_UNDER_ITS_BIGGEST_FILE = [];
+//
+// wan22-5b-fp8 TOOK A SEAT 2026-09-16 (NEXT UP 6a), by measurement and on
+// purpose: gate 8 (8192 MiB) against the 9536 MiB fp16 file. The file is
+// never resident at that size -- core UNETLoader casts it to fp8 on load,
+// and DynamicVRAM streams it -- and the "it GRINDS" premise above did not
+// hold: at 841 MiB of room the shipped graph rendered the identical clip
+// twice in 135 / 131 s against 129 unconstrained (constrainedFit carries
+// it). The fp16 sibling was NOT run there and is not seated.
+const GATE_UNDER_ITS_BIGGEST_FILE = ["wan22-5b-fp8"];
 
 /* The entries the rule below cannot ask the question OF, named rather than
  * silently skipped (WORKPLAN 18 P8a). krea2 carries `urls: []`, so there are
@@ -711,9 +719,15 @@ const ALLOW_UNMEASURED = [];
     // leaves it 250 MiB for Windows. If a future measurement really does
     // bring this under a 24 GB card, change this line deliberately and say
     // what moved -- do not let it drift.
-    assert(fp8.minVramGB === fp16.minVramGB,
-           "and the cast did NOT move the gate: both Wan entries still " +
-           "need " + fp16.minVramGB + " GB (WORKPLAN 18 P7a is still open)");
+    //
+    // It moved, 2026-09-16 (NEXT UP 6a), and not via a 24 GB card: both
+    // gates went 32 -> 12 on constrained runs (5a-4c), then the fp8 cast
+    // alone ran at an 8 GB card's room (841 MiB), identical clip twice,
+    // 135 / 131 s. The fp16 was not run there, so the pair now DIFFERS,
+    // and the fp8 must stay the lower of the two or it is dead weight.
+    assert(fp8.minVramGB === 8 && fp16.minVramGB === 12,
+           "the cast moved the gate: fp8 Wan runs at 8 GB, the fp16 is " +
+           "gated at 12 (got " + fp8.minVramGB + " / " + fp16.minVramGB + ")");
   }
 }
 

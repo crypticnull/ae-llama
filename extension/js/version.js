@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.12.31",
+    VERSION: "0.12.32",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -554,8 +554,22 @@
         // 4 937 MiB (12 GB card minus AE and the desktop floor), unpinned
         // boot, identical decoded frames (md5 ab4fa5...) in 133 s (backend
         // 132.32 s) against 129. Default held at 32 exactly as wan22-5b's.
-        kind: "video", sizeMB: 17304, minVramGB: 12, recommendFromGB: 32,
-        constrainedFit: { roomMB: 4937, seconds: 133, identical: true,
+        //
+        // GATE 12 -> 8, 2026-09-16 (NEXT UP 6a): an 8 GB card minus AE
+        // (3 255) minus the DESKTOP_FREE_MB floor leaves 841 MiB. Run there
+        // TWICE on the shipped unpinned boot, seed 12345:
+        //
+        //   room left for the backend   delta MiB   s     clip
+        //     841                             63    135   identical
+        //     841, rerun                      54    131   identical
+        //
+        // 1.05x the unconstrained 129 s, i.e. DynamicVRAM streams Wan the
+        // way it streams LTX, and no quantized build is needed for reach
+        // (WORKPLAN 6b stays unstarted). WDDM shared memory peaked at
+        // 1 371 / 1 075 MiB, the driver spill a real 8 GB card has too.
+        // recommendFromGB 32 still holds the default (owner, 5a-4e).
+        kind: "video", sizeMB: 17304, minVramGB: 8, recommendFromGB: 32,
+        constrainedFit: { roomMB: 841, seconds: 135, identical: true,
                           on: "RTX 5090 ballasted to the room by scripts/vram-ballast.py, " +
                     "managed backend --disable-pinned-memory (0.12.26), 2026-09-16" },
         measured: true,

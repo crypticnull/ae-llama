@@ -26112,3 +26112,49 @@ second and owner-gated because it is §22d's first customer). §18 P7c
 step 4 bullet carries the table. Assumed: that a core-only run beats a
 pack install for this buyer whenever it is within the 2x bar, which is
 what §22a and the vendor note both say.
+
+## 2026-09-16 (local session) - wan22-5b-fp8 runs at an 8 GB card's room, identical twice, and ships at gate 8 with the default held
+
+**Item:** NEXT UP 6a / WORKPLAN 18 P7c step 4. Items above it: 3, 5a-4e,
+5a-5b, 5a-5c, 5c are owner-only, 6 reported, the rest struck. Not
+attempted before. Loop window ran to 08:00; this was taken at 06:30.
+
+**Harness: 770/770 PASSED** at the start and again after the change.
+AE left running, untouched. Backend booted and stopped by
+`catalog-vram-probe.js --boot --stop`; card back to 1 191 MiB.
+
+### Runs (`local/gate-run.sh wan22-5b-fp8 841 <tag>`)
+
+Shipped unpinned managed boot (`--disable-pinned-memory` confirmed off
+the live command line), seed 12345, `scripts/vram-ballast.py` leaving
+841 MiB = 8 GB card minus AE 3 255 minus DESKTOP_FREE_MB.
+
+| tag | room | delta MiB | s | WDDM shared max | decoded-frame md5 | transcript |
+|---|---|---|---|---|---|---|
+| wanfp8-841 | 840 | 63 | 135 | 1 371 | ab4fa5abcbbd7b3bbfef0ff747501611 | catalog-vram-probe-2026-09-16T10-33-40.md |
+| wanfp8-841-b | 837 | 54 | 131 | 1 075 | ab4fa5abcbbd7b3bbfef0ff747501611 | catalog-vram-probe-2026-09-16T10-36-24.md |
+
+Reference: same md5 at 4 937 MiB (133 s), measuredSeconds 129. 1.05x,
+far inside the 2x bar; rerun anyway because the ltx-small move did.
+
+### Changed (0.12.32)
+
+- `extension/js/version.js`: wan22-5b-fp8 `minVramGB 12 -> 8`,
+  `constrainedFit {roomMB 841, seconds 135}`, table in the comment,
+  `recommendFromGB 32` kept (owner, 5a-4e).
+- `tests/test-model-catalog.js`: wan22-5b-fp8 SEATED in
+  `GATE_UNDER_ITS_BIGGEST_FILE` with the reason (8 192 < 9 536 MiB fp16
+  file, which is cast to fp8 on load and streamed, and did not grind);
+  the "cast did NOT move the gate" pin rewritten, as its own comment asked,
+  to assert fp8 8 / fp16 12.
+- `tests/test-tiers.js`: new pin, an 8 GB card CAN run wan22-5b-fp8 and
+  is NOT defaulted to it.
+- Stubbed suite: 92/92 files pass.
+
+### Assumed / filed
+
+- Assumed the allowlist seat is the honest fix, not a rule change: the
+  biggest-file rule stays right for entries nobody has run small.
+- 6b (quantized Wan) marked not needed for reach.
+- Filed **NEXT UP 6c**: the fp16 `wan22-5b` was not run at 841; same
+  procedure, reference md5 60f984....
