@@ -4802,6 +4802,8 @@
     catalogModelStatus: catalogModelStatus,
     removeCatalogWeights: removeCatalogWeights,
     findWeightFile: findWeightFile,   // Setup.downloadGenWeight asks it first
+    comfyModelRoots: comfyModelRoots,       // Setup.scanForModelRoots: covered?
+    parseComfyPathsYaml: parseComfyPathsYaml, // Setup.scanForModelRoots
     workflowRows: workflowRows,       // Settings > ComfyUI > Workflows
     _verifyMogrtResult: verifyMogrtResult, // exposed for tests
     _vramArbiter: VramArbiter,        // exposed for tests and probes

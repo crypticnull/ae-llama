@@ -27256,3 +27256,20 @@ No `extension/` change, so **no version bump**.
 **Changed:** `docs/WORKPLAN.md` row 29 struck with the evidence. No code, nothing in extension/, so **no bump**.
 
 **Decisions made unattended:** closed the row on code + guard test rather than a live probe run, because 09-09 already verified it live and the daytime rule forbids repeating that. Nothing repo-only remains in the NEXT UP table; the next daytime pass should take the "always takeable" list under it (§19a `Setup.scanForModelRoots()` first, after checking it is not already done).
+
+## 2026-09-16 (local session) - Setup.scanForModelRoots: probe a named shortlist, count model files (§19a)
+
+**Item:** §19a, the first row of the "always takeable" list under NEXT UP, as the previous pass (NEXT UP 29) directed. DAYTIME pass, started 11:05 EDT inside the `-UntilHour 17` loop. Checked first that it was not done: no `scanForModelRoots` anywhere in extension/, tests/ or scripts/.
+
+**Harness: NOT RUN, on purpose** — same reading as the earlier daytime passes (17a unanswered; CLAUDE.md's daytime rule is the written one). AE not touched; no backend, GPU, network or full suite.
+
+**Changed:**
+- `extension/js/setup.js`: `scanForModelRoots(s, deps)`, exported on `Setup`. Shortlist only: `%USERPROFILE%\Documents\ComfyUI\models`, `%USERPROFILE%\ComfyUI\models`, the Comfy-Desktop shared store, `<comfyDir>\models`, and every root `<comfyDir>\extra_model_paths.yaml` / `%APPDATA%\ComfyUI\extra_models_config.yaml` declare. Returns `{path, kind, source, counts, total, covered}` for folders holding at least one model file.
+- `extension/js/tools.js`: `comfyModelRoots` and `parseComfyPathsYaml` exported publicly (the `_` test aliases stay), so the scan reuses the one search path and the one yaml reader instead of a second copy.
+- `tests/test-scan-model-roots.js` (new): shortlist order, off-list folder never found, extension counting (placeholders, .png, 0-byte files and unknown kind folders ignored; subfolders and .gguf counted), per-kind yaml root, `covered` for Desktop/comfyDir/yaml roots and for a user-added root typed in another case with a trailing separator, empty env -> [].
+
+**Verified:** test-scan-model-roots ALL CHECKS PASSED; test-gen-model-manager, test-model-catalog, test-workflow-seeding, test-self-update, test-engine-assets all pass; test-source-control-chars 3 checks passed; capability doc fresh. Not in a panel: the function has no caller until §19b.
+
+**Hit:** the edit tool wrote the `"\u0000"` separator (copied from tools.js's dedupe) as a literal NUL byte, which test-source-control-chars caught; the separator is `"|"` now (cannot occur in a Windows path). Worth knowing for the next pass that copies that idiom.
+
+**Bump: none**, extension/ changed but was not verified in real AE (daytime); it rides with NEXT UP 12a, whose row now lists it. Decisions made unattended are written into WORKPLAN §19a (extension set, depth 3 / 5 000 entries cap, zero-file folders dropped, `covered` semantics). Next daytime pass: §19b.

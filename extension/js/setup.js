@@ -714,6 +714,136 @@
   }
 
   /**
+   * Model folders this machine probably already has, and what is in
+   * them (WORKPLAN §19a). Probes a NAMED SHORTLIST, never the drives: a
+   * recursive sweep of a buyer's disks is slow, alarming, and finds other
+   * applications' weights the panel has no business claiming. Anything
+   * off the list is the Browse button's job.
+   *
+   * Counts by EXTENSION inside the known kind folders, not by catalog
+   * membership — a user's own checkpoints are not catalog entries, and
+   * "47 model files" is the honest number. A candidate the search path
+   * (`Tools.comfyModelRoots`) already covers says so instead of being
+   * offered again. Folders that hold no model file are not returned.
+   *
+   * Pure over `deps` so it is stub-testable: {fs, path, env, kinds,
+   * parseYaml, covered}; each defaults to the panel's own.
+   * Returns [{path, kind, source, counts: {checkpoints: 12, ...}, total,
+   * covered}], in shortlist order.
+   */
+  var MODEL_FILE_EXT = /\.(safetensors|sft|ckpt|pt|pt2|pth|bin|pkl|gguf)$/i;
+  var SCAN_MAX_DEPTH = 3;       // ComfyUI allows subfolders; not a tree walk
+  var SCAN_MAX_ENTRIES = 5000;  // per kind folder, so a junk folder is cheap
+
+  function scanForModelRoots(s, deps) {
+    deps = deps || {};
+    var fsMod = deps.fs, pathMod = deps.path, env = deps.env;
+    try {
+      if (!fsMod || !pathMod) ensureNode();
+      fsMod = fsMod || fs;
+      pathMod = pathMod || path;
+      if (!env) env = global.AEBridge.nodeRequire("process").env || {};
+    } catch (e) { return []; }
+    s = s || {};
+    var kinds = deps.kinds ||
+      ((global.Comfy && global.Comfy.MODEL_SUBS) || []);
+    var parseYaml = deps.parseYaml ||
+      (global.Tools && global.Tools.parseComfyPathsYaml) || null;
+
+    var shortlist = [];
+    function add(p, kind, source) {
+      if (p) shortlist.push({ path: String(p), kind: kind || null, source: source });
+    }
+    if (env.USERPROFILE) {
+      add(pathMod.join(env.USERPROFILE, "Documents", "ComfyUI", "models"),
+          null, "Documents\\ComfyUI");
+      add(pathMod.join(env.USERPROFILE, "ComfyUI", "models"), null,
+          "ComfyUI in your user folder");
+    }
+    if (env.LOCALAPPDATA) {
+      add(pathMod.join(env.LOCALAPPDATA, "Comfy-Desktop", "ComfyUI-Shared",
+                       "models"), null, "ComfyUI Desktop");
+    }
+    if (s.comfyDir) add(pathMod.join(s.comfyDir, "models"), null, "ComfyUI folder");
+    if (parseYaml) {
+      var yamls = [];
+      if (s.comfyDir) {
+        yamls.push(pathMod.join(s.comfyDir, "extra_model_paths.yaml"));
+      }
+      if (env.APPDATA) {
+        yamls.push(pathMod.join(env.APPDATA, "ComfyUI",
+                                "extra_models_config.yaml"));
+      }
+      for (var y = 0; y < yamls.length; y++) {
+        var declared = [];
+        try {
+          if (fsMod.existsSync(yamls[y])) {
+            parseYaml(String(fsMod.readFileSync(yamls[y], "utf8")), pathMod,
+                      declared);
+          }
+        } catch (eY) { declared = []; }
+        for (var d = 0; d < declared.length; d++) {
+          add(declared[d].path, declared[d].kind, pathMod.basename(yamls[y]));
+        }
+      }
+    }
+
+    var covered = deps.covered;
+    if (!covered) {
+      try {
+        covered = global.Tools && global.Tools.comfyModelRoots
+          ? global.Tools.comfyModelRoots(s) : [];
+      } catch (eC) { covered = []; }
+    }
+    function sig(kind, p) {
+      return String(kind) + "|" +
+        String(p).replace(/[\\\/]+$/, "").replace(/\//g, "\\").toLowerCase();
+    }
+    var coveredSigs = {};
+    for (var c = 0; c < covered.length; c++) {
+      coveredSigs[sig(covered[c].kind, covered[c].path)] = true;
+    }
+
+    function countIn(dir) {
+      var n = 0, walked = 0;
+      (function walk(p, depth) {
+        var names;
+        try { names = fsMod.readdirSync(p); } catch (eR) { return; }
+        for (var i = 0; i < names.length; i++) {
+          if (++walked > SCAN_MAX_ENTRIES) return;
+          var full = pathMod.join(p, names[i]), st;
+          try { st = fsMod.statSync(full); } catch (eS) { continue; }
+          if (st.isDirectory()) {
+            if (depth < SCAN_MAX_DEPTH) walk(full, depth + 1);
+          } else if (MODEL_FILE_EXT.test(names[i]) && st.size > 0) {
+            n++;
+          }
+        }
+      })(dir, 1);
+      return n;
+    }
+
+    var out = [], seen = {};
+    for (var k = 0; k < shortlist.length; k++) {
+      var cand = shortlist[k];
+      var key = sig(cand.kind, cand.path);
+      if (seen[key]) continue;
+      seen[key] = true;
+      var counts = {}, total = 0;
+      var subs = cand.kind === null ? kinds : [cand.kind];
+      for (var j = 0; j < subs.length; j++) {
+        var dir = cand.kind === null ? pathMod.join(cand.path, subs[j]) : cand.path;
+        var n = countIn(dir);
+        if (n) { counts[subs[j]] = n; total += n; }
+      }
+      if (!total) continue;
+      out.push({ path: cand.path, kind: cand.kind, source: cand.source,
+                 counts: counts, total: total, covered: !!coveredSigs[key] });
+    }
+    return out;
+  }
+
+  /**
    * Download ONE generation weight (an entry of a catalog model's
    * urls[]) into the panel-managed models tree.
    * ui: {status(text)?, progress(receivedBytes, totalBytes)?}
@@ -1146,6 +1276,7 @@
     downloadGenWeight: downloadGenWeight,
     _genWeightDest: genWeightDest,    // exposed for tests
     _existingGenWeight: existingGenWeight, // exposed for tests and the CLI
+    scanForModelRoots: scanForModelRoots, // §19a; Settings "Scan" is §19b
     modelCatalog: modelCatalog,
     comfyCatalog: comfyCatalog,
     recommendModel: recommendModel,
