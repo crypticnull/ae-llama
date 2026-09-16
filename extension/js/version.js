@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.12.18",
+    VERSION: "0.12.19",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -255,6 +255,59 @@
         measuredOn: "NVIDIA GeForce RTX 5090, ComfyUI 0.34.0 (managed), " +
                     "2026-09-09",
         workflowTemplate: "AE_LLAMA_WAN22_5B_T2V_V1",
+        urls: [{
+          url: "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors",
+          sizeMB: 9536, dir: "diffusion_models"
+        }, {
+          url: "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+          sizeMB: 6424, dir: "text_encoders"
+        }, {
+          url: "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/vae/wan2.2_vae.safetensors",
+          sizeMB: 1344, dir: "vae"
+        }]
+      },
+      {
+        name: "wan22-5b-fp8",
+        label: "Wan 2.2 5B (fp8)",
+        // MEASURED 2026-09-16 on an RTX 5090 (32 607 MiB) by
+        // scripts/catalog-vram-probe.js, running the shipped
+        // AE_LLAMA_WAN22_5B_FP8_T2V_V1 through the panel own comfy_generate
+        // on the MANAGED backend a buyer gets, nvidia-smi streaming at
+        // 250 ms, /free before each run. Two runs at one seed and the
+        // authored size: delta 24 314 and 24 288 MiB, 26 MiB apart, in 129
+        // and 124 s, 1280x704 x 121 frames out. The higher is published.
+        //
+        // THIS ENTRY DOWNLOADS NOTHING THE SIBLING DOES NOT. There is no
+        // fp8 FILE of the ti2v 5B -- Comfy-Org publishes the 5B in fp16
+        // only (checked against the HF tree API 2026-09-16; every
+        // fp8_scaled build in that repo is a 14B). The fp8 here is core
+        // UNETLoader weight_dtype, a LOAD-TIME CAST of the same file, so
+        // urls[] and sizeMB are deliberately identical to wan22-5b and a
+        // buyer who has one has both. See WORKPLAN 18 P7c step 1.
+        //
+        // THE GATE DOES NOT MOVE, and that is the result. 24 314 MiB is
+        // 23.7 GiB: a 24 GB card is 24 564 MiB total, so the job delta
+        // alone leaves it 250 MiB for Windows. 32 stays, exactly as the
+        // fp16 sibling reasoned it. What the cast buys is HEADROOM at the
+        // same gate -- 1873 MiB cheaper than the fp16 on a card that is
+        // also holding After Effects (16b) -- not reach.
+        //
+        // Why the saving is 1.9 GB and not the 4.8 GB a halved 9536 MiB
+        // diffusion predicts: at the authored size it is masked, because
+        // ComfyUI was ALREADY offloading part of the fp16 model to fit. A
+        // third run at 704x480 -- the size 18 P7 measured the fp16 at --
+        // shows the cast doing exactly what it says: 16 834 MiB against
+        // the fp16 21 536, a saving of 4702 MiB. Recorded here rather
+        // than published because the catalog prices the AUTHORED job.
+        kind: "video", sizeMB: 17304, minVramGB: 32, measured: true,
+        measuredVramMB: 24314, measuredSeconds: 129,
+        measuredAt: "1280x704 x 121 frames (the template authored " +
+                    "default, 5.04 s at 24 fps), seed 12345",
+        measuredClipSeconds: 5.04,
+        authoredClipSeconds: 5.04,
+        measuredOn: "NVIDIA GeForce RTX 5090, ComfyUI 0.34.0 (managed), " +
+                    "2026-09-16",
+        workflowTemplate: "AE_LLAMA_WAN22_5B_FP8_T2V_V1",
         urls: [{
           url: "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors",
           sizeMB: 9536, dir: "diffusion_models"

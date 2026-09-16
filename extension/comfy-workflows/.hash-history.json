@@ -64,6 +64,12 @@
     ],
     "AE_LLAMA_H3_INT8_T2V_V1.manifest.json": [
       "91508de50ef635cb8ecb54a35514d2b001728d95"
+    ],
+    "AE_LLAMA_WAN22_5B_FP8_T2V_V1.json": [
+      "bd15035903d9f36ec647f8be23b3a6f9747019c8"
+    ],
+    "AE_LLAMA_WAN22_5B_FP8_T2V_V1.manifest.json": [
+      "115543d020b3e2dc4fa6f9640cba14f203cd7d8d"
     ]
   }
 }

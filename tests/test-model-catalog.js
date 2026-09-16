@@ -558,6 +558,61 @@ const ALLOW_UNMEASURED = [];
   }
 }
 
+// ---------------------------------------------------------------------
+// wan22-5b and wan22-5b-fp8 are TWO ENTRIES OVER ONE DOWNLOAD.
+//
+// There is no fp8 build of the Wan 2.2 ti2v 5B to download. Comfy-Org
+// publishes that model in fp16 only -- checked against the HF tree API on
+// 2026-09-16, when every fp8_scaled file in
+// Comfy-Org/Wan_2.2_ComfyUI_Repackaged/split_files/diffusion_models was a
+// 14B variant. WORKPLAN 18 P7c step 1 was written expecting one and it is
+// not there. The fp8 entry is the SAME file cast at load time by core
+// UNETLoader's weight_dtype, so its urls[] and sizeMB are identical to the
+// fp16's on purpose: a buyer who has one has both, and the panel must
+// never ask them to download 17 GB twice.
+//
+// The bug class: a future pass reads "fp8" in the entry and gives it its
+// own urls[] -- either a duplicate of the fp16 under a new name (17 GB of
+// wasted disk, the 18 P7b defect again) or a guessed fp8 URL that 404s.
+// Pinned by equality rather than by a comment, because a comment did not
+// stop it last time.
+{
+  const cat = window.AELL.COMFY_CATALOG;
+  const fp16 = cat.filter((e) => e.name === "wan22-5b")[0];
+  const fp8 = cat.filter((e) => e.name === "wan22-5b-fp8")[0];
+  assert(fp16 && fp8, "both Wan 2.2 5B entries are in the catalog");
+  if (fp16 && fp8) {
+    assert(JSON.stringify(fp8.urls) === JSON.stringify(fp16.urls),
+           "wan22-5b-fp8 downloads exactly what wan22-5b downloads -- the " +
+           "same files in the same order (there is no fp8 file to fetch)");
+    assert(fp8.sizeMB === fp16.sizeMB,
+           "and it therefore quotes the same sizeMB (" + fp16.sizeMB + ")");
+    assert(fp8.workflowTemplate !== fp16.workflowTemplate,
+           "but it is a SEPARATE graph, because the two entries carry " +
+           "different measurements and a gate must belong to the thing it " +
+           "was measured on");
+
+    // The reading is the whole reason the entry exists. If the cast ever
+    // stops being cheaper, the entry is dead weight and should be deleted
+    // rather than shipped as a choice that costs a buyer more.
+    assert(typeof fp8.measuredVramMB === "number" &&
+           typeof fp16.measuredVramMB === "number" &&
+           fp8.measuredVramMB < fp16.measuredVramMB,
+           "the fp8 cast measured CHEAPER than the fp16 it casts (" +
+           fp8.measuredVramMB + " vs " + fp16.measuredVramMB + " MiB)");
+
+    // 18 P7c step 3 reports, it does not choose: the cast did NOT move the
+    // gate, and the catalog must keep saying so. 24 314 MiB is 23.7 GiB
+    // and a 24 GB card is 24 564 MiB in total, so the job's own delta
+    // leaves it 250 MiB for Windows. If a future measurement really does
+    // bring this under a 24 GB card, change this line deliberately and say
+    // what moved -- do not let it drift.
+    assert(fp8.minVramGB === fp16.minVramGB,
+           "and the cast did NOT move the gate: both Wan entries still " +
+           "need " + fp16.minVramGB + " GB (WORKPLAN 18 P7a is still open)");
+  }
+}
+
 // No consumer may do decimal-MB arithmetic on the field. main.js's model
 // dropdown divided by 1000 while the downloader's status line divided by
 // 1024, so one file was quoted two sizes in the same window.

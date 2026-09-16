@@ -1,0 +1,74 @@
+{
+  "37": {
+    "class_type": "UNETLoader",
+    "inputs": { "unet_name": "wan2.2_ti2v_5B_fp16.safetensors", "weight_dtype": "fp8_e4m3fn" },
+    "_meta": { "title": "Load Diffusion Model (Wan 2.2 TI2V 5B, cast to fp8_e4m3fn)" }
+  },
+  "38": {
+    "class_type": "CLIPLoader",
+    "inputs": { "clip_name": "umt5_xxl_fp8_e4m3fn_scaled.safetensors", "type": "wan", "device": "default" },
+    "_meta": { "title": "Load CLIP (umT5-XXL)" }
+  },
+  "39": {
+    "class_type": "VAELoader",
+    "inputs": { "vae_name": "wan2.2_vae.safetensors" },
+    "_meta": { "title": "Load VAE (Wan 2.2)" }
+  },
+  "48": {
+    "class_type": "ModelSamplingSD3",
+    "inputs": { "model": ["37", 0], "shift": 8 },
+    "_meta": { "title": "ModelSamplingSD3" }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": { "clip": ["38", 0], "text": "a red paper boat drifting across a still pond in daylight, slow camera push in" },
+    "_meta": { "title": "CLIP Text Encode (Prompt)" }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": { "clip": ["38", 0], "text": "overexposed, static, blurry details, subtitles, still image, overall grey, worst quality, low quality, JPEG compression artifacts, ugly, mutilated, extra fingers, badly drawn hands, badly drawn face, deformed, disfigured, malformed limbs, fused fingers, motionless frame, cluttered background, three legs, crowded background, walking backwards" },
+    "_meta": { "title": "CLIP Text Encode (Negative)" }
+  },
+  "55": {
+    "class_type": "Wan22ImageToVideoLatent",
+    "inputs": { "batch_size": 1, "height": 704, "length": 121, "vae": ["39", 0], "width": 1280 },
+    "_meta": { "title": "Wan22ImageToVideoLatent" }
+  },
+  "3": {
+    "class_type": "KSampler",
+    "inputs": {
+      "cfg": 5,
+      "denoise": 1,
+      "latent_image": ["55", 0],
+      "model": ["48", 0],
+      "negative": ["7", 0],
+      "positive": ["6", 0],
+      "sampler_name": "uni_pc",
+      "scheduler": "simple",
+      "seed": 12345,
+      "steps": 20
+    },
+    "_meta": { "title": "KSampler" }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": { "samples": ["3", 0], "vae": ["39", 0] },
+    "_meta": { "title": "VAE Decode" }
+  },
+  "57": {
+    "class_type": "CreateVideo",
+    "inputs": { "fps": 24, "images": ["8", 0] },
+    "_meta": { "title": "Create Video" }
+  },
+  "58": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "video": ["57", 0],
+      "filename_prefix": "video/AE-Llama/Wan22_5B_fp8/%date:yyyy-MM-dd%/AELlama_Wan22_5B_fp8_",
+      "format": "mp4",
+      "codec": "h264",
+      "codec.encoding": "auto"
+    },
+    "_meta": { "title": "Save Video" }
+  }
+}

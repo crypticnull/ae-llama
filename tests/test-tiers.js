@@ -275,5 +275,54 @@ const T = window.Tiers;
          "a concurrent tier's line does not claim generation pauses chat");
 }
 
+// ---- the tie-break's LAST rung: same floor, same download ----
+//
+// Added 2026-09-16 with wan22-5b-fp8 (WORKPLAN 18 P7c step 1), which is
+// the first entry to tie a sibling on BOTH the floor and the bytes -- it
+// is the same three files, loaded through core UNETLoader's weight_dtype
+// cast, so sizeMB cannot separate the pair by construction. Before this
+// rung the pick fell through to array order, which is exactly the defect
+// the rest of better() exists to refuse.
+//
+// Tested on a synthetic catalog rather than the shipped one on purpose:
+// on the real catalog minimax-h3 outweighs both Wan entries at 32 GB, so
+// the rung is unreachable there and a test against it would pass without
+// exercising anything. These rows are about the RULE.
+{
+  const mk = (name, extra) => Object.assign(
+    { name: name, label: name, kind: "video", minVramGB: 16, sizeMB: 1000 },
+    extra || {});
+  const pick = (cat) => {
+    const r = T.recommendGen(
+      cat, { hasNvidia: true, vramGB: 24, computeCap: 8.9 }, {});
+    return r.video && r.video.name;
+  };
+
+  // The dear one FIRST in the array: array order would return it.
+  assert(pick([mk("dear", { measuredVramMB: 20000 }),
+               mk("cheap", { measuredVramMB: 15000 })]) === "cheap",
+         "on an equal floor and an equal download, the entry MEASURED " +
+         "cheaper on the card wins");
+
+  // ...and the same pair reversed, because a tie-break that only works in
+  // one array order is array order wearing a hat.
+  assert(pick([mk("cheap", { measuredVramMB: 15000 }),
+               mk("dear", { measuredVramMB: 20000 })]) === "cheap",
+         "and it wins from either position in the catalog");
+
+  // A missing reading must not beat a real one -- the mirror of the
+  // "no sizeMB scores 0" rule the rung above already follows.
+  assert(pick([mk("unmeasured", {}),
+               mk("measured", { measuredVramMB: 20000 })]) === "measured",
+         "an entry with no measuredVramMB LOSES the tie rather than " +
+         "winning it by accident");
+
+  // The new rung is the LAST one: it must not outrank size.
+  assert(pick([mk("small-but-cheap", { sizeMB: 500, measuredVramMB: 1000 }),
+               mk("big", { sizeMB: 9000, measuredVramMB: 20000 })]) === "big",
+         "and it never outranks the download size, which is still the " +
+         "rung above it");
+}
+
 console.log(failed ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
 process.exitCode = failed ? 1 : 0;

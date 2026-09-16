@@ -489,10 +489,11 @@ Queued (see WORKPLAN for owners/order):
   (extension/comfy-workflows/) with a dependency manifest; video repos
   are pinned (Wan 2.2, MiniMax H3); the remaining blocker is P4, which
   is every VRAM figure and catalog URL measured on real hardware.
-- Bundled ComfyUI templates: **SIX core-only basics, one per catalog
+- Bundled ComfyUI templates: **SEVEN core-only basics, one per catalog
   entry that has weights** — `AE_LLAMA_SD15_T2I_V1`,
   `AE_LLAMA_SDXL_T2I_V1`, `AE_LLAMA_KREA2_T2I_V1` (image),
-  `AE_LLAMA_WAN22_5B_T2V_V1`, `AE_LLAMA_H3_T2V_V1`,
+  `AE_LLAMA_WAN22_5B_T2V_V1`, `AE_LLAMA_WAN22_5B_FP8_T2V_V1`,
+  `AE_LLAMA_H3_T2V_V1`,
   `AE_LLAMA_H3_INT8_T2V_V1` (video). Each was
   authored from a RUNNING backend's `/object_info`, uses core nodes
   only (no custom packs), and has been rendered end to end into AE and
@@ -502,7 +503,18 @@ Queued (see WORKPLAN for owners/order):
   Blackwell cards, int8 for everything else — and measuring both
   showed the 10.9 GB the encoders differ by is a DOWNLOAD difference
   and not a VRAM one (26 080 vs 26 048 MiB, 253 vs 259 s), because
-  ComfyUI evicts the encoder before it samples. **Both of the owner's authored
+  ComfyUI evicts the encoder before it samples. The two Wan 2.2 5B
+  entries are a second such pair, and a cheaper one: there is no fp8
+  FILE of that model to download, so `wan22-5b-fp8` is the SAME three
+  files loaded through core `UNETLoader`'s `weight_dtype` cast and it
+  adds zero bytes to a buyer's download. Measured 2026-09-16 it costs
+  24 314 MiB against the fp16's 26 187 at the authored 1280x704, and
+  16 834 against 21 536 at 704x480 — the cast really does halve the
+  9 536 MiB diffusion term, but only the smaller job shows it, because
+  at the authored size ComfyUI was already offloading the fp16 to fit.
+  **It does not move the gate**: both Wan entries still need 32 GB, so
+  the "no runnable video graph under 32 GB" gap (WORKPLAN §18 P7a) is
+  still open. **Both of the owner's authored
   graphs have LEFT the bundle** (WORKPLAN §18 P8, P9) and are kept as
   test fixtures; a copy already installed under `%APPDATA%` survives.
   **Text-to-image and text-to-video only: no shipped template accepts

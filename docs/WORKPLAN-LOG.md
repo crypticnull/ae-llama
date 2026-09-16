@@ -23710,3 +23710,163 @@ fits, or the reserve would have been answering them.
 green.** Bumped 0.12.17 → **0.12.18** (`extension/` changed).
 
 AE left running, project untouched.
+
+## 2026-09-16 (local session) — the fp8 Wan the workplan asked for does not exist; the cast that replaces it is free, and it still does not reach a 24 GB card
+
+NEXT UP item 4 (§18 P7c step 1). Harness GREEN at pass start (770/770),
+so this is a queue item and not a repair.
+
+**The premise of the item was false.** It says "Comfy-Org publishes
+`wan2.2_ti2v_5B_fp8_scaled` beside the fp16 this catalog names". It does
+not. Checked against the HF tree API for
+`Comfy-Org/Wan_2.2_ComfyUI_Repackaged/split_files/diffusion_models` on
+2026-09-16: the ti2v **5B ships in fp16 only**, and every `fp8_scaled`
+file in that repo is a **14B** variant (t2v, i2v, s2v, fun_camera,
+fun_control, fun_inpaint, fun_vace). The URL the item implied returns a
+plain 404. A pass that had written the entry from the item's wording
+would have shipped a catalog row whose download fails.
+
+**What shipped instead, and it is strictly better than what was asked
+for.** Core `UNETLoader` carries an advanced `weight_dtype` enum —
+`default, fp8_e4m3fn, fp8_e4m3fn_fast, fp8_e5m2` — read from the RUNNING
+managed backend's `/object_info`, not from `scripts/comfy-node-defs.json`
+(which §17l already flags as drifted, and which carries no `UNETLoader`
+at all). So fp8 here is a **load-time cast of the same file**, which
+means `wan22-5b-fp8` adds **zero bytes** to a buyer's download: its
+`urls[]` are the fp16 entry's, byte for byte, and a buyer who has one has
+both. That is the §18 P10 sibling pattern with a smaller diff than P10
+had — one input, not one file.
+
+**MEASURED on the RTX 5090 (32 607 MiB), managed backend (ComfyUI 0.34.0,
+port 8288), `scripts/catalog-vram-probe.js` with nvidia-smi streaming at
+250 ms, `/free` before each run:**
+
+| job | fp16 | fp8_e4m3fn | saved |
+|---|---|---|---|
+| authored 1280x704 x 121f | 26 187 MiB / 127 s | **24 314 MiB / 129 s** | 1 873 MiB |
+| 704x480 x 121f | 21 536 MiB / 38 s | **16 834 MiB / 38 s** | 4 702 MiB |
+
+Two runs at the authored size: 24 314 and 24 288 MiB, **26 MiB apart**,
+129 and 124 s. The higher is published, as every other entry's is.
+
+**The two rows together are the finding, and either one alone would
+mislead.** The cast should halve a 9 536 MiB diffusion term, i.e. save
+~4 768 MiB. At 704x480 it saves 4 702 — exactly that. At the authored
+size it saves 1 873, because **ComfyUI was already offloading part of the
+fp16 model to fit**, so the fp16 row was never paying full price. Had I
+measured only the authored job (which is what the catalog prices, and
+what I would normally take), the honest conclusion would have been "fp8
+is worth 1.8 GB", and the next pass reasoning about dtype levers from
+that number would have been reasoning from an artefact of the memory
+manager. The 704x480 row exists because §18 P7 took one there on the
+fp16 and I could compare like with like.
+
+**THE GATE DOES NOT MOVE. 32 GB, both entries, and that is the result
+§18 P7c step 1 was for.** 24 314 MiB is 23.7 GiB; a 24 GB card is 24 564
+MiB in total, so the job's own delta leaves it 250 MiB for Windows —
+before the desktop floor §16b just measured at 4 096. So this candidate
+does not rescue a 24 GB card, let alone the 8-12 GB cards §18 P7a is
+about. Reported into P7a as a table, per step 3's "report, do not
+choose".
+
+**And the generalisation, which is the useful part for P7a.** The floor
+is resident WEIGHTS — 17 304 MiB of files — and the cast only touches the
+diffusion term. Halving that term perfectly still leaves ~12.5 GB of
+weights before a single activation, so **no dtype trick reaches an 8 GB
+card for this model.** Getting there needs the weights themselves
+smaller: a GGUF Q4/Q5 build, which is NEXT UP item 6, and which needs a
+non-core loader node — so **§22d (the opt-in pack layer) is on the
+critical path for low-end video**, which P7a suspected and this now
+supports with arithmetic.
+
+**Why the entry ships rather than being deleted.** At its own gate it is
+1 873 MiB cheaper than its sibling for an identical download, on a card
+that is also holding After Effects — which §16b (0.12.18, last night) now
+charges for explicitly. Same bytes, same gate, less VRAM: there is no
+axis on which the fp16 is the better offer to a 32 GB buyer.
+
+**A tie the tie-break could not break, fixed while here.** `tiers.js`
+`better()` opens with "TIES ARE DECIDED, not inherited from array order",
+and this pair is the first to tie a sibling on BOTH the floor and the
+download — sizeMB cannot separate two entries over one set of files. The
+pick was falling back to array order, the exact defect that block exists
+to refuse. Added a last rung: **prefer the entry MEASURED cheaper on the
+card; an entry with no reading scores Infinity and LOSES**, mirroring the
+`sizeMB || 0` rule above it. Tested on a synthetic catalog on purpose —
+on the shipped one `minimax-h3` outweighs both Wan entries at 32 GB, so
+the rung is unreachable there and a test against the real catalog would
+have passed without exercising anything.
+
+**Tests back-filled** (the same bug class, caught without AE or a GPU):
+
+- `tests/test-workflow-bundle.js` — the Wan pair gets the H3 pair's
+  enumerated-diff guard: exactly `37.weight_dtype` and
+  `58.filename_prefix`, nothing else. Plus two the H3 pair does not
+  need: the siblings must name the **same** `unet_name` (this is what
+  refuses a future pass "completing" the entry with a guessed fp8
+  filename that 404s), and `weight_dtype` must be a value core
+  `UNETLoader` actually offers, specifically `fp8_e4m3fn` and not
+  `fp8_e4m3fn_fast`.
+- `tests/test-model-catalog.js` — the zero-download invariant: the fp8
+  entry's `urls` and `sizeMB` are identical to the fp16's, its
+  `workflowTemplate` is not, its measurement is CHEAPER than the fp16's,
+  and **`minVramGB` is EQUAL** — so if a future measurement really does
+  bring this under 24 GB, someone has to change that line deliberately
+  and say what moved.
+- `tests/test-tiers.js` — four rows on the new rung, including the same
+  pair in both array orders, because a tie-break that only works in one
+  order is array order wearing a hat.
+
+**What I deliberately did NOT do, filed as §18 P7c step 1a:**
+
+1. `fp8_e4m3fn_fast`. It routes the MATMULS through fp8, not only the
+   storage, so it is a quality change as well as a memory one, and a
+   basic is the shape ComfyUI ships rather than a tuned one. Worth a
+   third sibling only if P7a ever needs another 1-2 GB, and only with an
+   eye on output quality — which no probe in this repo judges.
+2. An fp8 entry authored at a smaller default. 16 834 MiB at 704x480 IS
+   a 24 GB card with room, and it is the cheapest remaining lever on
+   P7a — but the catalog has no way to say "this entry, at this size",
+   and authoring a second graph at 704x480 is retuning, not the
+   one-input swap this item specified. Step 3 says report, do not
+   choose. It belongs to the owner.
+
+**NEXT UP item 3 (§16b measurement) is BLOCKED, and not environmentally
+— on a rule conflict.** Filed prominently as "§16b BLOCKER" in the
+workplan because it needs one line from a human and then it is takeable
+again. §16b's procedure requires opening a project; AE holds one project
+at a time, so its step 2 necessarily closes the running instance's
+project and its step 6 says so outright
+(`app.project.close(CloseOptions.DO_NOT_SAVE_CHANGES)` then
+`app.newProject()`). The unattended brief's hard limits say "never close
+its project… **not between steps**", which is aimed at exactly this
+shape. The rule's two stated harms both miss —
+`DO_NOT_SAVE_CHANGES` is the one call that provably does not raise the
+modal, AE keeps running so there is no cold launch, and the loop's
+watchdog already answers a save prompt on a harness-owned project — but a
+rule written after two lost nights is not one a pass should quietly
+decide does not apply to it. The risk that is NOT in the rule is the
+better reason to pause anyway: project A is 460 MB against 23.2 GB of
+footage, and a stall or an unsuppressed dialog there costs the rest of
+the night and leaves the owner's machine strange in the morning. Two ways
+out are written into §16b; either takes one sentence. **Nothing was
+opened, nothing was copied, and the originals were not touched** — the
+hashes in `local/real-projects.json` stand as taken on 09-15.
+
+**Seen once and not reproduced, recorded so the next pass does not chase
+it:** on the first full-suite run `tests/test-comfy-install.js` failed
+with "and the second run cannot reach the default port either" while the
+managed backend was live on 8288. Run alone immediately afterwards it
+passed, and two subsequent full-suite runs were clean. Most likely a port
+race in the test's own probe rather than the §17p class of defect. Filed
+nowhere as work because one unreproduced flake is not a finding; if a
+later pass sees it again, that second sighting is the item.
+
+**Result: real-AE harness 770/770 PASSED. Stubbed suite 88/88 files
+green.** Bumped 0.12.18 → **0.12.19** (`extension/` changed:
+`version.js`, `tiers.js`, two new files in `comfy-workflows/`).
+`docs/CAPABILITIES.md` curated half updated — the bundle is SEVEN basics
+now, not six.
+
+Managed backend stopped at end of pass (§17q); the card was back to its
+AE-only floor before I finished. AE left running, project untouched.

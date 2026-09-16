@@ -273,7 +273,24 @@
       // invert that pair, because the FALLBACK is the larger file.
       var aArch = !!a.requiresBlackwell, bArch = !!b.requiresBlackwell;
       if (aArch !== bArch) return aArch;
-      return (a.sizeMB || 0) > (b.sizeMB || 0);
+      if ((a.sizeMB || 0) !== (b.sizeMB || 0)) return (a.sizeMB || 0) > (b.sizeMB || 0);
+      // LAST, and only reachable since 2026-09-16: two entries can now share
+      // a floor AND a download. wan22-5b and wan22-5b-fp8 are ONE set of
+      // files that differ only in what core UNETLoader is told to cast the
+      // diffusion to (WORKPLAN 18 P7c step 1), so sizeMB cannot separate
+      // them by construction, and without this the pick falls back to array
+      // order - the one thing this whole block exists to refuse.
+      //
+      // Prefer the entry MEASURED cheaper on the card. Same gate, same
+      // bytes, less VRAM held while After Effects is also resident (16b),
+      // so there is no axis on which the dearer one is the better offer.
+      // An entry carrying no reading scores Infinity and LOSES the tie
+      // rather than winning it by accident - the mirror of the sizeMB 0
+      // rule above, and for the same reason: a missing number must not beat
+      // a measured one.
+      var aMeas = typeof a.measuredVramMB === "number" ? a.measuredVramMB : Infinity;
+      var bMeas = typeof b.measuredVramMB === "number" ? b.measuredVramMB : Infinity;
+      return aMeas < bMeas;
     }
     for (var i = 0; i < catalog.length; i++) {
       var e = catalog[i];

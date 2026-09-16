@@ -53,8 +53,8 @@ every pass and finished work costs the same context as live work.
 |---|---|---|---|---|
 | 1 | **Confirm the backend did not outlive the loop.** The teardown added 2026-09-09 calls `comfy-install.js --stop` at loop exit. Check this morning's log for a `Backend:` line and that the card was released. If it is missing or the card is still held, that is the item. | §17q | nothing | no |
 | 2 | ~~**Reserve VRAM for the desktop and After Effects before sizing the chat model.**~~ **DONE 2026-09-15 (0.12.18).** The reserve is in `planHandoff` and now gates `Llama.start` too (`Tiers.planChatLoad`), which had no arithmetic at all. The AMOUNT is still provisional and comes from item 3 — two constants, one line each, in `tiers.js`. What it does NOT touch: `recommendChat`/`recommendGen`, i.e. the tier table, which §16f reserves for the owner. See §16g. | §16b | AE, chat model | yes |
-| 3 | **Measure the §16b reserve on the owner's four real projects** — copies only, originals hashed before and after, close without saving. The exact eight-step procedure is in §16b; follow it to the letter. Paths are in the git-ignored `local/real-projects.json` and must never be committed. Nothing else loaded on the card while measuring. | §16b | AE | no |
-| 4 | **fp8 Wan 2.2 5B as a second entry, then MEASURE it.** The §18 P10 pattern: the shipped Wan graph with the diffusion filename swapped and nothing else. Cheapest route to a video option under 32 GB. | §18 P7c step 1 | backend, disk | yes |
+| 3 | **BLOCKED 2026-09-16 on a rule conflict - see §16b BLOCKER, it needs one line from the owner.** ~~Measure the §16b reserve on the owner's four real projects~~ — copies only, originals hashed before and after, close without saving. The exact eight-step procedure is in §16b; follow it to the letter. Paths are in the git-ignored `local/real-projects.json` and must never be committed. Nothing else loaded on the card while measuring. | §16b | AE | no |
+| 4 | ~~**fp8 Wan 2.2 5B as a second entry, then MEASURE it.**~~ **DONE 2026-09-16 (0.12.19).** There is no fp8 FILE of the 5B; shipped as a load-time `weight_dtype` cast instead, zero extra download. 24 314 MiB vs 26 187 at the authored size, 16 834 vs 21 536 at 704x480. **The gate did not move - §18 P7a is still open.** Full table in §18 P7c step 1; follow-ups in step 1a. The §18 P10 pattern: the shipped Wan graph with the diffusion filename swapped and nothing else. Cheapest route to a video option under 32 GB. | §18 P7c step 1 | backend, disk | yes |
 | 5 | **Settle what `ltx-small` is, then measure it.** The vendor's LTX is 2.3-**22B** — larger than Wan, not smaller. Ask a RUNNING backend's `/object_info` whether LTXV 2B nodes exist; the repo fixture says zero and is wrong (§17l). | §18 P7c step 2 | backend, disk | yes |
 | 6 | **Quantized video weights: survey what exists and what NODES it needs.** GGUF Q4/Q5 builds are how an 8 GB card runs a model this size. Ask a RUNNING backend's `/object_info` which GGUF loaders exist and which pack owns them — if they are custom, §22d is on the critical path for low-end video (see §18 P7a DECIDED). Report, do not pin. | §18 P7c step 4 | backend | no |
 | 7 | **SageAttention + Triton (§13a).** Owner-specified 2026-09-03 and never queued. §13's own header: on 8-12 GB cards this is the difference between video being usable and not. Measure-first; it is a VRAM lever on the §18 P7a gap. | §13a | backend, disk | maybe |
@@ -3319,6 +3319,50 @@ has broken the product even when the model itself runs. The AMOUNT is
 still measured (AE's working footprint on a real project plus the
 compositor's), not guessed — only its existence is settled.
 
+### 16b BLOCKER (found 2026-09-16, local session): the procedure below cannot be run by an unattended pass as the brief stands
+
+**This needs one line from the owner and then it is takeable again.**
+
+The eight-step procedure requires opening a project. After Effects holds
+ONE project at a time, so step 2's "open the copy" necessarily closes
+whatever the running instance has open, and step 6 says so explicitly:
+`app.project.close(CloseOptions.DO_NOT_SAVE_CHANGES)` then
+`app.newProject()`.
+
+The unattended brief's hard limits say, verbatim: *"NEVER quit or close
+After Effects, and never close its project. Not as cleanup, not to 'leave
+the machine tidy', **not between steps**."* That last clause is aimed at
+exactly this shape, and the rule was written after two nights were lost
+to a modal AE save prompt, so a pass should not quietly decide it does
+not apply to it.
+
+**It probably does not apply, and that is the point - somebody should say
+so.** `DO_NOT_SAVE_CHANGES` is the one call that provably does NOT raise
+the modal the rule exists to prevent, AE keeps running so there is no cold
+launch, and the loop's own watchdog already answers a save prompt on a
+project the harness owns. The rule's stated harms both miss.
+
+**The risk that is NOT in the rule, and is the better reason to pause:**
+project A is 460 MB against 23.2 GB of footage. Opening it unattended
+could stall AE for a long time or hit a dialog
+`beginSuppressDialogs` does not cover, and a wedged AE costs the rest of
+the night AND leaves the owner's machine strange in the morning.
+
+**What unblocks it, pick either:**
+
+1. One sentence in `scripts/run-local-agent.ps1`'s pass prompt carving
+   out the exception: *"§16b's measurement may close the current project
+   with `DO_NOT_SAVE_CHANGES`; it may still never QUIT After Effects."*
+   Then any pass can take it.
+2. Or run it attended once. The owner is at the machine, the four
+   projects are his, and a human watching a 23 GB project open is worth
+   more than any suppression flag.
+
+Nothing else in §16b is blocked: the hashes are taken, the manifest is in
+place, and the two provisional constants in `tiers.js` (`AE_RESIDENT_MB`,
+`DESKTOP_FREE_MB`) are each one line and shipped behind the gate that
+already works.
+
 ### 16b measurement: four REAL projects, owner-approved 2026-09-15 — the originals must survive untouched
 
 The owner supplied four real After Effects projects, which ends §16f's
@@ -4046,6 +4090,39 @@ Step 3's last clause is the part that needs a human eye.
 
 ## 18 P7a. Every card under 32 GB now has NO runnable video graph — OWNER CALL (filed 2026-09-09, local session)
 
+**§18 P7c step 1 REPORTED 2026-09-16 (candidate 1 of 2). It does not
+close this gap.** The owner approved measuring two low-VRAM video
+candidates; this is the first of them, and the answer is no.
+
+| job | `wan22-5b` (fp16) | `wan22-5b-fp8` (cast) | saved |
+|---|---|---|---|
+| authored 1280x704 x 121f | 26 187 MiB | **24 314 MiB** | 1 873 |
+| 704x480 x 121f | 21 536 MiB | **16 834 MiB** | 4 702 |
+
+RTX 5090, managed backend, nvidia-smi at 250 ms; two runs at the authored
+size 26 MiB apart. The cast is real and it is free - there is no fp8 file
+to download, only core `UNETLoader`'s `weight_dtype`, so the new entry
+adds zero bytes. **But 23.7 GiB does not fit a 24 GB card** (24 564 MiB
+total, leaving 250 MiB for Windows), let alone a 12 or 8 GB one, so the
+gate stays 32 and this option is spent.
+
+**What it tells you about options 1 and 2 generally.** The floor here is
+resident WEIGHTS - 17 304 MiB of files - and the cast only touches the
+diffusion term (9 536 of those). Halving it perfectly still leaves ~12.5
+GB of weights before a single activation, so **no dtype trick reaches an
+8 GB card for this model.** Reaching one needs the weights themselves to
+be smaller: a GGUF Q4/Q5 build, which is NEXT UP item 6 (§18 P7c step 4)
+and which needs a non-core loader node - so §22d (the opt-in pack layer)
+is on the critical path for low-end video, exactly as P7a suspected.
+
+Candidate 2 (`ltx-small`, §18 P7c step 2) is still unmeasured and is
+NEXT UP item 5. Do not decide P7a until it reports.
+
+**What the cast IS worth, at its own gate:** 1 873 MiB more headroom on a
+32 GB card that is also holding After Effects - which §16b now charges
+for explicitly. That is why the entry ships rather than being deleted.
+
+
 **This is the consequence §18 P6a step 3 said to flag rather than decide,
 and the measurement that forced it is taken.** As of 0.12.12 the video
 half of `COMFY_CATALOG` gates at:
@@ -4054,6 +4131,7 @@ half of `COMFY_CATALOG` gates at:
 |---|---|---|
 | `ltx-small` | 6 | **none** (permanent `ALLOW_NO_TEMPLATE` seat, owner Q1) |
 | `wan22-5b` | **32** (was 8) | `AE_LLAMA_WAN22_5B_T2V_V1` |
+| `wan22-5b-fp8` | **32** (2026-09-16) | `AE_LLAMA_WAN22_5B_FP8_T2V_V1` |
 | `minimax-h3` | 32 | `AE_LLAMA_H3_T2V_V1` (was the authored `AE_LLAMA_H3_I2V_V1`; §18 P9) |
 | `minimax-h3-int8` | 32 | `AE_LLAMA_H3_INT8_T2V_V1` (§18 P10, measured 2026-09-09) — but gated at 32 too, so it does NOT narrow this gap |
 
@@ -4169,7 +4247,68 @@ from training and it was 32. Do not write a gate from a model card, a
 README, or a parameter count. If a candidate measures at 14 GB, the gate
 is 14.
 
-### Step 1 - fp8 Wan 2.2 5B (cheapest, do this first)
+### Step 1 - fp8 Wan 2.2 5B - DONE 2026-09-16 (0.12.19), and the premise was wrong
+
+**There is no fp8 FILE of the Wan 2.2 ti2v 5B.** This item was written
+expecting `wan2.2_ti2v_5B_fp8_scaled` beside the fp16. Checked against
+the HF tree API on 2026-09-16: Comfy-Org publishes the 5B in **fp16
+only**, and every `fp8_scaled` build in
+`Wan_2.2_ComfyUI_Repackaged/split_files/diffusion_models` is a 14B
+variant (t2v, i2v, s2v, fun_*). The URL this item implied returns 404.
+
+**Taken instead, and it is strictly better: the cast.** Core
+`UNETLoader` carries an advanced `weight_dtype` enum -
+`default, fp8_e4m3fn, fp8_e4m3fn_fast, fp8_e5m2` - confirmed from the
+RUNNING managed backend's `/object_info`, not the drifted fixture. So
+`wan22-5b-fp8` ships as the shipped Wan graph with **one input changed**
+(plus its own output prefix, as the H3 pair does) and adds **zero bytes**
+to a buyer's download: its `urls[]` are the fp16 entry's, pinned by
+`tests/test-model-catalog.js`.
+
+**Measured on the RTX 5090, managed backend, nvidia-smi at 250 ms:**
+
+| job | fp16 | fp8_e4m3fn | saved |
+|---|---|---|---|
+| authored 1280x704 x 121f | 26 187 MiB / 127 s | **24 314 MiB / 129 s** | 1 873 MiB |
+| 704x480 x 121f | 21 536 MiB / 38 s | **16 834 MiB / 38 s** | 4 702 MiB |
+
+Two runs at the authored size, 24 314 and 24 288 MiB, 26 MiB apart.
+
+**Read the two rows together - that is the finding.** The cast halves the
+9 536 MiB diffusion term exactly as predicted (4 702 saved), and the
+authored row hides it, because at that size ComfyUI was ALREADY
+offloading part of the fp16 model to fit. A single measurement at the
+authored size would have concluded fp8 was barely worth having. It is
+worth having; the authored job is just not where it shows.
+
+**The gate does not move: 32 GB, both entries.** 24 314 MiB is 23.7 GiB
+and a 24 GB card is 24 564 MiB in total, so the job's own delta leaves it
+250 MiB for Windows. §18 P7a is **still open** and this rules one option
+out of it. Pinned in `tests/test-model-catalog.js` so it cannot drift
+silently.
+
+**Filed while here:** the pair is the first to tie a sibling on BOTH the
+floor and the download, so `tiers.js better()` gained a last rung -
+prefer the entry MEASURED cheaper, an unmeasured one loses - because
+without it the pick fell back to array order, the defect that block
+exists to refuse. Four rows in `tests/test-tiers.js`.
+
+### Step 1a - the two things step 1 deliberately did NOT take (filed 2026-09-16)
+
+- **`fp8_e4m3fn_fast`.** It routes the MATMULS through fp8 as well, not
+  only the storage, so it is a quality change and not just a memory one.
+  A basic is the shape ComfyUI ships, not a tuned one, so the
+  conservative half of the pair is what ships. Worth measuring as a
+  third sibling IF §18 P7a ever needs another 1-2 GB - but only with an
+  eye on output quality, which no probe in this repo judges.
+- **An fp8 entry authored at a SMALLER default.** 16 834 MiB at
+  704x480 is a 24 GB card with room, and the catalog has no way to say
+  "this entry, at this size". Authoring a second graph at 704x480 would
+  be retuning rather than the one-input swap this item specified, and
+  §18 P7c step 3 says report, do not choose. It is the cheapest
+  remaining lever on P7a and it belongs to the owner.
+
+### Step 1 - the original text, kept because the 404 is the point
 
 Comfy-Org publishes `wan2.2_ti2v_5B_fp8_scaled` beside the fp16 this
 catalog names; `umt5_xxl_fp8_e4m3fn_scaled` is already the fp8 encoder.

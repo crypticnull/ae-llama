@@ -1,0 +1,66 @@
+{
+  "workflow": "AE_LLAMA_WAN22_5B_FP8_T2V_V1",
+  "kind": "video",
+  "catalogEntry": "wan22-5b-fp8",
+  "notes": "The BASIC text-to-video graph for the wan22-5b-fp8 catalog entry (WORKPLAN 18 P7c step 1). It is AE_LLAMA_WAN22_5B_T2V_V1 with the diffusion loader told to CAST and nothing else: same twelve core nodes, same node ids, same links, same weight FILES on disk, same literal 1280x704 x 121 frames, same uni_pc/simple sampler and sigma shift 8. Two inputs differ -- node 37 weight_dtype (fp8_e4m3fn instead of default) and node 58 filename_prefix, so the two entries outputs do not land in one folder. Everything the sibling manifest says about the twelve nodes, the deleted LoadImage, the 4n+1 length grid and the translated negative applies here unchanged; read AE_LLAMA_WAN22_5B_T2V_V1.manifest.json for it rather than trusting a paraphrase.",
+  "whyThereIsNoFp8FILE": "WORKPLAN 18 P7c step 1 was written expecting Comfy-Org to publish wan2.2_ti2v_5B_fp8_scaled.safetensors beside the fp16. IT DOES NOT. Measured 2026-09-16 against the HF tree API for Comfy-Org/Wan_2.2_ComfyUI_Repackaged/split_files/diffusion_models: the ti2v 5B ships in ONE precision, fp16, and every fp8_scaled build in that repo is a 14B variant (t2v, i2v, s2v, fun_*). A GGUF Q4/Q5 of the 5B exists in the community but needs a non-core loader node, which WORKPLAN 22a keeps out of the BASICS. So the fp8 here is a LOAD-TIME CAST, not a second download: core UNETLoader carries an advanced weight_dtype enum -- default, fp8_e4m3fn, fp8_e4m3fn_fast, fp8_e5m2 -- confirmed from the running backend /object_info, and fp8_e4m3fn stores the same tensors at one byte instead of two. This entry therefore adds ZERO bytes to a buyer download: its urls[] are the fp16 entry files, and a buyer who already has wan22-5b already has this.",
+  "whyItIsASiblingAndNotASetting": "Same answer as the two H3 siblings. The catalog entry is what the panel prices, gates and recommends on, and these two entries have DIFFERENT minVramGB -- that is the entire point of the pair. A shared graph with the dtype swapped at run time via panelAdaptation.setInputs would make one workflowTemplate answer for two floors, and the gate a card is tested against would stop being a property of the thing it was measured on.",
+  "whyNotFp8e4m3fnFast": "fp8_e4m3fn_fast additionally routes the MATMULS through fp8 rather than only storing the weights that way. It is a quality change as well as a memory one, and this is a BASIC -- the shape ComfyUI itself ships, not a tuned one. fp8_e4m3fn is the conservative half of the pair: it halves resident weights and leaves the compute path alone. Filed as a follow-up in WORKPLAN 18 P7c, not taken here.",
+  "procedural": {
+    "prompt": {
+      "nodeId": 6,
+      "input": "text",
+      "note": "reached by introspection anyway (the panel follows KSampler.positive/negative to the CLIPTextEncode pair, comfy-workflows/README.md); named here so a reader does not have to derive it. Note the NAMED input rather than a widget INDEX -- see whyNoResolution/whyNoDurationSeconds."
+    }
+  },
+  "whyNoResolution": "No procedural.resolution, for the reason measured on the sd15 basic and written up as WORKPLAN 18 P5a. procedural.resolution means 'this template derives its pixel dimensions from a MEGAPIXEL widget' (comfy.js injectProcedural), which is true of H3's ResolutionSelector and false of a Wan22ImageToVideoLatent that takes literal width and height -- those are injected by introspection, which is what the README contract promises.",
+  "whyNoDurationSeconds": "No procedural.durationSeconds either, and that is the difference from the H3 manifest. H3 carries a seconds widget that its own ComfyMathExpression converts to a frame grid, so seconds had to be declared. This graph carries a literal numeric `length` on node 55, which is exactly what injectParams' generic frame walk writes to (comfy.js frameKeys = length/frames/video_frames/num_frames). Declaring durationSeconds here would flip lengthIn to 'seconds' and make the panel REFUSE a frames request against a graph that takes frames.",
+  "lengthIsOnAGridOfFour": "Wan 2.2 samples 4n+1 frames and /object_info gives node 55's `length` a step of 4 (min 1, max 16384, default 121). ComfyUI does not enforce the step server-side, so a frames request that is not 4n+1 is accepted and rounded by the model rather than refused. 121 frames at the CreateVideo fps of 24 is 5.04 s, which is the clip a request naming no length gets -- unlike minimax-h3, whose authored default is a >15-minute job (WORKPLAN 18 P3a).",
+  "models": [
+    {
+      "file": "wan2.2_ti2v_5B_fp16.safetensors",
+      "role": "diffusion",
+      "dir": "diffusion_models",
+      "sizeMB": 9536,
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors"
+    },
+    {
+      "file": "umt5_xxl_fp8_e4m3fn_scaled.safetensors",
+      "role": "text_encoder",
+      "dir": "text_encoders",
+      "sizeMB": 6424,
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/text_encoders/umt5_xxl_fp8_e4m3fn_scaled.safetensors"
+    },
+    {
+      "file": "wan2.2_vae.safetensors",
+      "role": "vae",
+      "dir": "vae",
+      "sizeMB": 1344,
+      "url": "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/vae/wan2.2_vae.safetensors"
+    }
+  ],
+  "customNodes": [
+    {
+      "pack": "(comfy-core)",
+      "nodes": [
+        "CLIPLoader",
+        "CLIPTextEncode",
+        "CreateVideo",
+        "KSampler",
+        "ModelSamplingSD3",
+        "SaveVideo",
+        "UNETLoader",
+        "VAEDecode",
+        "VAELoader",
+        "Wan22ImageToVideoLatent"
+      ]
+    }
+  ],
+  "panelIntegration": {
+    "promptInjection": "introspection: KSampler.positive -> node 6, KSampler.negative -> node 7",
+    "frameInjection": "introspection: node 55's literal `length` (comfy.js frameKeys)",
+    "resolutionCeilingFrom": "tier ceilings (COMFY_TIERS_PLAN)",
+    "saveNode": "SaveVideo 58 -- mp4/h264 so AE can import it; filename_prefix is RELATIVE and distinct from the fp16 sibling so the two entries outputs do not share a folder"
+  },
+  "nodeAttributionScannedOn": "2026-09-09 (managed backend, /object_info on 127.0.0.1:8288); weight_dtype enum re-confirmed 2026-09-16 (managed backend /object_info)"
+}

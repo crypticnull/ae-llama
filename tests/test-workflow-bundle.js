@@ -452,6 +452,81 @@ shipped.forEach((t) => {
   }
 }
 
+// The OTHER sibling pair, and the one whose difference is easiest to
+// "tidy" into a bug. wan22-5b and wan22-5b-fp8 are ONE download: there is
+// no fp8 FILE of the Wan 2.2 ti2v 5B -- Comfy-Org publishes that model in
+// fp16 only (checked against the HF tree API 2026-09-16; every fp8_scaled
+// build in that repo is a 14B). The fp8 entry is the SAME file loaded
+// through core UNETLoader's weight_dtype cast, measured 24 314 MiB against
+// the fp16's 26 187 at the authored size and 16 834 against 21 536 at
+// 704x480 (WORKPLAN 18 P7c step 1).
+//
+// Two bug classes, both silent:
+//
+//  1. Drift, as with the H3 pair above -- a fix to one Wan graph's
+//     sampler, shift, size or length and not to the other.
+//  2. A future pass "completing" the fp8 entry by pointing its unet_name
+//     at a wan2.2_ti2v_5B_fp8*.safetensors. That file does not exist; the
+//     entry would 404 on download and the graph would fail on a name the
+//     backend cannot offer. The allowed-diff list is what refuses it: the
+//     two graphs must name the SAME weight file, and the only permitted
+//     difference on node 37 is weight_dtype.
+{
+  const A = "AE_LLAMA_WAN22_5B_T2V_V1", B = "AE_LLAMA_WAN22_5B_FP8_T2V_V1";
+  const fa = path.join(BUNDLE, A + ".json");
+  const fb = path.join(BUNDLE, B + ".json");
+  const both = fs.existsSync(fa) && fs.existsSync(fb);
+  assert(both, "both Wan 2.2 5B siblings are bundled", A + " + " + B);
+  if (both) {
+    const ga = JSON.parse(fs.readFileSync(fa, "utf8"));
+    const gb = JSON.parse(fs.readFileSync(fb, "utf8"));
+    const ka = Object.keys(ga).sort(), kb = Object.keys(gb).sort();
+    assert(ka.join() === kb.join(),
+           "the Wan siblings hold the same node ids",
+           ka.length + " vs " + kb.length);
+
+    const diffs = [];
+    ka.forEach((k) => {
+      const na = ga[k] || {}, nb = gb[k] || {};
+      if (na.class_type !== nb.class_type) { diffs.push(k + ".class_type"); return; }
+      const ia = na.inputs || {}, ib = nb.inputs || {};
+      const keys = Object.keys(ia).concat(Object.keys(ib))
+        .filter((x, i, all) => all.indexOf(x) === i).sort();
+      keys.forEach((ik) => {
+        if (JSON.stringify(ia[ik]) !== JSON.stringify(ib[ik])) {
+          diffs.push(k + "." + ik);
+        }
+      });
+    });
+    const ALLOWED = ["37.weight_dtype", "58.filename_prefix"].sort();
+    assert(diffs.sort().join(", ") === ALLOWED.join(", "),
+           "the Wan siblings differ in exactly the dtype cast and the " +
+           "output prefix, and in nothing else",
+           "found [" + (diffs.join(", ") || "nothing") + "], expected [" +
+           ALLOWED.join(", ") + "]");
+
+    // Said separately from the diff list because it is the claim the
+    // catalog's sizeMB rests on: one set of bytes, two entries.
+    assert(ga["37"].inputs.unet_name === gb["37"].inputs.unet_name,
+           "the Wan siblings load the SAME diffusion file (there is no " +
+           "fp8 build of the 5B to point at)",
+           gb["37"].inputs.unet_name);
+
+    // weight_dtype is an enum on a core node. These four values are the
+    // running managed backend's own /object_info list, re-read 2026-09-16.
+    // fp8_e4m3fn_fast is deliberately NOT what ships: it routes the
+    // matmuls through fp8 as well, which is a quality change, and a basic
+    // is the shape ComfyUI ships rather than a tuned one.
+    const DTYPES = ["default", "fp8_e4m3fn", "fp8_e4m3fn_fast", "fp8_e5m2"];
+    assert(DTYPES.indexOf(gb["37"].inputs.weight_dtype) !== -1,
+           "the fp8 sibling's weight_dtype is a value core UNETLoader " +
+           "offers", gb["37"].inputs.weight_dtype);
+    assert(gb["37"].inputs.weight_dtype === "fp8_e4m3fn",
+           "and it is the conservative half of the fp8 pair (storage " +
+           "only, not fast matmuls)", gb["37"].inputs.weight_dtype);
+  }
+}
+
 // --------------------------------------------- the catalog's own side
 
 // Every entry that NAMES a template must name one that is bundled AND
