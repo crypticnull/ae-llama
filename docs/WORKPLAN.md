@@ -100,6 +100,7 @@ NOTHING but the repo and are always takeable:
 | "Scan for models" button + validate typed roots | §19b | yes |
 | The four Option A prompt deletions, one per pass, each gated on `chat-probe --variants` | §15 | yes |
 | `test-context-budget.js` starve row | §15 | no |
+| Does the model pass `outputPath` when it queues a render? One `chat-probe` run decides whether §25 needs anything at all — a destination-less add leaves an item AE never renders | §25 | no |
 | `--store-root` on `chat-probe.js` | §15 | no |
 | Persist `_floorMB`; launch-time `memory.used` read | §16f 1-2 | yes |
 | Mid-render VRAM reading in the scratch comp | §16f 3 | no |
@@ -6224,3 +6225,46 @@ offer a slow path with a disclosure. Everything else here is a falsehood
 fix and needs no decision. §22c will surface this copy on first run, so
 it wants doing before that lands.
 
+## 25. A destination-less `add_to_render_queue` leaves an item AE will never render (filed 2026-09-15, local session)
+
+Measured AE 26.3x87, 2026-09-15, with the machine's default output module
+at `H.264 - Match Render Settings - 15 Mbps`: a queue item added without
+an `outputPath` gets `outputModule(1).file === null` and is born at
+**NEEDS_OUTPUT (3013)**, not QUEUED. AE will pass over it forever. On a
+machine whose default output module carries a path, the same call
+inherits the last render's folder and is immediately renderable — both
+worlds are real, and which one a buyer is in is decided by a preference
+they have probably never opened.
+
+**Already done (0.12.17):** the panel no longer lies about it. The add
+reports the NEEDS_OUTPUT status and says there is no destination and how
+to set one, and `render_comp` counts these items in its held-back report
+instead of going silent. That closed the two red harness steps; see the
+2026-09-15 log entry. Nothing below is required for correctness.
+
+**The open question, which is a product call and not a bug:** a motion
+designer types "add this to the render queue" and gets an item After
+Effects will never render, plus a sentence explaining why. Is that the
+right answer?
+
+Three ways it could go, cheapest first:
+
+1. **Leave it.** The tool is honest, the user fixes it in the Render
+   Queue panel in two clicks, and the panel never invents a path. This is
+   the current behaviour and it is defensible — inventing a destination
+   is how bytes end up somewhere the user did not ask for, which is the
+   hazard the "reused the last render's folder" warning exists to name.
+2. **Say it in the tool DOCS too**, so the model volunteers an
+   `outputPath` rather than discovering the problem afterwards. One
+   phrase in `tools.js`, and §24's context budget has to pay for it — so
+   it is only worth it if the model actually omits `outputPath` on
+   "queue this up" phrasings. `chat-probe` can answer that in one run and
+   should, before anyone writes the phrase.
+3. **Offer a destination when AE has none** — the project's own folder,
+   named after the comp — and say plainly in the result that the panel
+   chose it and how to change it. Never silently.
+
+**Do 2's measurement first.** If the model already passes `outputPath`
+most of the time, 1 is the whole answer and this section closes.
+
+Needs nothing but the repo and a chat model; no AE, no backend.

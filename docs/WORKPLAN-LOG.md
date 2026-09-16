@@ -23530,3 +23530,93 @@ Baselines taken now, in the daytime, by hashing only — nothing was
 opened.
 
 No `extension/` change, so **no version bump**.
+## 2026-09-15 (local session) — the harness went red on a fact that changed under it: a fresh render-queue item has NO destination
+
+SUPERSEDES: the "a fresh output module inherits the LAST RENDER'S folder"
+measurement that `add_to_render_queue` and `tests/test-render-queue.js`
+FACT 7 were both written against. It is not wrong, it is CONDITIONAL, and
+tonight this machine was in the other world.
+
+**The harness was RED at pass start: 768/770.** Per the brief that made
+fixing it the item, and nothing in `extension/` had changed since the
+last 770/770 (last extension commit `8298ee5`, 0.12.16, 2026-09-09), so
+the ground had moved, not the code.
+
+    FAIL the queue is left exactly as it was found - no destination reported
+    FAIL queued items are held back, not swept into the render - (silent)
+
+**One root, measured in real AE** (throwaway `-r` probe, comp created and
+removed, queue left at 0 items — AE 26.3x87):
+
+    added: status=3013  numItems=1
+    file object: (null)
+    om name: H.264 - Match Render Settings - 15 Mbps
+
+`outputModule(1).file` on a fresh queue item is **literal null** — not a
+bad path, not a throw — and the item is born at **NEEDS_OUTPUT (3013)**,
+not QUEUED (3015). Both failures fall out of that one fact:
+
+1. `add_to_render_queue` read the landing path through a try/catch that
+   swallowed the null-dereference, so `output` was `""` and the note
+   said **`this will write to ""`** — a promise about a file that cannot
+   exist. The self-test's `if (!d.output)` caught it.
+2. `render_comp`'s hold-back loop only sees `QUEUED` items. Both of the
+   user's items were NEEDS_OUTPUT, so `held.length` was 0 and `heldBack`
+   went silent. The queue was never in danger (AE's `render()` passes
+   over them too), but a user whose whole queue is destination-less was
+   told **nothing at all**, which reads as "my queue was ignored".
+
+**Why it held for a month and broke tonight.** The inherited-folder
+measurement was taken with AE's default output module at a template that
+carries a path. This machine's default is now
+`H.264 - Match Render Settings - 15 Mbps` — the owner's, on the owner's
+workstation — and that one inherits nothing. Note the harness had ALREADY
+rendered several times in that same AE session before the failing step,
+each with an explicit file, and the fresh item STILL came back null: so
+this is not "AE has not rendered yet", it is the output-module default.
+Both worlds are real on a buyer's machine, and the tools now answer
+honestly in either.
+
+**Fixed at the host-tool root** (`extension/jsx/hostscript.jsx`):
+
+- `add_to_render_queue` splits the outputPath-less case on whether AE
+  actually handed over a landing path. With one, today's "reused the last
+  render's folder" note is unchanged. With none: *"Added, but AE gave
+  this item NO destination (it sits at NEEDS_OUTPUT), so it will not
+  render until one is set. Pass {outputPath} to choose one, or set it in
+  the Render Queue panel."* The tool no longer prints a null as a path.
+- `render_comp` counts the user's NEEDS_OUTPUT and UNQUEUED items
+  alongside the QUEUED ones it really holds back, and names them apart:
+  *"3 render-queue item(s) ... were held back and left as they were (2 of
+  them: no destination set, or unchecked, so AE would not have rendered
+  them anyway)."* The QUEUED ones are still the only ones whose `render`
+  flag is touched and restored — that behaviour is unchanged.
+
+`extension/js/selftest.js`: the add step now accepts BOTH worlds and
+refuses silence in either — with a destination it still demands the "last
+render" wording; with none it demands the note say so AND the item report
+`NEEDS_OUTPUT`. The premise changed, the assertion did not get looser.
+
+**Back-filled without AE** (`tests/test-render-queue.js`, new section 15,
++27 checks, 106 -> 133). The stub could not have caught this: it only
+ever modelled the inheriting world. It now has FACT 18 and an
+`inheritsLastRender` knob — a fresh OM's file is null, the item is born
+NEEDS_OUTPUT, setting a destination is what lifts it to QUEUED, and
+`applyTemplate` has no file to rewrite the extension of. The new section
+drives both tools through that world, including a MIXED queue (one live
+QUEUED item beside two dead ones) which proves the live one is still held
+back and handed straight back with its flag on, and asserts the note
+never contains an empty quoted path again.
+
+**Result: real-AE harness 770/770 PASSED. Stubbed suite 87/87 files
+green** (whole `tests/` directory, by exit code). Bumped 0.12.16 ->
+**0.12.17** — `extension/` changed, so the fix has to reach a panel.
+
+**Filed as work:** §25, the question this leaves open — whether a
+destination-less add should stay a dead queue item that merely explains
+itself. The panel now tells the truth about it; nobody has decided
+whether a motion designer who says "add this to the render queue" should
+get an item After Effects will never render. Added to the always-takeable
+(repo-only) table in NEXT UP, not to the main queue.
+
+AE was left running with its project untouched, as the brief requires.

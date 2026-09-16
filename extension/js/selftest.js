@@ -8970,10 +8970,28 @@
           // litter behind.
           if (d.warning) return "render_comp left its own items queued: " +
             d.warning;
-          if (!d.output) return "no destination reported";
-          if (!/last render/i.test(d.note || "")) {
-            return "an outputPath-less add did not say where AE would " +
-                   "write: " + (d.note || "(silent)");
+          // AE answers an outputPath-less add one of TWO ways, and both
+          // are real: it may inherit the last render's folder, and on
+          // AE 26.3x87 (measured 2026-09-15, default output module
+          // "H.264 - Match Render Settings - 15 Mbps") it inherits
+          // nothing at all — outputModule(1).file is NULL and the item
+          // parks at NEEDS_OUTPUT. What is NOT allowed is silence, or
+          // printing that null as if it were a path.
+          var note = d.note || "(silent)";
+          if (d.output) {
+            if (!/last render/i.test(note)) {
+              return "an outputPath-less add did not say where AE would " +
+                     "write: " + note;
+            }
+          } else {
+            if (!/NO destination/i.test(note)) {
+              return "AE set no destination and the add did not say so: " +
+                     note;
+            }
+            if (String(d.status) !== "NEEDS_OUTPUT") {
+              return "no destination, yet the item reports status " +
+                     d.status + " — AE parks these at NEEDS_OUTPUT";
+            }
           }
           ctx.rqQueued = true;
           return true;
@@ -8990,7 +9008,10 @@
 
       // Two of OUR items are now sitting in the queue. A render that took
       // the whole queue would consume them; render_comp must hold them
-      // back and hand them straight back.
+      // back and hand them straight back. Note they may be sitting at
+      // NEEDS_OUTPUT rather than QUEUED (see the add step above): a
+      // hold-back that counts only QUEUED items reports nothing at all
+      // here, and the user reads that as "my queue was ignored".
       { name: "queued items are held back, not swept into the render",
         tool: "render_comp",
         args: function (ctx) {

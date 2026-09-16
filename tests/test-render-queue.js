@@ -138,6 +138,16 @@ Folder.myDocuments = new Folder("C:\\Users\\probe\\Documents");
 // FACT 7: what a brand-new output module inherits. Nothing to do with
 // this project — it is wherever the machine last rendered.
 const INHERITED = "C:\\Users\\probe\\Documents\\ComfyUI\\output\\video\\LAST";
+// FACT 18, measured AE 26.3x87 on 2026-09-15: a fresh output module does
+// NOT always inherit the last render's folder. With the default output
+// module left at "H.264 - Match Render Settings - 15 Mbps" it inherited
+// NOTHING -- `outputModule(1).file` read back as literal null (not a bad
+// path, not a throw), and the item sat at NEEDS_OUTPUT (3013) rather than
+// QUEUED (3015), where AE will never render it. Both worlds are real, so
+// this stub can be either and the tools have to be honest in both. Two
+// real-AE self-test steps failed on exactly this (768/770) because the
+// stub only ever knew the first world.
+let inheritsLastRender = true;
 
 const RS_TEMPLATES = ["Best Settings", "Current Settings", "DV Settings",
   "Draft Settings", "Multi-Machine Settings", "_HIDDEN X-Factor"];
@@ -159,8 +169,10 @@ let modalRaised = 0;
 function OutputModule(item) {
   this._item = item;
   this.name = "H.264 - Match Render Settings - 15 Mbps";
-  // FACT 7.
-  this._file = new File(INHERITED + "\\" + item.comp.name + ".mp4");
+  // FACT 7, and FACT 18 when the inheritance is switched off.
+  this._file = inheritsLastRender
+    ? new File(INHERITED + "\\" + item.comp.name + ".mp4")
+    : null;
 }
 Object.defineProperty(OutputModule.prototype, "file", {
   get() { return this._file; },
@@ -176,6 +188,11 @@ Object.defineProperty(OutputModule.prototype, "file", {
     this._file = new File(/\.[^.\\]*$/.test(want)
       ? want.replace(/\.[^.\\]*$/, "." + ext)
       : want + "." + ext);
+    // FACT 18: giving a destination-less item a destination is what
+    // lifts it out of NEEDS_OUTPUT. Nothing else does.
+    if (this._item && this._item._status === RQItemStatus.NEEDS_OUTPUT) {
+      this._item._status = RQItemStatus.QUEUED;
+    }
   }
 });
 Object.defineProperty(OutputModule.prototype, "templates", {
@@ -190,18 +207,23 @@ OutputModule.prototype.applyTemplate = function (name) {
   this.name = name;
   // FACT 6: the extension is rewritten under the caller's feet.
   const ext = OM_EXT[name] || "avi";
+  // FACT 18: there may be no file to rewrite the extension OF.
+  if (!this._file) return;
   this._file = new File(this._file.fsName.replace(/\.[^.\\]*$/, "." + ext));
 };
 
 function RQItem(comp, queue) {
   this.comp = comp;
   this._queue = queue;
-  this._status = RQItemStatus.QUEUED;
   this.render = true;
   this.elapsedSeconds = 0;
   this.timeSpanStart = 0;
   this.timeSpanDuration = comp.duration;
   this._om = new OutputModule(this);
+  // FACT 18: the status an item is BORN with is decided by whether the
+  // output module handed it a destination.
+  this._status = this._om.file
+    ? RQItemStatus.QUEUED : RQItemStatus.NEEDS_OUTPUT;
 }
 Object.defineProperty(RQItem.prototype, "status", {
   get() { return this._status; },
@@ -899,6 +921,114 @@ assert(typeof AELL_TOOLS.add_to_render_queue === "function",
   assert(r.data.renderedSize === "320x240",
          "and a full render says the size plainly, with no comparison " +
          "nobody needs: " + r.data.renderedSize);
+}
+
+// ------------- 15. AE gave the item NO destination (measured AE 26.3x87)
+//
+// The world FACT 18 describes: `outputModule(1).file` is null, so the
+// item is born at NEEDS_OUTPUT and render() will never look at it. This
+// broke two real-AE steps at once and neither was visible here, because
+// the stub only modelled the inheriting world. Both tools have to stay
+// honest with no destination to report:
+//
+//   add_to_render_queue  must not print that null as a path. It used to
+//                        say `this will write to ""`, which is a promise
+//                        about a file that cannot exist.
+//   render_comp          must still COUNT the user's items. Its hold-back
+//                        loop only sees QUEUED ones, so a user whose
+//                        whole queue is destination-less was told nothing
+//                        at all -- which reads as "my queue was ignored".
+
+{
+  renderQueue._items.length = 0;
+  inheritsLastRender = false;
+  try {
+    const raw = renderQueue.items.add(shot);
+    assert(raw.outputModule(1).file === null,
+           "STUB FIDELITY: a fresh output module can inherit NOTHING -- " +
+           "the file reads back null, not a path");
+    assert(raw.status === RQItemStatus.NEEDS_OUTPUT,
+           "STUB FIDELITY: and the item is born NEEDS_OUTPUT, not QUEUED " +
+           "(got " + raw.status + ")");
+    raw.outputModule(1).file = new File("C:\\renders\\lifted.avi");
+    assert(raw.status === RQItemStatus.QUEUED,
+           "STUB FIDELITY: giving it a destination is what lifts it to " +
+           "QUEUED (got " + raw.status + ")");
+    raw.remove();
+
+    // --- add_to_render_queue says so instead of printing an empty path
+    const r = call("add_to_render_queue", { comp: "Shot" });
+    assert(r.ok, "the add still succeeds: " + (r.error || ""));
+    assert(r.data.status === "NEEDS_OUTPUT",
+           "it reports the status AE really parked it at: " + r.data.status);
+    assert(!/will write to/i.test(r.data.note || ""),
+           "it does NOT promise a destination it does not have: " +
+           r.data.note);
+    assert(/no destination/i.test(r.data.note || ""),
+           "it says there is none: " + (r.data.note || "(silent)"));
+    assert(/outputPath/.test(r.data.note || ""),
+           "and how to fix that: " + (r.data.note || "(silent)"));
+    assert(!/"" /.test(r.data.note || "") &&
+           (r.data.note || "").indexOf('""') < 0,
+           "and no empty quoted path is left in the text: " + r.data.note);
+
+    // --- a second one, so there are two of the user's items to survive
+    const r2 = call("add_to_render_queue", { comp: "Shot" });
+    assert(/already in the render queue/i.test(r2.data.warning || ""),
+           "the duplicate is still called out with no destination: " +
+           (r2.data.warning || "(silent)"));
+    assert(renderQueue.numItems === 2, "two of the user's items are queued");
+
+    // --- render_comp counts them, renders past them, leaves them alone
+    const rr = call("render_comp",
+      { comp: "Shot", output: "C:/renders/nodest.avi",
+        template: "Lossless", overwrite: true, frames: 1 });
+    assert(rr.ok, "the render still runs: " + (rr.error || ""));
+    assert(/held back/i.test(rr.data.heldBack || ""),
+           "and it reports the user's items rather than going silent: " +
+           (rr.data.heldBack || "(silent)"));
+    assert(/2 /.test(rr.data.heldBack || ""),
+           "BOTH of them, not just the QUEUED ones (zero here): " +
+           rr.data.heldBack);
+    assert(/no destination/i.test(rr.data.heldBack || ""),
+           "naming WHY AE would not have rendered them, so the count is " +
+           "not mistaken for a near miss: " + rr.data.heldBack);
+    assert(FILES["c:\\renders\\nodest.avi"], "our own output did land");
+    assert(renderQueue.numItems === 2,
+           "the user's two items are still there (got " +
+           renderQueue.numItems + ")");
+    assert(renderQueue.item(1).status === RQItemStatus.NEEDS_OUTPUT &&
+           renderQueue.item(2).status === RQItemStatus.NEEDS_OUTPUT,
+           "untouched, still waiting for a destination");
+    assert(renderQueue.item(1).render === true &&
+           renderQueue.item(2).render === true,
+           "and their flags were not left off");
+    delete FILES["c:\\renders\\nodest.avi"];
+
+    // --- the mixed queue: one real QUEUED item beside the two dead ones
+    const live = renderQueue.items.add(project._items[1]);      // "Other"
+    live.outputModule(1).file = new File("C:\\renders\\live.avi");
+    assert(live.status === RQItemStatus.QUEUED, "the third one is live");
+    const r3 = call("render_comp",
+      { comp: "Shot", output: "C:/renders/mixed.avi",
+        template: "Lossless", overwrite: true, frames: 1 });
+    assert(r3.ok, "the mixed render runs: " + (r3.error || ""));
+    assert(/3 /.test(r3.data.heldBack || ""),
+           "all three of the user's items are counted: " + r3.data.heldBack);
+    assert(/2 of them/i.test(r3.data.heldBack || ""),
+           "with the two AE would not have rendered named apart: " +
+           r3.data.heldBack);
+    assert(!FILES["c:\\renders\\live.avi"],
+           "the live one was held back, not swept into our render");
+    assert(live.status === RQItemStatus.QUEUED && live.render === true,
+           "and handed straight back QUEUED with its flag on");
+    delete FILES["c:\\renders\\mixed.avi"];
+  } finally {
+    // Leave the rig in the inheriting world; everything after this and
+    // every test before it is written against FACT 7.
+    inheritsLastRender = true;
+    renderQueue._items.length = 0;
+  }
 }
 
 // ------------------------------------------- 13. registry + documentation

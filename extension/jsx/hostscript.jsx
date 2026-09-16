@@ -10328,12 +10328,22 @@ AELL_TOOLS.render_comp = function (args) {
   // Hold back everything the USER already queued. render() takes the
   // whole queue, so without this a "render this comp" turns into
   // "render everything in the project".
-  var held = [], i, it;
+  var held = [], spared = 0, i, it;
   for (i = 1; i <= proj.renderQueue.numItems; i++) {
     it = proj.renderQueue.item(i);
     if (it.status === RQItemStatus.QUEUED) {
       held.push(it);
       it.render = false;
+    } else if (it.status === RQItemStatus.NEEDS_OUTPUT ||
+               it.status === RQItemStatus.UNQUEUED) {
+      // Measured AE 26.3x87 (2026-09-15): an item the user queued WITHOUT
+      // a destination sits at NEEDS_OUTPUT (3013), not QUEUED, so the
+      // branch above never sees it and render() never touches it. It is
+      // still one of the user's items. Counting only the QUEUED ones
+      // tells a user whose whole queue is destination-less that we
+      // ignored it, which is exactly the silence this report exists to
+      // break -- so they are counted here and named apart below.
+      spared++;
     }
   }
 
@@ -10427,9 +10437,12 @@ AELL_TOOLS.render_comp = function (args) {
       result.note = "The '" + omName + "' output module writes ." + gotExt +
         ", so the file is \"" + finalPath + "\", not ." + askedExt + ".";
     }
-    if (held.length) {
-      result.heldBack = held.length + " render-queue item(s) the user had " +
-        "already queued were held back and left QUEUED.";
+    if (held.length || spared) {
+      result.heldBack = (held.length + spared) + " render-queue item(s) the " +
+        "user had already queued were held back and left as they were" +
+        (spared ? " (" + spared + " of them: no destination set, or " +
+                  "unchecked, so AE would not have rendered them anyway)" : "") +
+        ".";
     }
   } catch (e) {
     thrown = e;
@@ -10790,13 +10803,22 @@ AELL_TOOLS.add_to_render_queue = function (args) {
         "format on purpose.";
     }
   }
-  if (!wantPath) {
-    // Measured: a fresh output module inherits the LAST RENDER'S folder,
-    // which on a real machine is somewhere else entirely. Silence here
-    // is how bytes end up in a stranger's folder.
+  if (!wantPath && landing) {
+    // Measured: a fresh output module can inherit the LAST RENDER'S
+    // folder, which on a real machine is somewhere else entirely.
+    // Silence here is how bytes end up in a stranger's folder.
     out.note = "No outputPath given, so AE reused the last render's " +
       "settings and folder - this will write to \"" + landing +
       "\". Pass {outputPath} to choose.";
+  } else if (!wantPath) {
+    // And measured AE 26.3x87 (2026-09-15): it often inherits NOTHING.
+    // `outputModule(1).file` is NULL -- not a bad path, not a throw --
+    // and the item parks at NEEDS_OUTPUT, where AE will never render it.
+    // The old text printed that null as a destination ("this will write
+    // to \"\""), which is a promise about a file that cannot exist.
+    out.note = "Added, but AE gave this item NO destination (it sits at " +
+      out.status + "), so it will not render until one is set. Pass " +
+      "{outputPath} to choose one, or set it in the Render Queue panel.";
   }
   if (already) {
     out.warning = comp.name + " was already in the render queue " +
