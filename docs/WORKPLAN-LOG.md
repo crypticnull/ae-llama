@@ -27778,3 +27778,39 @@ SUPERSEDES: 27624,27641 -- that entry's "Bar for q8_0 32K, declared before any 3
 **Nothing new found, nothing filed.** Nothing under extension/ changed, so **no bump**.
 
 **Assumed:** same as the 16:47 entry. This loop's last passes each cost a harness run for a known answer; if that pattern matters, a pass-start guard in `run-local-agent.ps1` that skips a pass with under ~15 min to `-UntilHour` would save them. Not filed as work: it is a few minutes of AE time, and the owner set the window.
+
+## 2026-09-16 (local session) — §13a was closed too broadly; the H3 attention patches are unmeasured
+
+SUPERSEDES the §13a closure in SCOPE. Today's measurement — SageAttention
+96.58 s vs CK attention 95.32 s — was a **backend-wide flag on
+wan22-5b-fp8**. It was reported, including by me to the owner, as
+"SageAttention is a dead end". It is not: it answers one flag on one
+model.
+
+**The owner pushed back from experience and he is right.** He reports
+real speed gains on H3, and his authored graph is the evidence:
+`MiniMaxH3MemoryEfficientSageAttentionPatch` and
+`MiniMaxH3ScheduledSolAttentionPatch` patch the H3 MODEL, which is a
+different mechanism from a backend flag, plus
+`ApplyMiniMaxH3FirstBlockCache` kept on "H3 Safe". The shipped basic
+`AE_LLAMA_H3_T2V_V1.json` has zero `AttentionPatch` matches — §18 P9
+dropped them to keep the basic core-only, correctly, and **the cost of
+dropping them was never measured**. The H3 a buyer gets may be materially
+slower than the H3 the owner runs, and nobody has the number.
+
+Filed as §13c with an ordered measurement: the two attention patches
+first, the first-block cache as a third arm (its own mode names are a
+fidelity trade, so compare frames not just clocks), and **peak VRAM
+alongside seconds** — if `MemoryEfficient` lowers peak, H3's gate of 32
+moves, and that is reach rather than speed.
+
+Anything that ships from this is opt-in layer (§22d), never the basic
+(§22a).
+
+**The lesson, which this repo keeps relearning:** a measurement answers
+the configuration it ran. §13a measured one flag on one model and the
+conclusion was written about a technique. The same shape as reading a
+pass's health off CPU, and as `ltx-small`'s gate of 6 that came from a
+model card.
+
+No `extension/` change, so **no version bump**.
