@@ -17,11 +17,15 @@
   // Keep names/args in sync with the dispatch table in jsx/hostscript.jsx.
   var TOOL_DEFS = [
     { name: "get_project_info", mutating: false,
+      triggers: ["project items", "whats in the project", "list the comps",
+                 "which comps", "project contents"],
       desc: "List project items (comps/footage/folders) and the active " +
             "comp. Long lists are capped (comps and folders first) and the " +
             "result says so in 'note' — raise limit to see more.",
       args: "{limit?: int (default 40, 0 = every item)}" },
     { name: "get_comp_details", mutating: false,
+      triggers: ["what layers", "list the layers", "which layers",
+                 "whats in the comp", "layer list"],
       desc: "Layers of a comp with index, name, type, timing, effects, " +
             "track matte. A " +
             "long comp is capped to a window: SELECTED layers are always " +
@@ -31,6 +35,7 @@
             "limit?: int (default 40, 0 = every layer)}  " +
             "// omit comp for the active comp" },
     { name: "create_folder", mutating: true,
+      triggers: ["folder", "new folder", "subfolder", "each subfolder"],
       desc: "Create a project-panel folder. Same name in different parents " +
             "is fine; existence is checked per-parent. eachChildOf makes " +
             "ONE call create the folder inside EVERY direct subfolder of " +
@@ -40,16 +45,24 @@
             "folder names.",
       args: "{name: string, parent?: folder name, id, path, or 'root' (default: root), eachChildOf?: folder name|id|path ('inside each subfolder of X' — one call, ignore parent), except?: [subfolders to SKIP] (with eachChildOf; bare names or full paths both work — an entry matching nothing refuses)}" },
     { name: "move_to_folder", mutating: true,
+      triggers: ["folder", "move into", "into the folder", "file it under",
+                 "move them to"],
       desc: "Move project items into a folder (batch).",
       args: "{items: name|id|path|[..], folder: name, id, path 'A/B', or 'root'}" },
     { name: "rename_item", mutating: true,
+      triggers: ["rename", "change the name", "call it", "new name"],
       desc: "Rename any project item (comp, footage, folder).",
       args: "{item: name|id|path 'A/B/Item', name: string}" },
     { name: "delete_item", mutating: true,
+      triggers: ["delete from the project", "remove from the project",
+                 "delete the comp", "delete the folder", "delete"],
       desc: "Delete a project item. Deleting a folder removes its contents. " +
             "Use a path when names repeat.",
       args: "{item: name|id|path 'A/B/Item'}" },
     { name: "set_solid_color", mutating: true,
+      triggers: ["solid color", "solid colour", "recolor", "recolour",
+                 "change the color", "change the colour",
+                 "color of the solid"],
       desc: "Change a SOLID layer's colour (this is the ONLY way — a " +
             "solid's colour is not a property you can set_property). " +
             "Takes many layers in one call. The colour lives on the " +
@@ -60,12 +73,16 @@
       args: "{comp?: string, layer?: name|index, layers?: [name|index], " +
             "color: [r,g,b], makeUnique?: bool}" },
     { name: "audit_comp_usage",
+      triggers: ["what would break", "where is it used", "comp usage",
+                 "nested in", "audit", "used where"],
       desc: "Facts about how comps are used, before renaming anything: " +
             "which comps each one is nested in, whether it is in the " +
             "render queue, and every expression that names it as a " +
             "string. Read-only. Omit 'comp' to audit the whole project.",
       args: "{comp?: string}" },
     { name: "rename_comps", mutating: true,
+      triggers: ["rename comps", "rename the comps", "rename all the comps",
+                 "naming convention", "rename"],
       desc: "Rename MANY comps in one call, on the org convention " +
             "(REVyy_ from a year in the old name, else REV_NO-YEAR_). " +
             "dryRun is TRUE by default and returns the preview table — " +
@@ -78,6 +95,8 @@
             "only), comps?: [string] (default every comp), dryRun?: bool " +
             "(default TRUE), includeUtility?: bool}" },
     { name: "duplicate_comp", mutating: true,
+      triggers: ["duplicate the comp", "duplicate comp", "copy of the comp",
+                 "copy the comp", "version of the comp"],
       desc: "Duplicate a composition. AE names the copy '<name> 2' and " +
             "puts it in the source's own folder; pass 'name' to rename " +
             "it, and a name another item already holds is auto-numbered " +
@@ -87,6 +106,8 @@
             "sharedSources lists them.",
       args: "{comp: string, name?: string}" },
     { name: "organize_project", mutating: true,
+      triggers: ["organize", "organise", "organize the project",
+                 "sort the project", "file the project", "project panel"],
       desc: "File loose root-level items into Comps/Footage/Solids/Audio/" +
             "Images folders at the project ROOT. Items already inside a " +
             "folder are left alone. " +
@@ -98,6 +119,9 @@
             "Solids count of 0 is normal.",
       args: "{dryRun?: bool (default TRUE)}" },
     { name: "clean_project", mutating: true,
+      triggers: ["unused footage", "consolidate footage",
+                 "reduce the project", "shrink the project",
+                 "clean the project", "remove unused", "project panel"],
       desc: "Delete project clutter. ONE action per call: " +
             "'remove_unused_footage' (footage no comp uses — and every " +
             "folder that ends up empty, which AE throws in whether you " +
@@ -116,9 +140,13 @@
             "'reduce_project', keepComps?: [string] (reduce_project " +
             "only, REQUIRED), dryRun?: bool (default TRUE)}" },
     { name: "create_comp", mutating: true,
+      triggers: ["new comp", "create a comp", "make a comp", "composition",
+                 "comp called"],
       desc: "Create a composition and open it.",
       args: "{name: string, width: int, height: int, duration: seconds, frameRate: number, bgColor?: [r,g,b] 0..1}" },
     { name: "add_text_layer", mutating: true,
+      triggers: ["text layer", "add text", "add a title", "that says",
+                 "type the words", "text that reads"],
       desc: "Add a text layer to a comp. The new layer starts from a " +
             "KNOWN baseline (white, 72px, tracking 0, auto leading, left, " +
             "no faux/stroke, a plain installed sans) instead of whatever " +
@@ -127,10 +155,15 @@
             "Character panel style instead.",
       args: "{comp?: string, text: string, fontSize?: px, fillColor?: [r,g,b] 0..1, position?: [x,y], font?: string (PostScript name), tracking?: number, leading?: px|'auto', justification?: 'left'|'center'|'right', inheritStyle?: bool}" },
     { name: "set_text_style", mutating: true,
+      triggers: ["font", "font size", "bold", "text color", "restyle",
+                 "bigger", "headline", "too small", "tracking"],
       desc: "Restyle an existing text layer (any subset of fields). " +
             "An uninstalled font is refused, listing what IS installed.",
       args: "{comp?: string, layer: name|index, text?: string, fontSize?: px, font?: string (PostScript name, e.g. ArialMT), fillColor?: [r,g,b] 0..1, tracking?: number, leading?: px|'auto', justification?: 'left'|'center'|'right'}" },
     { name: "add_text_animator", mutating: true,
+      triggers: ["typewriter", "letter by letter", "per character",
+                 "one at a time", "type on", "letters appear", "headline",
+                 "character animation"],
       desc: "Animate a text layer PER CHARACTER (typewriter, cascade, " +
             "wiggle) — an animator holds the properties, a selector " +
             "picks which characters get them. One call adds the " +
@@ -153,9 +186,13 @@
             "smoothness?, easeHigh?, easeLow?, amount?, randomizeOrder?, randomSeed?, " +
             "maxAmount?, minAmount?, wigglesPerSecond?, correlation?, temporalPhase?, spatialPhase?, lockDimensions?}}" },
     { name: "add_solid", mutating: true,
+      triggers: ["solid", "solid layer", "color layer", "colour layer",
+                 "square"],
       desc: "Add a solid layer.",
       args: "{comp?: string, name: string, color: [r,g,b] 0..1, width?: int, height?: int}" },
     { name: "set_transform", mutating: true,
+      triggers: ["position", "rotate", "scale", "opacity", "move it",
+                 "bigger"],
       desc: "Set a transform property. UNITS: scale/opacity are PERCENT " +
             "(100 = normal, 200 = double), rotation is degrees, position/" +
             "anchorPoint are pixels. relative:true applies against the " +
@@ -163,6 +200,9 @@
             "value:200, relative:true}; relative position adds [dx,dy]).",
       args: "{comp?: string, layer: name|index, property: 'position'|'scale'|'rotation'|'opacity'|'anchorPoint', value: number|[..], relative?: bool}" },
     { name: "center_anchor_point", mutating: true,
+      triggers: ["anchor point", "pivot", "spin around its middle",
+                 "rotate in place", "swings around its corner", "own centre",
+                 "own center", "spinning on the spot", "center the anchor"],
       desc: "Center a layer's anchor point on its visible content " +
             "(sourceRect math done host-side; position compensated so the " +
             "layer does not jump, at every Position keyframe). ALWAYS use " +
@@ -171,6 +211,8 @@
             "animated too, the note says where the compensation is exact.",
       args: "{comp?: string, layer: name|index, preservePosition?: bool = true}" },
     { name: "get_bounds", mutating: false,
+      triggers: ["how wide", "how big", "bounds", "overflow", "on screen",
+                 "in frame"],
       desc: "MEASURE a layer's rendered content without touching it — how " +
             "wide the text actually is, where the shape sits in the " +
             "frame, whether anything overflows. Returns the source rect, " +
@@ -182,21 +224,29 @@
             "the rest).",
       args: "{comp?: string, layer?: name|index (omit = selected layer), time?: seconds (default current), extents?: bool}" },
     { name: "add_keyframe", mutating: true,
+      triggers: ["keyframe", "add a key", "set a key", "key at"],
       desc: "Add a keyframe on a layer property at a time (seconds).",
       args: "{comp?: string, layer: name|index, property: transform name or 'effect.<EffectName>.<ParamName>', time: seconds, value: number|[..]}" },
     { name: "add_null", mutating: true,
+      triggers: ["null", "null object", "control null", "controller layer"],
       desc: "Add a null layer (use as a controller or parent).",
       args: "{comp?: string, name?: string, position?: [x,y]}" },
     { name: "add_control", mutating: true,
+      triggers: ["slider", "control", "checkbox control", "angle control",
+                 "master control", "color control"],
       desc: "Add a named expression control (Slider/Angle/Checkbox/Color/" +
             "Point Control effect) to a layer — usually a null.",
       args: "{comp?: string, layer: name|index, type: 'slider'|'angle'|'checkbox'|'color'|'point', name: string, value?: number|[..]}" },
     { name: "link_property", mutating: true,
+      triggers: ["link", "drive", "rig", "pick whip", "pickwhip",
+                 "from one place", "controls the", "one slider"],
       desc: "Drive a layer property from a control. The panel writes the " +
             "expression itself with correct syntax (dimension-aware; " +
             "optional value = control*scale + offset).",
       args: "{comp?: string, layer: name|index, property: transform name or 'effect.<Effect>.<Param>', controlLayer: name|index, controlEffect: string (control name), scale?: number, offset?: number}" },
     { name: "audio_to_keyframes", mutating: true,
+      triggers: ["music", "audio", "beat", "soundtrack", "bass",
+                 "in time with", "throb", "pulse", "bounce to", "sync to"],
       desc: "Convert audio amplitude to keyframes: adds a null carrying " +
             "Left/Right/Both Channels sliders keyframed to the loudness, " +
             "one key per frame. Use it for anything beat-driven " +
@@ -208,6 +258,8 @@
             "result.",
       args: "{comp?: string, layer?: name|index (omit for the whole comp mix), name?: string (default 'Audio Amplitude'), range?: 'comp' (default) | 'workArea'}" },
     { name: "stagger_layers", mutating: true,
+      triggers: ["stagger", "one after another", "cascade", "one by one",
+                 "not all at once", "apart", "offset"],
       desc: "Distribute layer START TIMES. Gap mode (use this for 'X " +
             "frames/seconds apart'): stepFrames or step is the gap " +
             "BETWEEN consecutive layers — '4 frames apart' = " +
@@ -221,6 +273,8 @@
             "ORDER GIVEN unless 'order' asks for a sort.",
       args: "{comp?: string, layers?: [name|index] (used in the order given), stepFrames?: frames BETWEEN consecutive layers, step?: seconds BETWEEN consecutive layers, spread?: seconds TOTAL for the whole stagger (default: work area), bezier?: [x1,y1,x2,y2] (curve mode only, default linear), startAt?: s, order?: 'in'|'stack'|'reverse'|'ascending'|'descending' (re-sorts the list)}" },
     { name: "distribute_property", mutating: true,
+      triggers: ["distribute", "equally", "evenly", "spread out",
+                 "equidistant", "space them", "ramp"],
       desc: "Distribute a property VALUE across layers. Curve mode: layer " +
             "i gets from + bezierY(i/(n-1)) * (to-from). Equidistant " +
             "mode: pass step and layer i gets from + i*step (from " +
@@ -237,12 +291,17 @@
             "list on that re-call, not only the overridden ones.",
       args: "{comp?: string, layers?: [name|index] (applied in the order given), property: 'opacity'|'rotation'|'scale'|'position_x'|'position_y', from?: number, to?: number, step?: number (equidistant), bezier?: [x1,y1,x2,y2], order?: 'in'|'stack'|'reverse' (re-sorts the list), clearExpressions?: true (ONLY on a re-call after overriddenByExpression, when the user explicitly asked for these values)}" },
     { name: "apply_keyframe_ease", mutating: true,
+      triggers: ["ease", "smoother", "smooth", "snappier",
+                 "less robotic", "mechanical", "mechanically", "feels cheap",
+                 "not so linear", "finesse", "stiff", "fade"],
       desc: "Apply a bezier as TEMPORAL easing between keyframes on one " +
             "property across MANY layers in ONE call (converts to AE " +
             "speed/influence ease). keyIndex eases pair k..k+1; omit for " +
             "all pairs. 'less robotic' = this (smooth = [0.42,0,0.58,1]).",
       args: "{comp?: string, layers?: [name|index] | layer?: name|index (omit = selection), property: path, bezier: [x1,y1,x2,y2], keyIndex?: int, allPairs?: bool}" },
     { name: "grid_layout", mutating: true,
+      triggers: ["grid", "rows and columns", "arrange", "columns", "3 by 3",
+                 "3 by 2"],
       desc: "Arrange layers into a grid rigged to a control null: its " +
             "'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders " +
             "drive spacing AND column count live, and the grid centers " +
@@ -250,6 +309,9 @@
             "host-side). Re-running re-flows the rig.",
       args: "{comp?: string, layers?: [name|index] (omit = user's selection), columns?: int ('3 by 2' = 3; default ~square; 1 = column, n = row), spacingX?: px, spacingY?: px, controlLayer?: string = 'GRID CTRL'}" },
     { name: "apply_expression_preset", mutating: true,
+      triggers: ["wiggle", "drift", "float", "floaty", "hover", "jitter",
+                 "loop", "idle", "wander", "breathe", "keep moving",
+                 "back and forth", "never sits"],
       desc: "Apply a known-good expression. Presets: wiggle (frequency/" +
             "amplitude as numbers OR freqControl/ampControl {layer, effect} " +
             "to drive from sliders), loop_cycle, loop_pingpong, loop_offset " +
@@ -257,30 +319,44 @@
             "'keep it drifting' = wiggle on position (slow: frequency 0.5).",
       args: "{comp?: string, layer: name|index, property: string, preset: string, frequency?: n, amplitude?: n, rate?: n, freqControl?: {layer, effect}, ampControl?: {layer, effect}, rateControl?: {layer, effect}}" },
     { name: "set_expression", mutating: true,
+      triggers: ["expression", "write an expression", "clear the expression",
+                 "expression code"],
       desc: "LAST RESORT: set a raw expression (or clear with ''). Prefer " +
             "link_property / apply_expression_preset — they generate " +
             "correct syntax. Invalid expressions are rejected with AE's " +
             "error text.",
       args: "{comp?: string, layer: name|index, property: transform name or 'effect.<EffectName>.<ParamName>', expression: string}" },
     { name: "apply_effect", mutating: true,
+      triggers: ["effect", "blur", "soften", "blurry", "too sharp",
+                 "out of focus", "glow", "drop shadow", "shadow"],
       desc: "Apply an effect to a layer. Returns the effect's parameter names.",
       args: "{comp?: string, layer: name|index, effect: display name or match name (e.g. 'Gaussian Blur' or 'ADBE Gaussian Blur 2')}" },
     { name: "set_effect_param", mutating: true,
+      triggers: ["effect setting", "blurriness", "effect parameter",
+                 "more blur", "less blur", "stronger", "intensity"],
       desc: "Set a parameter on an effect already applied to a layer.",
       args: "{comp?: string, layer: name|index, effect: string, param: string, value: number|[..]}" },
     { name: "remove_effect", mutating: true,
+      triggers: ["remove", "remove the effect", "strip it off",
+                 "drop the effect", "get rid of", "sharp again", "take off",
+                 "no more blur"],
       desc: "REMOVE one effect from a layer by display name or matchName " +
             "('get rid of the blur'). An unknown name is refused listing " +
             "the effects the layer really has; the result names what was " +
             "removed and what remains.",
       args: "{comp?: string, layer?: name|index (omit = selected layer), effect: display name or matchName}" },
     { name: "set_layer_timing", mutating: true,
+      triggers: ["delay", "push it back", "start later", "trim",
+                 "show up", "not appear until", "too early",
+                 "second mark", "in point", "out point"],
       desc: "Retime a layer on the TIMELINE, in comp seconds: startTime " +
             "slides the whole layer ('push it back two seconds' = " +
             "startTime: current + 2), inPoint/outPoint TRIM its ends " +
             "without sliding it.",
       args: "{comp?: string, layer: name|index, inPoint?: s, outPoint?: s, startTime?: s}" },
     { name: "duplicate_layer", mutating: true,
+      triggers: ["duplicate", "copies", "copy", "clone",
+                 "duplicate the layer"],
       desc: "Duplicate a LAYER inside its comp (use duplicate_comp only " +
             "for whole compositions). Omit 'layer' to use the user's " +
             "selected layer. Make N copies in ONE call with count — " +
@@ -288,6 +364,7 @@
             "duplicate names break name-based references.",
       args: "{comp?: string, layer?: name|index (omit = selected layer), name?: string (base name), count?: copies to make (default 1, max 100)}" },
     { name: "split_layer_into_chunks", mutating: true,
+      triggers: ["chunks", "split", "pieces", "segments", "cut into"],
       desc: "Cut a layer into chunks, each on its own layer trimmed to " +
             "its own window — ONE call does the whole edit. Pass chunks " +
             "for an exact piece count ('5 equal chunks' = {chunks: 5}) " +
@@ -303,6 +380,9 @@
             "than created invisible.",
       args: "{comp?: string, layer?: name|index (omit = selected layer), chunks?: exact piece count, chunkSeconds?: s, offsetPerChunk?: s (extra gaps only), order?: 'ascending'|'descending' (stack order, default ascending)}" },
     { name: "reorder_layers", mutating: true,
+      triggers: ["behind", "in front of", "underneath", "below", "above",
+                 "send to the back", "bring to the front", "layer order",
+                 "stack", "tuck"],
       desc: "Restack layers WITHOUT changing their timing. RELATIVE " +
             "({layer, above|below: name} or {layer, toFront|toBack: " +
             "true}) moves ONE layer and disturbs nothing else — 'put it " +
@@ -318,9 +398,13 @@
             "'layers' is refused.",
       args: "{comp?: string, layer?: name|index (RELATIVE mode, plus exactly one of:) above?: layer name, below?: layer name, toFront?: true, toBack?: true — never with by/layers | layers?: [name|index] (SORT mode; omit = selection, else all), by?: 'startTime'|'inPoint'|'name' (default startTime), order?: 'ascending'|'descending'}" },
     { name: "delete_layer", mutating: true,
+      triggers: ["delete", "delete the layer", "remove the layer",
+                 "get rid of the layer"],
       desc: "Delete a layer from a comp.",
       args: "{comp?: string, layer: name|index}" },
     { name: "set_comp_setting", mutating: true,
+      triggers: ["frame rate", "fps", "duration", "work area",
+                 "background color", "comp length"],
       desc: "Change a comp setting: duration, frame rate, bg color, the " +
             "WORK AREA (workAreaStart with workAreaDuration or " +
             "workAreaEnd, in seconds — or workArea: 'comp' to reset it to " +
@@ -330,6 +414,8 @@
             "the top-left — to resize a comp, use scale_comp instead.",
       args: "{comp?: string, duration?: s, frameRate?: number, width?: int, height?: int, bgColor?: [r,g,b] 0..1, workArea?: 'comp', workAreaStart?: s, workAreaDuration?: s, workAreaEnd?: s, resolution?: 'full'|'half'|'third'|'quarter'|int|[h,v]}" },
     { name: "scale_comp", mutating: true,
+      triggers: ["resize the comp", "scale the comp", "comp size",
+                 "scale composition", "resolution"],
       desc: "Resize a comp AND scale its content to match, re-centered — " +
             "like the native 'Scale Composition' script. Uniform factor " +
             "(no distortion): when the aspect changes, mode 'fit' " +
@@ -348,6 +434,7 @@
             "request.",
       args: "{comp?: string, width?: px, height?: px (omit one to keep aspect), factor?: number (e.g. 0.5 = half), mode?: 'fit'|'fill'}" },
     { name: "import_file", mutating: true,
+      triggers: ["import", "bring in", "load the file", "footage file"],
       desc: "Import a footage/image/video file into the PROJECT PANEL " +
             "only — it does not appear in any comp. To put it on screen " +
             "use import_as_layer instead. Returns the size AE measured " +
@@ -355,6 +442,8 @@
             "has them) — use those, not the size you expected.",
       args: "{path: string (absolute)}" },
     { name: "import_as_layer", mutating: true,
+      triggers: ["import", "import as a layer", "place the image",
+                 "add the footage", "put the file in"],
       desc: "Import a file AND place it in a comp as a layer, scaled to " +
             "the comp. 'fit' (default) contains it without cropping or " +
             "distorting, 'fill' covers and crops, 'stretch' fills exactly " +
@@ -365,6 +454,8 @@
             "still spans the whole comp — set_layer_timing retimes it.",
       args: "{path: string (ABSOLUTE), comp?: string, fit?: 'fit'|'fill'|'stretch'|'width'|'height'|'none', name?: string, position?: [x,y]}" },
     { name: "snapshot_frame", mutating: true,
+      triggers: ["snapshot", "screenshot", "still frame", "export a frame",
+                 "save a frame", "png"],
       desc: "Write one frame of a comp to a PNG on disk. Use it to show " +
             "someone what a comp looks like, or to feed a comp's own " +
             "frame to an image generator. Defaults to the comp's current " +
@@ -376,23 +467,34 @@
             "folder; import_as_layer puts the PNG back into a comp.",
       args: "{path: string (ABSOLUTE .png), comp?: string, time?: seconds (default: the comp's current time), resolution?: 'full'|'comp', overwrite?: bool = false}" },
     { name: "add_shape_layer", mutating: true,
+      triggers: ["shape layer", "ellipse", "rectangle", "circle", "star",
+                 "polygon"],
       desc: "Add a shape layer (rectangle, ellipse, polygon, or star).",
       args: "{comp?: string, name?: string, shape?: 'rectangle'|'ellipse'|'polygon'|'star', size?: [w,h], position?: [x,y], fillColor?: [r,g,b] 0..1, strokeColor?: [r,g,b], strokeWidth?: px, roundness?: px (rectangle), points?: int (polygon/star)}" },
     { name: "add_mask", mutating: true,
+      triggers: ["mask", "crop", "chop off", "lower half", "top half",
+                 "bottom half", "only the top", "cut a hole", "vignette",
+                 "oval"],
       desc: "Add a mask to a layer ('hide the bottom half'). " +
             "Coordinates are in LAYER space, sized from get_bounds — " +
             "never guessed.",
       args: "{comp?: string, layer: name|index, shape?: 'rectangle'|'ellipse'|'custom', bounds?: [x,y,w,h], vertices?: [[x,y],...] (custom), mode?: 'add'|'subtract'|'intersect'|..., inverted?: bool, feather?: px, name?: string}" },
     { name: "delete_mask", mutating: true,
+      triggers: ["mask", "remove", "remove the mask", "take the mask off",
+                 "delete", "oval off", "unmask"],
       desc: "REMOVE one mask from a layer by name or 1-based index " +
             "('remove that mask'); omit 'mask' when the layer has exactly " +
             "one.",
       args: "{comp?: string, layer?: name|index (omit = selected layer), mask?: name|1-based index (omit when the layer has one)}" },
     { name: "set_mask", mutating: true,
+      triggers: ["mask", "feather", "mask expansion", "invert the mask",
+                 "mask mode", "mask opacity"],
       desc: "Edit an EXISTING mask: mode, feather, expansion, opacity, " +
             "inverted, rename. Omit 'mask' when the layer has exactly one.",
       args: "{comp?: string, layer?: name|index (omit = selected), mask?: name|1-based index, mode?: add|subtract|intersect|lighten|darken|difference|none, feather?: px|[x,y], expansion?: px, opacity?: %, inverted?: bool, name?: string}" },
     { name: "set_mask_path", mutating: true,
+      triggers: ["mask path", "animate the mask", "wipe", "mask points",
+                 "mask shape"],
       desc: "Replace or ANIMATE a mask's path. Points are LAYER-space " +
             "[[x,y],…]; curves via inTangents/outTangents (one tangent " +
             "per vertex, as offsets from it). atTime keyframes one " +
@@ -404,6 +506,9 @@
             "keyframes; a bare vertices list only sets a STATIC path.",
       args: "{comp?: string, layer?: name|index, mask?: name|index, vertices?: [[x,y],…], inTangents?: [[x,y],…], outTangents?: [[x,y],…], closed?: bool (default true), atTime?: s, keys?: [{time: s, vertices, inTangents?, outTangents?}, …]}" },
     { name: "add_shape_content", mutating: true,
+      triggers: ["repeater", "trim paths", "fill", "stroke", "shape group",
+                 "rounded corners", "a ring of", "zigzag", "gradient",
+                 "ellipse"],
       desc: "Add content INSIDE a shape layer: kinds group, rectangle, " +
             "ellipse, star, polygon, path, fill, stroke, gradient_fill, " +
             "gradient_stroke, repeater, trim_paths, merge_paths, " +
@@ -418,6 +523,9 @@
             "('…/Repeater 1/Transform/Position').",
       args: "{comp?: string, layer?: name|index (shape layer; omit = selected), kind: string, group?: name (add inside this group), name?: string, params?: {ParamName: value, …}}" },
     { name: "precompose", mutating: true,
+      triggers: ["precompose", "precomp", "group these", "package it up",
+                 "bundle", "collapse", "single layer", "their own comp",
+                 "inside one", "nest"],
       desc: "Move layers into a new nested comp (precompose). " +
             "'package it up' = this — AE has no layer groups. The result " +
             "names the precomp AE actually made (auto-numbered if the " +
@@ -429,10 +537,12 @@
             "AE refuses it for more than one layer.",
       args: "{comp?: string, layers: [name|index, ...], name: string, moveAttributes?: bool = true}" },
     { name: "add_camera", mutating: true,
+      triggers: ["camera", "3d camera", "dolly", "orbit"],
       desc: "Add a camera. Only 3D layers (set_layer_3d) are affected by it. " +
             "oneNode:true makes a free camera with no Point of Interest.",
       args: "{comp?: string, name?: string, position?: [x,y,z], pointOfInterest?: [x,y,z], zoom?: px, oneNode?: bool}" },
     { name: "add_light", mutating: true,
+      triggers: ["light", "spotlight", "ambient light"],
       desc: "Add a light. Only 3D layers (set_layer_3d) with Accepts " +
             "Lights on are lit by it. Each type hides most options: " +
             "spot takes everything; parallel has no cone/shadowDiffusion; " +
@@ -446,6 +556,7 @@
             "falloff?: none|smooth|inverseSquareClamped, radius?: px, falloffDistance?: px, " +
             "castsShadows?: bool, shadowDarkness?: %, shadowDiffusion?: px}" },
     { name: "add_marker", mutating: true,
+      triggers: ["marker", "add a marker", "cue point", "comment at"],
       desc: "Add a marker to the comp (omit 'layer') or to a layer. " +
             "'time' is COMPOSITION time either way. AE keeps one marker " +
             "per exact time, so writing over one REPLACES it — the result " +
@@ -453,6 +564,7 @@
             "the layer's own span) is allowed and flagged.",
       args: "{comp?: string, layer?: name|index, time: seconds, comment?: string, duration?: seconds}" },
     { name: "set_layer_3d", mutating: true,
+      triggers: ["3d", "3d layer", "make it 3d", "depth", "2d"],
       desc: "Enable/disable a layer's 3D switch. Turning 3D OFF is " +
             "destructive: AE zeroes Position/Anchor Point Z, resets " +
             "Scale Z to 100 and clears Orientation and X/Y Rotation " +
@@ -460,6 +572,9 @@
             "restore them. Whatever was lost comes back in `discarded`.",
       args: "{comp?: string, layer: name|index, enabled: bool}" },
     { name: "set_layer_parent", mutating: true,
+      triggers: ["parent", "attach", "stick", "pin it to", "follow",
+                 "ride along", "tag along", "glue", "move with it",
+                 "unparent"],
       desc: "Parent layers to another layer (omit/null parent to " +
             "unparent). 'stick it to X / make it follow X' = {layer, " +
             "parent: 'X'} — never an expression. Visual positions are " +
@@ -477,12 +592,16 @@
             "jump. Omit layer/layers to use the selection.",
       args: "{comp?: string, layer?: name|index, layers?: [name|index], parent?: name|index|null, keepPosition?: bool (default true), atTime?: seconds, atFrame?: number}" },
     { name: "list_properties", mutating: false,
+      triggers: ["properties", "what properties", "property tree",
+                 "parameters"],
       desc: "DISCOVER a layer's real property tree — names, paths, types, " +
             "current values. Use this whenever a parameter/effect/mask " +
             "path is unknown instead of guessing. Narrow with path " +
             "('effects/Gaussian Blur', 'masks', 'text') and depth.",
       args: "{comp?: string, layer?: name|index (omit = selected layer), path?: string, depth?: 1-3 (default 2)}" },
     { name: "get_property", mutating: false,
+      triggers: ["current value", "what value", "what is the value",
+                 "read the value"],
       desc: "Read ANY property by path: value, keyframes, expression. A " +
             "BARE property name works too ('Radius', 'Blurriness') — " +
             "unknown names are searched down the layer's tree and the " +
@@ -490,11 +609,15 @@
             "properties with the same name are refused, listing both.",
       args: "{comp?: string, layer?: name|index, property: friendly name | bare name | 'effect.X.Y' | 'group/child/…' path}" },
     { name: "set_property", mutating: true,
+      triggers: ["property", "set the property", "change the value",
+                 "parameter"],
       desc: "Set ANY property by path — the universal fallback when no " +
             "dedicated tool fits. Takes the same bare names get_property " +
             "does. atTime creates a keyframe at that time.",
       args: "{comp?: string, layer?: name|index, property: path (see get_property), value: number|[..]|string|bool, atTime?: seconds}" },
     { name: "set_keyframes", mutating: true,
+      triggers: ["keyframe", "animate", "animation", "fade", "from 0 to 100",
+                 "over the first"],
       desc: "Set the SAME keyframes on MANY layers in ONE call. " +
             "relativeTo: 'inPoint' offsets every key by each layer's own " +
             "start, so staggered layers keep their offsets. Follow with " +
@@ -502,12 +625,17 @@
             "layer.",
       args: "{comp?: string, layers?: [name|index] | layer?: name|index (omit = selection), property: path, keys: [{time: s, value: any}, …] (max 100), relativeTo?: 'inPoint'}" },
     { name: "remove_keyframes", mutating: true,
+      triggers: ["keyframe", "animate", "fade", "remove", "stop it moving",
+                 "un animate", "no more fading", "from the start",
+                 "the whole time"],
       desc: "Remove keyframes from a property on many layers at once — " +
             "specific times or all ('stop it moving' = this, times " +
             "omitted). Removing ALL keys leaves the LAST " +
             "key's value.",
       args: "{comp?: string, layers?: [name|index] | layer?: name|index (omit = selection), property: path, times?: [s, …] (omit = remove ALL)}" },
     { name: "for_each_layer", mutating: true,
+      triggers: ["every layer", "each layer", "all layers",
+                 "everything except", "every layer but", "everything"],
       desc: "Run a PER-LAYER tool once per target layer in ONE call (max " +
             "200 layers) — the batch executor for anything without its " +
             "own layers arg: {tool: 'apply_effect', args: {effect: " +
@@ -523,6 +651,8 @@
             "layer to run on.",
       args: "{comp?: string, layers?: [name|index] (omit = selection, else the comp's only layer), tool: string (a per-layer tool), args: {…the tool's args, minus comp/layer…}}" },
     { name: "set_track_matte", mutating: true,
+      triggers: ["track matte", "matte", "show through", "only through",
+                 "stencil", "in the shape of", "visible through", "cut out"],
       desc: "Use one layer as another's track matte (alpha or luma, " +
             "optionally inverted), or remove it with mode 'none'. No " +
             "layer-stacking requirement. 'show the video through the " +
@@ -530,16 +660,24 @@
             "text, mode: alpha}.",
       args: "{comp?: string, layer?: name|index (the layer being matted; omit = selected), matteLayer: name|index, mode: 'alpha'|'alpha_inverted'|'luma'|'luma_inverted'|'none'}" },
     { name: "list_effects", mutating: false,
+      triggers: ["which effects", "what effects", "effects installed",
+                 "find an effect", "effect name"],
       desc: "Enumerate effects INSTALLED in this AE (name, matchName, " +
             "category), filtered and paged. Check here before apply_effect " +
             "when unsure of a name.",
       args: "{filter?: substring of name/category, offset?: int}" },
     { name: "list_presets", mutating: false,
+      triggers: ["preset", "make it pop", "polish", "look nicer", "plain",
+                 "fancy", "dress it up", "cinematic", "finished look",
+                 "boring", "apply something"],
       desc: "Enumerate the ANIMATION PRESETS (.ffx) installed in this AE — " +
             "AE ships ~679 (Behaviors, Text, Backgrounds, Transitions, " +
             "Image, Shapes…) plus the user's own. Search before applying.",
       args: "{filter?: substring of \"Category/Name\", category?: string, source?: \"app\"|\"user\", offset?: int, limit?: int, refresh?: bool}" },
     { name: "apply_preset", mutating: true,
+      triggers: ["preset", "make it pop", "polish", "look nicer", "plain",
+                 "fancy", "dress it up", "cinematic", "finished look",
+                 "boring", "apply something", "ffx"],
       desc: "Apply an installed .ffx animation preset to layer(s). One " +
             "preset can add several effects, expressions and keyframes at " +
             "once — the fastest route to a finished look ('make it pop' " +
@@ -551,12 +689,16 @@
             "success. Use list_presets to get the exact name.",
       args: "{preset: string (name or \"Category/Name\" from list_presets), layer?: string|int, layers?: [string|int], comp?: string}" },
     { name: "add_to_render_queue", mutating: true,
+      triggers: ["render queue", "queue it", "queue the comp",
+                 "add to the queue"],
       desc: "Add a comp to the render queue WITHOUT rendering it. With " +
             "no outputPath AE reuses the last render's folder, which is " +
             "usually nothing to do with this project — the result says " +
             "where it would land, so pass that on to the user.",
       args: "{comp?: string, outputPath?: string (absolute)}" },
     { name: "render_comp", mutating: true,
+      triggers: ["render", "render it", "render the comp", "export",
+                 "export the video", "output file"],
       desc: "Actually RENDER a comp to a file. " +
             "Blocks until AE finishes (minutes for anything long). " +
             "Refuses if the output file already exists unless " +
@@ -571,11 +713,15 @@
             "down afterwards; the result says the size AE really wrote.",
       args: "{comp?: string, output: string (ABSOLUTE file path), template?: string (output module, e.g. \"Lossless\" or \"H.264 - Match Render Settings - 15 Mbps\"), renderSettings?: string (e.g. \"Best Settings\"), resolution?: \"full\"|\"half\"|\"third\"|\"quarter\" = full, startTime?: number (seconds), durationSeconds?: number, frames?: int (instead of durationSeconds), overwrite?: bool = false}" },
     { name: "list_render_templates", mutating: false,
+      triggers: ["render template", "output module", "render settings",
+                 "templates"],
       desc: "List this machine's render-settings and output-module " +
             "template names for render_comp. Installed templates differ " +
             "per machine — never guess a name, list them.",
       args: "{}" },
     { name: "expose_property", mutating: true,
+      triggers: ["essential graphics", "expose", "editable in premiere",
+                 "controllable in premiere"],
       desc: "Expose one property in the comp's ESSENTIAL GRAPHICS panel, " +
             "so an editor can change it in Premiere. This is step one of " +
             "making a .mogrt template. AE names the controller after the " +
@@ -586,6 +732,7 @@
             "controller cannot be exposed twice.",
       args: "{comp?: string, layer?: name|index (omit = selected), property: string (e.g. 'opacity', 'position', 'effect.Tint.Amount to Tint', or a full path), label?: string}" },
     { name: "export_mogrt", mutating: true,
+      triggers: ["mogrt", "motion graphics template", "premiere template"],
       desc: "Write a comp out as a .mogrt Motion Graphics template. " +
             "Needs at least one exposed control (expose_property) and a " +
             "project that is SAVED and has NO unsaved changes — AE " +
@@ -597,6 +744,8 @@
             "the comp is not installed.",
       args: "{comp?: string, folder: string (ABSOLUTE folder), name?: string (template name = file name; default the comp's), save?: bool = false (save the project first), overwrite?: bool = false}" },
     { name: "render_comp_audio", mutating: true,
+      triggers: ["audio only", "export the audio", "render the audio", "wav",
+                 "mix down"],
       desc: "Render ONLY the comp's audio to a file (AE's audio-only " +
             "output module, picked for you). Refuses when no layer in " +
             "the comp has audio, or when every audio layer is muted — " +
@@ -605,6 +754,7 @@
             "calls it for you.",
       args: "{comp?: string, output: string (ABSOLUTE file path), template?: string (only to override the automatic audio module), startTime?: number (seconds), durationSeconds?: number, overwrite?: bool = false}" },
     { name: "add_captions", mutating: true,
+      triggers: ["captions", "subtitles", "lower third", "timed text"],
       desc: "Build MANY timed captions in one call: one text layer per " +
             "segment (trimmed to its own start/end), or one marker per " +
             "segment with {as: 'markers'}. Text layers default to the " +
@@ -614,6 +764,8 @@
             "the whole batch instead of leaving half a transcript behind.",
       args: "{comp?: string, segments: [{start: seconds, end: seconds, text: string}], as?: 'text' (default) | 'markers', layer?: name|index (marker target; omit for comp markers), name?: string (layer name prefix, default 'Caption'), fontSize?: number, font?: string, fillColor?: [r,g,b] 0-1, position?: [x,y], justification?: 'left'|'center'|'right'}" },
     { name: "transcribe_to_captions", mutating: true,
+      triggers: ["transcribe", "speech to text", "auto captions", "whisper",
+                 "captions"],
       desc: "TRANSCRIBE the comp's own audio with the local speech model " +
             "and put the result on the timeline as timed text layers (or " +
             "markers). Renders the audio, transcribes it offline, and " +
@@ -622,6 +774,7 @@
             "seconds of audio.",
       args: "{comp?: string, as?: 'text' (default) | 'markers', startTime?: number (seconds), durationSeconds?: number, language?: string, maxSegments?: int, name?: string (layer name prefix), fontSize?: number, font?: string, fillColor?: [r,g,b] 0-1, position?: [x,y], justification?: 'left'|'center'|'right', keepAudio?: bool = false (keep the rendered audio file and report its path)}" },
     { name: "export_gif", mutating: true,
+      triggers: ["gif", "animated gif", "export"],
       desc: "Export a comp as an animated GIF. Renders a lossless master " +
             "and converts it with a two-pass palette, then DELETES the " +
             "master. Defaults to 480 px wide at 12 fps because that is " +
@@ -631,6 +784,8 @@
             "installed; the refusal says how.",
       args: "{comp?: string, output: string (ABSOLUTE path ending .gif), size?: string (\"480\" = width, \"480x270\", \"720p\" = height), width?: int, height?: int, fit?: 'contain' (letterbox, default) | 'cover' (fill and crop) | 'stretch', padColor?: string, fps?: number (default 12), colors?: int 4-256 (default 256), dither?: 'bayer' (default) | 'none' | 'sierra2_4a' | 'floyd_steinberg', loop?: bool = true, masterResolution?: 'full' (default) | 'half' | 'third' | 'quarter' | 'auto' (render the intermediate smaller — much faster and far less disk when the export is much smaller than the comp; refused if it would end up smaller than the output), wholeComp?: bool, startTime?: number (seconds), durationSeconds?: number, overwrite?: bool = false}" },
     { name: "export_social", mutating: true,
+      triggers: ["mp4", "instagram", "reel", "tiktok", "youtube", "social",
+                 "export"],
       desc: "Export a comp as an H.264 .mp4 (or .mov) sized for posting, " +
             "AUDIO INCLUDED when the comp has any. Renders a lossless " +
             "master, encodes it, verifies the result and deletes the " +
@@ -641,12 +796,18 @@
             "pass {wholeComp: true}. Needs ffmpeg installed.",
       args: "{comp?: string, output: string (ABSOLUTE path ending .mp4 or .mov), size?: string (\"1080x1920\", \"1080p\", \"720\"), width?: int, height?: int, fit?: 'contain' (letterbox, default) | 'cover' (fill and crop) | 'stretch', padColor?: string, fps?: number (default: the comp's), quality?: 'low'|'medium' (default)|'high', audio?: bool = true, hardware?: bool = false (try the GPU encoder first), masterResolution?: 'full' (default) | 'half' | 'third' | 'quarter' | 'auto' (render the intermediate smaller — much faster and far less disk when the export is much smaller than the comp; refused if it would end up smaller than the output), wholeComp?: bool, startTime?: number (seconds), durationSeconds?: number, overwrite?: bool = false}" },
     { name: "comfy_status", mutating: false,
+      triggers: ["generator", "comfyui", "ready to go", "is it ready",
+                 "online"],
       desc: "Check the local ComfyUI instance (online? queue depth?).",
       args: "{}" },
     { name: "comfy_list_workflows", mutating: false,
+      triggers: ["generator", "comfyui", "workflows", "templates",
+                 "what can it make"],
       desc: "List available ComfyUI generation workflow templates by name.",
       args: "{}" },
     { name: "comfy_generate", mutating: true,
+      triggers: ["generator", "generate", "picture of", "image of",
+                 "video of", "ai image", "comfyui"],
       desc: "Generate an image/video with local ComfyUI and import it into " +
             "the AE project. Blocks until finished (may take minutes). If " +
             "the hidden backend is installed it BOOTS AUTOMATICALLY — " +
@@ -1356,6 +1517,108 @@
       (RULES_BY_TOOL[ruleOwners[ro]] = RULES_BY_TOOL[ruleOwners[ro]] || [])
         .push(RULE_DEFS[rd].id);
     }
+  }
+
+  // The nine tools a routed prompt always renders (prompt-routing-DESIGN
+  // §5): the inspection pair, get_bounds, the effect/batch pair, the
+  // units rule's subject and the universal property trio.
+  var CORE_TOOLS = ["get_project_info", "get_comp_details", "get_bounds",
+                    "apply_effect", "for_each_layer", "set_transform",
+                    "list_properties", "get_property", "set_property"];
+
+  /**
+   * The lexical trigger match of DESIGN §2, steps 1-2 — pure, no model.
+   * Scores every tool whose `triggers` phrase appears in the text (+N for
+   * an N-word phrase, +10 for the tool's own name typed literally) and
+   * lists the rules whose own `triggers` fired. Selection, the uses
+   * closure and rendering belong to the router (§24b), not here.
+   *
+   * Words are lower-cased with apostrophes dropped ("shouldn't" ->
+   * "shouldnt") and other punctuation as a break. Light stemming: a word
+   * of five or more letters loses a trailing ing/ed/s, then any word of
+   * four or more loses a trailing e — so fade/fades/faded/fading meet.
+   * One fuzzy pass for typos: a message word of six or more letters
+   * within ONE edit (a transposition counts as one: "parnet") of a
+   * trigger word matches it.
+   */
+  function triggerStem(w) {
+    if (w.length >= 5) {
+      if (/ing$/.test(w)) w = w.slice(0, -3);
+      else if (/ed$/.test(w)) w = w.slice(0, -2);
+      else if (/[^s]s$/.test(w)) w = w.slice(0, -1);
+    }
+    if (w.length >= 4 && /e$/.test(w)) w = w.slice(0, -1);
+    return w;
+  }
+
+  function triggerWords(text) {
+    var raw = String(text || "").toLowerCase().replace(/['’]/g, "")
+      .replace(/[^a-z0-9]+/g, " ").replace(/^ +| +$/g, "");
+    var words = raw ? raw.split(" ") : [];
+    var out = [];
+    for (var i = 0; i < words.length; i++) {
+      out.push({ raw: words[i], stem: triggerStem(words[i]) });
+    }
+    return out;
+  }
+
+  // At most one insert, delete, substitute or adjacent swap apart.
+  function withinOneEdit(a, b) {
+    if (a === b) return true;
+    var la = a.length, lb = b.length;
+    if (Math.abs(la - lb) > 1) return false;
+    var i = 0;
+    while (i < la && i < lb && a.charAt(i) === b.charAt(i)) i++;
+    if (la === lb) {
+      if (a.slice(i + 1) === b.slice(i + 1)) return true;
+      return a.charAt(i) === b.charAt(i + 1) &&
+             a.charAt(i + 1) === b.charAt(i) &&
+             a.slice(i + 2) === b.slice(i + 2);
+    }
+    return la > lb ? a.slice(i + 1) === b.slice(i)
+                   : a.slice(i) === b.slice(i + 1);
+  }
+
+  function phraseIn(words, phrase) {
+    var p = triggerWords(phrase);
+    if (!p.length) return false;
+    for (var s = 0; s + p.length <= words.length; s++) {
+      var j = 0;
+      for (; j < p.length; j++) {
+        var w = words[s + j];
+        if (w.stem === p[j].stem) continue;
+        if (w.raw.length >= 6 && withinOneEdit(w.stem, p[j].stem)) continue;
+        break;
+      }
+      if (j === p.length) return true;
+    }
+    return false;
+  }
+
+  function scoreTriggers(text) {
+    var words = triggerWords(text);
+    var lower = " " + String(text || "").toLowerCase()
+      .replace(/[^a-z0-9_]+/g, " ") + " ";
+    var tools = {};
+    var matched = false;
+    for (var i = 0; i < TOOL_DEFS.length; i++) {
+      var t = TOOL_DEFS[i];
+      var score = lower.indexOf(" " + t.name + " ") !== -1 ? 10 : 0;
+      var trig = t.triggers || [];
+      for (var k = 0; k < trig.length; k++) {
+        if (phraseIn(words, trig[k])) score += triggerWords(trig[k]).length;
+      }
+      if (score > 0) { tools[t.name] = score; matched = true; }
+    }
+    var rules = [];
+    for (var r = 0; r < RULE_DEFS.length; r++) {
+      var rt = RULE_DEFS[r].triggers || [];
+      for (var q = 0; q < rt.length; q++) {
+        if (phraseIn(words, rt[q])) { rules.push(RULE_DEFS[r].id); break; }
+      }
+    }
+    return { tools: tools, rules: rules,
+             matched: matched || rules.length > 0 };
   }
 
   // "Rules:" and each later section header, a blank line between
@@ -4285,6 +4548,9 @@
     RULE_DEFS: RULE_DEFS,
     RULE_SECTIONS: RULE_SECTIONS,
     _rulesByTool: RULES_BY_TOOL,      // exposed for tests
+    CORE_TOOLS: CORE_TOOLS,
+    scoreTriggers: scoreTriggers,     // the router's match step (§24b)
+    _triggerWords: triggerWords,      // exposed for tests
     fetchProjectState: fetchProjectState,
     compactToolResults: compactToolResults,
     callHostTool: callHostTool,

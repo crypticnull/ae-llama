@@ -26759,3 +26759,44 @@ So nothing about the exit path was silent in the sense filed. The real failures 
 - Mutation 2: I added an untracked, non-ignored `scripts/zz-mutation-probe.js` (reads `.comfyUrl`) and `.ps1` (`Set-Content -Encoding UTF8`). backend-url and bundle both caught them. I removed the files afterwards.
 
 Nothing blocked, and nothing new found that implies work.
+
+## 2026-09-16 (local session) - per-tool triggers for all 79 tools: router recall 100 percent over 101 probe sentences, 1 fall-through (routing step 1, trigger half)
+
+**Item:** NEXT UP 9b (§24a). This pass started at 09:52 EDT, which is DAYTIME. CLAUDE.md says the machine is the owner's during the day. AE was open (PID 9580), probably for his work, so I did NOT run `scripts/run-ae-selftest.ps1`, the full Node suite, or anything on the GPU. The brief says to run the harness first. I judged that the owner's rule outranks a generic loop brief, as the 07:57 pass did. Skipped above 9b: 7b-2 (backend, disk, network), 7d (backend), 10 (chat model), all GPU or model work. 9b was the first item with needs "nothing".
+
+**Harness: NOT RUN (daytime).** It could not see this change anyway. The CLI runner loads hostscript.jsx and selftest.js, never tools.js or chat-probe.js.
+
+### Changed
+
+- `extension/js/tools.js`:
+  - Every `TOOL_DEFS` entry has `triggers` (3-13 phrases). I took the phrase lists each tool's rules already carry, then words from its doc and name, then closed the probe matrix's misses.
+  - New `scoreTriggers(text)` is DESIGN §2 steps 1-2 only: normalise, whole-word phrase match, +N per N-word phrase, +10 for the literal tool name, and the rules whose own triggers fired. It returns `{tools, rules, matched}`.
+  - New `CORE_TOOLS` holds the nine tools from §5. It exports as `Tools.CORE_TOOLS`, alongside `Tools.scoreTriggers` and `Tools._triggerWords`.
+  - Nothing calls any of this yet. The prompt is byte-identical, and `test-prompt-rules.js` sha pins still pass.
+- `scripts/chat-probe.js`: every step has `expects: [...]` (metadata only), and the clean-up row also has `expectsRules: ["clean-comp-ask"]`.
+- `tests/test-prompt-triggers.js` (new) runs three groups of checks:
+  - **§13.8 lint:** at least 3 triggers per tool; lower-case words and digits only; no duplicate within a tool after stemming; no stemmed phrase on more than 3 tools.
+  - **Matcher rows:** stemming, a 6-letter transposition matches, a 4-letter typo does not, whole words, literal name +10, apostrophes.
+  - **§13.7 recall:** every sentence routes its expected tools or falls through. The test holds a stand-in `route()` for §2 step 3: top 12 by score, plus the core set, plus the `uses` closure of owned rules.
+
+### Result
+
+**101 sentences** (36 canonical plus 66 variants, minus the carry step, which is exempt because it needs the sticky set from §24c). **Recall 100%. 1 fall-through**, pinned at 1: step 17's typo row "cetner the ancor point on HELLO". "ancor" has 5 letters, below the 6-letter fuzzy floor. **Largest routed pick: 7 tools.**
+
+Mutation-checked: removing `"delete"` from delete_mask fails recall on "delet the msak on HELLO". Removing `"parent"` fails 3 checks.
+
+That row taught one real lesson. "delet" stems to the same form as "delete", so the sentence routed delete_item and delete_layer but not delete_mask. The fix is `"delete"` on delete_mask, which makes 3 tools share the phrase, the lint's limit.
+
+**Tests:** all 45 test files that load tools.js or chat-probe.js pass, one file at a time. `capability-report --check` says fresh.
+
+### Assumptions / deviations (also in WORKPLAN §24a)
+
+- The matcher goes a little beyond §2's text in two ways. Any word of 4 or more letters also loses a trailing `e`, so fade, fades, faded and fading all meet. A transposition counts as one edit (Damerau), because the matrix's typos are mostly swaps ("parnet", "contorl").
+- The triggers sit inline on `TOOL_DEFS` as DESIGN §3 says. `buildSystemPrompt` never reads them.
+- `expects` lists the tools any correct plan needs, not every tool a plan might use. Multi-tool rows got the minimal set. Steps whose expects are only core tools (34, 35) pass trivially.
+- DESIGN §13.3 counts 176 matrix sentences. The probe has 101. Noted for §24b's ceiling.
+- **No bump.** The WORKPLAN row says no, and nothing the model or user sees changed. The code rides the next real bump, the same call as the rules half.
+
+### Open
+
+- NEXT UP 12 (§24b) should build `routeFor` on `scoreTriggers` and point the test's `route()` at it.

@@ -1718,6 +1718,7 @@ function gradeMatrix(rows) {
 const STEPS = [
   {
     title: "create a comp",
+    expects: ["create_comp"],
     say: "Make a new comp called Probe Room, 1920x1080, 6 seconds long " +
          "at 30 fps.",
     check(state) {
@@ -1736,6 +1737,7 @@ const STEPS = [
   },
   {
     title: "grid layout",
+    expects: ["add_solid", "grid_layout"],
     say: "In Probe Room, add nine red 200x200 square solids and arrange " +
          "them in a 3 by 3 grid in the middle of the comp.",
     check(state) {
@@ -1753,6 +1755,7 @@ const STEPS = [
   },
   {
     title: "batch animation with a stagger",
+    expects: ["set_keyframes", "stagger_layers"],
     say: "Fade all nine squares in from 0 to 100 opacity over the first " +
          "second, and stagger them 4 frames apart.",
     check(state) {
@@ -1798,6 +1801,7 @@ const STEPS = [
     // the bottom of the frame scored a pass — wrong-but-present, the
     // failure class the 2026-08-30 audit named in steps 4, 5 and 6.
     title: "text layer",
+    expects: ["add_text_layer"],
     say: "Add a text layer to Probe Room that says HELLO, white, 120 " +
          "pixels, near the top of the frame.",
     check(state, ctx) {
@@ -1843,6 +1847,7 @@ const STEPS = [
   },
   {
     title: "mask",
+    expects: ["add_mask"],
     say: "Put an oval mask on the HELLO layer and feather it 20 pixels.",
     check(state, ctx) {
       const t = textLayer(state);
@@ -1884,6 +1889,7 @@ const STEPS = [
   },
   {
     title: "track matte",
+    expects: ["add_shape_layer", "set_track_matte"],
     say: "Add a white ellipse shape layer above the top square and use it " +
          "as an alpha track matte for that square.",
     check(state, ctx) {
@@ -1936,6 +1942,7 @@ const STEPS = [
   },
   {
     title: "equidistant distribution",
+    expects: ["distribute_property"],
     say: "Spread the nine squares out equally across the width of the " +
          "comp, from x 200 to x 1720.",
     check(state) {
@@ -1963,6 +1970,7 @@ const STEPS = [
   },
   {
     title: "parenting",
+    expects: ["add_null", "set_layer_parent"],
     say: "Add a null called Rig, parent all nine squares to it, and " +
          "rotate the null 15 degrees.",
     check(state) {
@@ -1987,6 +1995,7 @@ const STEPS = [
     // singular), and "instead" only means anything if the model knows
     // they are currently red. Nothing here names a layer.
     title: "a second turn that refers back",
+    expects: ["set_solid_color"],
     // The ONE step that must keep the previous turn's history — the
     // whole point of it is the pronoun. Every other step names what it
     // is talking about, so every other step starts a fresh conversation.
@@ -2035,6 +2044,7 @@ const STEPS = [
     // each round is its own AE script execution — which the user pays for
     // one Ctrl+Z at a time.
     title: "one Ctrl+Z for one chat command",
+    expects: ["add_solid", "set_keyframes"],
     say: "Add a white 120 by 120 solid called Dot in the middle of Probe " +
          "Room, put a drop shadow on it, and fade it in over the first " +
          "half second.",
@@ -2075,6 +2085,7 @@ const STEPS = [
     //     NO Beta at all, and the user is left with nothing when the
     //     achievable half was achievable.
     title: "the model re-plans after a round is rolled back",
+    expects: ["add_solid"],
     say: "Add a 100 by 100 orange solid called Beta to Probe Room, and " +
          "put a drop shadow on the layer called Ghost.",
     check(state, ctx) {
@@ -2108,6 +2119,7 @@ const STEPS = [
     // into the probe until now, so every comfy_* tool would have thrown
     // inside the dispatcher rather than answering.
     title: "the image generator answers when asked",
+    expects: ["comfy_status", "comfy_list_workflows"],
     say: "Is the picture generator ready to go, and what can it make?",
     check(state, ctx) {
       const calls = (ctx.tools || []).filter(t => /^comfy_/.test(t.tool));
@@ -2166,6 +2178,7 @@ const STEPS = [
     // half is reported as a gap rather than failed every night, because
     // it is workplan 5.8 and unbuilt, not broken.
     title: "generate a picture and bring it in",
+    expects: ["comfy_generate"],
     say: "Make me a picture of a single red apple on a white plate and " +
          "put it in Probe Room.",
     check(state, ctx) {
@@ -2260,6 +2273,7 @@ const STEPS = [
     // refuses BEFORE Comfy.ensureRunning is reached. That is why this
     // step needs no backend running, renders nothing, and costs no VRAM.
     title: "a generation that cannot fit is refused, in words",
+    expects: ["comfy_generate"],
     settings: { vramOverrideGB: 8, comfyPauseLlm: "never" },
     say: "Make me a picture of a blue ceramic mug on a wooden table.",
     check(state, ctx) {
@@ -2378,6 +2392,7 @@ const STEPS = [
     // inPoint/outPoint/startTime (seconds).") and no rule at all.
     // 'delay' is deliberately NOT in the rule's phrase list.
     title: "push a layer back on the timeline",
+    expects: ["set_layer_timing"],
     fromRig: true,
     tool: "set_layer_timing",
     say: "Beta shouldn't show up until two seconds in — delay it.",
@@ -2412,6 +2427,7 @@ const STEPS = [
   },
   {
     title: "attach a layer to a null",
+    expects: ["set_layer_parent"],
     fromRig: true,
     tool: "set_layer_parent",
     say: "Make Beta tag along with the Rig null wherever it goes.",
@@ -2442,6 +2458,7 @@ const STEPS = [
   },
   {
     title: "smooth a mechanical fade",
+    expects: ["apply_keyframe_ease"],
     fromRig: true,
     tool: "apply_keyframe_ease",
     say: "The squares fade in too mechanically — make it feel smoother.",
@@ -2490,6 +2507,7 @@ const STEPS = [
     // rendered rect — and the layer NOT jumping, which is what a raw
     // set_transform {anchorPoint} guess does.
     title: "fix a text layer's pivot",
+    expects: ["center_anchor_point"],
     fromRig: true,
     tool: "center_anchor_point",
     say: "HELLO swings around its corner when it rotates — make it turn " +
@@ -2535,6 +2553,7 @@ const STEPS = [
   },
   {
     title: "hide half a layer with a mask",
+    expects: ["add_mask"],
     fromRig: true,
     tool: "add_mask",
     say: "Chop off the lower half of Beta so only the top shows.",
@@ -2589,6 +2608,7 @@ const STEPS = [
   },
   {
     title: "take a mask off again",
+    expects: ["delete_mask"],
     fromRig: true,
     tool: "delete_mask",
     say: "Lose the oval mask on HELLO — it's not needed any more.",
@@ -2618,6 +2638,7 @@ const STEPS = [
   },
   {
     title: "un-animate the squares",
+    expects: ["remove_keyframes"],
     fromRig: true,
     tool: "remove_keyframes",
     say: "The squares shouldn't fade in any more — just have them there " +
@@ -2663,6 +2684,7 @@ const STEPS = [
     // 'preset'. The receipt is what proves the route: an improvised
     // Glow + Drop Shadow also changes the layer.
     title: "give a layer a finished look",
+    expects: ["list_presets", "apply_preset"],
     fromRig: true,
     tool: "apply_preset",
     say: "Dress HELLO up a bit — it looks too plain.",
@@ -2705,6 +2727,7 @@ const STEPS = [
   },
   {
     title: "keep a layer drifting",
+    expects: ["apply_expression_preset"],
     fromRig: true,
     tool: "apply_expression_preset",
     say: "Give Beta a lazy, floaty hover so it never sits completely still.",
@@ -2745,6 +2768,7 @@ const STEPS = [
     // relayed to the user — the branch below that reads the expression
     // runs the day someone drops an audio layer into the rig.
     title: "sync a layer to the music",
+    expects: ["audio_to_keyframes", "link_property"],
     fromRig: true,
     tool: "audio_to_keyframes",
     say: "Make Beta throb in time with the music.",
@@ -2815,6 +2839,7 @@ const STEPS = [
     // somewhere else — and move every other layer with it, which is the
     // half a naive "is Beta under HELLO now?" check never sees.
     title: "tuck one layer under another",
+    expects: ["reorder_layers"],
     fromRig: true,
     tool: "reorder_layers",
     say: "Beta is covering HELLO — tuck it in underneath the text.",
@@ -2868,6 +2893,7 @@ const STEPS = [
     // undone in step 10), so the blur is planted through the bridge
     // before the sentence — see runPrepare.
     title: "take an effect off a layer",
+    expects: ["remove_effect"],
     fromRig: true,
     tool: "remove_effect",
     prepare: "AELL_call(\"apply_effect\", " + JSON.stringify(JSON.stringify(
@@ -2907,6 +2933,7 @@ const STEPS = [
   },
   {
     title: "show one layer through another",
+    expects: ["set_track_matte"],
     fromRig: true,
     tool: "set_track_matte",
     say: "I want Beta to show only through the HELLO letters.",
@@ -2943,6 +2970,7 @@ const STEPS = [
   },
   {
     title: "package layers into a precomp",
+    expects: ["precompose"],
     fromRig: true,
     tool: "precompose",
     say: "Bundle the nine blue squares into a single layer called Squares.",
@@ -2991,6 +3019,8 @@ const STEPS = [
     // non-sequitur). No tool is named here on purpose: the right answer
     // to an unnamed mess is a question.
     title: "clean up means the comp, not the project",
+    expects: [],
+    expectsRules: ["clean-comp-ask"],
     fromRig: true,
     say: "Probe Room is a mess now — clean it up.",
     // The one step with no `tool`: the right answer to an unnamed mess is
@@ -3044,6 +3074,7 @@ const STEPS = [
   // phrasing.
   {
     title: "arrange scattered layers into a grid",
+    expects: ["grid_layout"],
     fromRig: "icons",
     tool: "grid_layout",
     say: "Arrange the icon layers into a grid with a bit of breathing " +
@@ -3093,6 +3124,7 @@ const STEPS = [
   },
   {
     title: "rig one slider to drive many layers",
+    expects: ["add_control", "link_property"],
     fromRig: "icons",
     tool: "link_property",
     say: "Give me one slider that controls the size of all the icon " +
@@ -3147,6 +3179,7 @@ const STEPS = [
   },
   {
     title: "cascade the entrances",
+    expects: ["stagger_layers"],
     fromRig: "icons",
     tool: "stagger_layers",
     say: "Fade the icons in one after another, half a second apart.",
@@ -3194,6 +3227,7 @@ const STEPS = [
   },
   {
     title: "type a title on letter by letter",
+    expects: ["add_text_animator"],
     fromRig: "icons",
     tool: "add_text_animator",
     say: "Type the HEADLINE on letter by letter.",
@@ -3228,6 +3262,7 @@ const STEPS = [
   },
   {
     title: "restyle a headline",
+    expects: ["set_text_style"],
     fromRig: "icons",
     tool: "set_text_style",
     say: "Make the HEADLINE bigger and brand blue (#1B4FFF).",
@@ -3277,6 +3312,7 @@ const STEPS = [
   },
   {
     title: "soften the background",
+    expects: ["apply_effect"],
     fromRig: "icons",
     tool: "apply_effect",
     say: "Soften the background a touch.",
@@ -3320,6 +3356,7 @@ const STEPS = [
   },
   {
     title: "an effect on everything except one layer",
+    expects: ["for_each_layer", "apply_effect"],
     fromRig: "icons",
     tool: "for_each_layer",
     say: "Put a drop shadow on everything except the background.",
