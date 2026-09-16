@@ -28,6 +28,9 @@
  *   node scripts/chat-probe.js --variants       # the paraphrase matrix
  *   node scripts/chat-probe.js --route auto     # routed prompt (§24b)
  *   node scripts/chat-probe.js --store-root D   # memory store folder (§15)
+ *   node scripts/chat-probe.js --reuse-server --label "q8_0 16K"
+ *                                  # name a server this probe did not start
+ *   node scripts/chat-probe.js --temperature 0  # override, in memory only
  *
  * VARIANTS. --variants runs each selected step's canonical sentence AND
  * every paraphrase it declares (casual / vague / typo'd), each as its own
@@ -118,6 +121,12 @@ const OPT = {
   keep: argv.indexOf("--keep") !== -1,
   afterFX: argValue("--afterfx"),
   reuseServer: argv.indexOf("--reuse-server") !== -1,
+  // Free text written into the transcript header. With --reuse-server the
+  // probe did not start the server and cannot see its flags (KV type,
+  // -ctk/-ctv), so the run has to be TOLD what it is measuring: four
+  // unlabelled 11b matrices on 2026-09-16 could not be told apart after.
+  label: argValue("--label"),
+  temperature: argValue("--temperature"),
   bridgeCheck: argv.indexOf("--bridge-check") !== -1,
   rigCheck: argv.indexOf("--rig-check") !== -1,
   isolate: argv.indexOf("--isolate") !== -1,
@@ -441,6 +450,18 @@ if (OPT.ctx) {
     process.exit(2);
   }
   Settings.get().ctxSize = want;
+}
+
+// --temperature: in-memory like --ctx. A/B gates (NEXT UP 11b) run at 0:
+// at the panel's 0.7 two runs of the SAME config differed by 6-9 "new
+// HARM" rows on 2026-09-16, so a one-run comparison there grades sampling.
+if (OPT.temperature !== null) {
+  const t = parseFloat(OPT.temperature);
+  if (!(t >= 0 && t <= 2)) {
+    console.error("--temperature wants a number 0..2, got " + OPT.temperature);
+    process.exit(2);
+  }
+  Settings.get().temperature = t;
 }
 
 // --route auto|all: in-memory like --ctx, so a probe never rewrites the
@@ -3463,7 +3484,13 @@ function startModel(cb) {
   });
   if (OPT.reuseServer) {
     console.log("-- reusing whatever already listens on " + s.port);
-    cb(null);
+    // What the server says it is, for the transcript: its model file and
+    // real window may not be what settings (or --model) claim.
+    fetchServerProps(s.port, function (props) {
+      SERVER_PROPS = props;
+      console.log("-- server:  " + describeServerProps(props));
+      cb(null);
+    });
     return;
   }
   let settled = false;
@@ -3510,19 +3537,61 @@ function startModel(cb) {
   });
 }
 
+// Filled by startModel under --reuse-server: the server's own /props, or
+// null when it did not answer.
+let SERVER_PROPS = null;
+
+function fetchServerProps(port, cb) {
+  const http = require("http");
+  let done = false;
+  function finish(v) { if (!done) { done = true; cb(v); } }
+  const req = http.get({ host: "127.0.0.1", port: port, path: "/props",
+                         timeout: 3000 }, function (res) {
+    let body = "";
+    res.on("data", function (c) { body += c; });
+    res.on("end", function () {
+      try { finish(JSON.parse(body)); } catch (e) { finish(null); }
+    });
+  });
+  req.on("timeout", function () { req.destroy(); finish(null); });
+  req.on("error", function () { finish(null); });
+}
+
+// One line from llama-server's /props: the model file it loaded and the
+// window it really has. The KV type is NOT in /props, hence --label.
+function describeServerProps(props) {
+  if (!props) return "did not answer /props — unidentified";
+  const gen = props.default_generation_settings || {};
+  const nCtx = gen.n_ctx || props.n_ctx;
+  return "`" + (props.model_path || "?") + "`, n_ctx " + (nCtx || "?") +
+    (props.total_slots ? ", slots " + props.total_slots : "") +
+    (props.build_info ? ", build " + props.build_info : "");
+}
+
+// The transcript's header lines. Pure, so the stubbed suite can hold it.
+function transcriptHeader(stamp, s, opt, serverProps) {
+  const out = ["# chat probe " + stamp, "",
+    "- model: `" + (opt.model || s.modelPath) + "`",
+    "- ctx " + s.ctxSize + ", temperature " + s.temperature +
+      ", maxRounds " + s.maxRounds,
+    "- tool docs: " +
+      (Tools.promptModeFor(s.ctxSize).compact ? "COMPACT" : "FULL") +
+      " (Tools.promptModeFor), routing " + (s.promptRouting || "all")];
+  if (opt.label) out.push("- label: " + opt.label);
+  if (opt.reuseServer) {
+    out.push("- server (reused): " + describeServerProps(serverProps));
+  }
+  out.push("");
+  return out;
+}
+
 function writeTranscript(rows) {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const dir = path.join(ROOT, "logs");
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, "chat-probe-" + stamp + ".md");
   const s = Settings.get();
-  const out = ["# chat probe " + stamp, "",
-    "- model: `" + (OPT.model || s.modelPath) + "`",
-    "- ctx " + s.ctxSize + ", temperature " + s.temperature +
-      ", maxRounds " + s.maxRounds,
-    "- tool docs: " +
-      (Tools.promptModeFor(s.ctxSize).compact ? "COMPACT" : "FULL") +
-      " (Tools.promptModeFor), routing " + (s.promptRouting || "all"), ""];
+  const out = transcriptHeader(stamp, s, OPT, SERVER_PROPS);
   if (OPT.variants) {
     // Scenario / phrasing / chosen tool / verdict, the table WORKPLAN
     // section 8 asks for, before the transcripts it summarises.
@@ -3909,7 +3978,7 @@ function main() {
 if (require.main === module) {
   main();
 } else {
-  module.exports = { STEPS, squares, undoProbe, SIG_FN, READ_COMP,
+  module.exports = { STEPS, squares, transcriptHeader, describeServerProps, undoProbe, SIG_FN, READ_COMP,
                      bridgeWrapper, sweepImports, samePath, rememberGenerated,
                      generated, runPrepare, sweepScript, rememberPrecomp,
                      precomps, toolEntry, rigPlan, rigScript, resetHistory,

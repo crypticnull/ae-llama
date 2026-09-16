@@ -27501,3 +27501,36 @@ The card is back to about 2 000 MiB, with nothing listening on :8288 (the probe'
 **Assumed:** Qwen2.5 7B and 32B Q4_K_M are the models that matter (the only two installed; 7B is the small-card model). Measured on a 32 GB card; KV MiB is card-independent, but whether `-fit` changes params on a small card is not measured here.
 
 **No bump:** extension/ untouched. Card back to 1 990 MiB, no llama-server left, AE left running and untouched.
+
+## 2026-09-16 (local session) - KV quant accuracy (11b): pass 24's orphaned runs recovered and graded; the gate cannot certify at T=0.7; a killed pass's runners outlive it (NEXT UP 11b, §13b)
+
+**Item:** NEXT UP 11b. Rows above it are owner-only or blocked (6, 5a-4e, 5a-5b, 5a-5c, 5c, 6b). Pass 25, started 13:02 EDT, daytime; `run-local-agent.ps1` (PID 47376, -UntilHour 17) is running, so the owner-started loop is the permission (17a).
+
+**Harness: 770/770 PASSED** at the start. Nothing under extension/ changed afterwards (scripts, tests, docs only), so it was not re-run and there is **no bump**. The orphan described below was driving AE through `-r` scripts at the same time, and the harness still passed.
+
+**What happened before this pass.** Pass 24 (12:17-13:02) took 11b, ran a bash runner looping over five KV configs, and was killed at the 45-minute bound with no log entry. Its three untracked files (`scripts/variants-compare.js`, `scripts/lib/variants-compare.js`, `tests/test-variants-compare.js`) went to stash `loop-salvage-20260916-130238`. The one-attempt rule says do not re-run 11b, so this pass did not start a new matrix. It recovered what 24 measured instead.
+
+**Found: pass 24's runner was still alive at 13:20**, 18 minutes after its pass died. It was on its fifth config (q4_0, then shipped 32K), building rigs in the owner's AE project and holding llama-server on 8737. The loop's reaper (`run-local-agent.ps1` ~line 910) kills only the CLI processes, and a shell the CLI started is re-parented when the CLI dies. That runner is also why this pass's own one-step checks failed: my `kv-quant-probe --serve` found 8737 already answering, so my probe and the orphan's matrix used the same server. That server has 4 slots on one 16 384-cell unified KV, and with two clients (about 12k + 7k tokens at once) both requests got "Context size has been exceeded", which the client reports as "Stream ended unexpectedly". Killed the whole runner tree (bash 42948/11124/26080/49132, node 47588/32036/38408) and llama-server. **AE (PID 9580) was not touched.** A matrix killed mid-step can leave a "Probe Room" comp behind; the next probe's sweep removes it.
+
+**Attribution recovered** from the runner's task output (`[time] <kv>-<ctx>-r<n> exit=0 transcript: <file>`). The transcripts themselves do not say which KV config they measured.
+
+| run | transcript | pass | miss | HARM | canon not passing |
+|---|---|---|---|---|---|
+| shipped r1 (INFERRED from run order) | 16-25-01 | 56 | 13 | 30 | 13 |
+| shipped r2 | 16-53-16 | 51 | 23 | 25 | 15 |
+| q8_0 r1 | 16-46-33 | 54 | 20 | 25 | 13 |
+| q8_0 r2 | 17-00-03 | 54 | 20 | 25 | 17 |
+
+99 graded runs each (7B Q4_K_M, 16K, T=0.7, the three generation rows only run 1 took are skipped on both sides). q4_0 is void (it shared a server with my checks, and no transcript was written). The 32K runs never happened.
+
+**Reading:** q8_0 sits inside shipped's own spread, so there is no sign it is worse. But **shipped r2 against shipped r1 is RED by the §24d bar**: 12 new HARM, 3 canonical regressions, misses 23 vs a bar of 15. At the panel's temperature a per-row set comparison grades sampling, so 11b as written cannot turn green for any candidate. Written up in `docs/measured/kv-quant-accuracy-2026-09-16.md`.
+
+**Changed:**
+- `scripts/chat-probe.js`: `--label <text>` goes into the transcript header. Under `--reuse-server` the probe asks the server's `/props` and writes `- server (reused): <model_path>, n_ctx, slots, build`. The header check showed why this is needed: `- model:` said the settings' **32B** while the reused server was the **7B**. Also `--temperature <0..2>`, applied in memory like `--ctx`. The header is now the pure `transcriptHeader()`.
+- The salvaged variants-compare (from pass 24's stash, now committed): `readIdentity()` reads the label and server lines, and the CLI warns on any unlabelled transcript and prints the label per run.
+- Tests: `tests/test-chat-probe.js` gets 4 header checks (all pass), and `tests/test-variants-compare.js` goes to 8 checks (pass).
+- WORKPLAN: 11b struck with its result. **11b-2** is filed: one config per pass, T=0 with `--label`, check nothing else is on 8737 first, and a rate bar if T=0 turns out not to be deterministic. **31** is filed: reap a killed pass's whole process tree. 11c now needs 11b-2.
+
+**Not resolved / needs an eye:** one step at `--temperature 0` returned truncated JSON (`{ "reply"`), but on the shared server, so it does not show that temperature 0 is at fault. 11b-2 checks it first. Stash `loop-salvage-20260916-130238` is now fully committed and can be dropped. I left it in place because dropping a stash cannot be undone.
+
+**Assumed:** "one failed attempt per item" covers a pass killed by the timeout, so I did not re-run the matrices. Recovering and grading what already existed is not a second attempt.

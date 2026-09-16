@@ -3617,5 +3617,31 @@ function icons(state) {
   }
 }
 
+// ---- transcript header: a reused server must be identifiable afterwards.
+// 2026-09-16: four --variants matrices for NEXT UP 11b (shipped vs q8_0 KV)
+// ran against servers the probe did not start, and nothing in any
+// transcript said which config each was, so none could be graded.
+{
+  const s = { modelPath: "C:/m/settings.gguf", ctxSize: 16384,
+              temperature: 0.7, maxRounds: 6 };
+  const props = { model_path: "C:/m/Qwen2.5-7B.gguf", total_slots: 4,
+                  build_info: "b10240",
+                  default_generation_settings: { n_ctx: 32768 } };
+  const h = probe.transcriptHeader("STAMP", s,
+    { reuseServer: true, label: "q8_0 32K", model: null }, props).join("\n");
+  assert(/- label: q8_0 32K/.test(h), "the label reaches the header");
+  assert(/server \(reused\): .*Qwen2\.5-7B\.gguf.*n_ctx 32768/.test(h),
+         "the reused server's own model and window reach the header " +
+         "(got: " + h + ")");
+  const dead = probe.transcriptHeader("STAMP", s,
+    { reuseServer: true, label: null }, null).join("\n");
+  assert(/unidentified/.test(dead),
+         "a reused server that did not answer /props is said to be unidentified");
+  const own = probe.transcriptHeader("STAMP", s, { reuseServer: false }, null)
+    .join("\n");
+  assert(!/label|server \(reused\)/.test(own),
+         "a probe that started its own server adds no reuse lines");
+}
+
 console.log(failed ? "\n" + failed + " assertion(s) failed"
                    : "\nall chat-probe verdict tests passed");
