@@ -26412,3 +26412,73 @@ sees them. It is a local false alarm, not a defect; I did not file it.
   its comment.
 - 7c's other half, retaking the non-Wan `constrainedFit.identical` claims
   under the flag, was NOT done. It stays open in the 7c row.
+
+## 2026-09-16 (local session) - the non-Wan constrainedFit claims hold under --use-ck-attention: four identical outputs, krea2 10 -> 14 s
+
+**Item:** NEXT UP 7c, the half the 0.12.35 pass left open (retake the
+non-Wan `constrainedFit.identical` claims on the flagged boot). Items
+above it are owner-only (3, 5a-4e, 5a-5b, 5a-5c, 5c), not needed (6b) or
+done. Not attempted before tonight.
+
+**Assumed:** this pass started at 07:45 EDT from the detached loop
+(PID 50396, `-UntilHour 8`), so the owner's own stop hour covered it and
+I ran the backend. The six renders took ~4 minutes of GPU. Every run's
+backend was killed by the runner; card back to 1 228 MiB (AE only), no
+listener on 8288.
+
+**Harness: 770/770 PASSED** before the change, and again after it (see
+below). AE left running, untouched.
+
+### Measured (managed ComfyUI 0.34.0, shipped args + --use-ck-attention, seed 12345)
+
+Runner: `local/ck-ship-run.sh` (the 7a runner), ballast by
+`scripts/vram-ballast.py`. Every backend log says `Using Comfy Kitchen
+attention`. Whole-card references for krea2 and ltx-small are the flagged
+runs 7/7a already took (`local/attn-sweep.txt`, `local/ck7a-sweep.txt`).
+
+| entry | room MiB | delta MiB | s (executed) | output md5 | vs whole card |
+|---|---|---|---|---|---|
+| sdxl-fp8 | whole | 7 130 | 8 (6.02) | f14360... | - |
+| sdxl-fp8 | 4 936 | 3 898 | 6 (4.95) | f14360... | identical |
+| ltx-small-distilled | whole | 8 666 | 8 (7.01) | 37444a... (decoded) | - |
+| ltx-small-distilled | 841 | 78 | 12 (11.57) | 37444a... | identical |
+| ltx-small | whole (7a sweep) | 10 426 | 12 | 239c31... | - |
+| ltx-small | 841 | 122 | 24 (23.71) | 239c31... | identical |
+| krea2 | whole (7a sweep) | 18 790 | 8 (7.81) | 06b2ee... | - |
+| krea2 | 4 937 | 3 768 | 14 (12.53) | 06b2ee... | identical |
+
+Transcripts `logs/catalog-vram-probe-2026-09-16T11-46-35.md` through
+`T11-49-45.md`. I looked at the constrained sdxl-fp8 png: clean.
+
+**Reading:** determinism under a squeezed card holds on the flagged boot
+for all four, as it did for both Wans in 7a. Seconds match the pre-ck
+constrainedFit except krea2, 10 -> 14 s at the same room, one run each.
+That is 1.75x its measuredSeconds 8, inside the 2x bar, and I published
+it as read. Not investigated; if a later pass wants to know whether the
+int8 kernel costs krea2 under streaming, one unflagged run at 4 937 is
+the A/B.
+
+### What changed (0.12.36)
+
+`extension/js/version.js`: sdxl-fp8, krea2, ltx-small and
+ltx-small-distilled each get a RETAKEN comment table with the new flagged
+references, `constrainedFit.on` now names `--use-ck-attention (0.12.34)`,
+and krea2 `constrainedFit.seconds 10 -> 14`. No gate, recommendFromGB or
+measured block moved. Their `measuredVramMB/measuredSeconds` stay the
+pre-ck whole-card readings, which the flagged whole-card runs match or
+beat on seconds. sdxl-fp8 is the exception on VRAM, see Open.
+
+### Tests
+
+model-catalog, tiers, workflow-bundle, comfy-backend, es3-ternary,
+bump-version, capability-doc, self-update: all pass. Full suite not run
+(07:5x, the owner's day is starting).
+
+### Open
+
+- sdxl-fp8's whole-card flagged delta read 7 130 MiB against the
+  published 5 050. Idle floor was 1 658; the pre-ck 5 050 was taken on a
+  different boot. I did not explain it: unflagged sdxl fp16 read 7 194 on the same night,
+  so it is probably DynamicVRAM keeping more resident when the card has
+  room rather than an attention cost, but that is a guess. The gate (8)
+  rests on the 4 936 room run and does not move. Filed as NEXT UP 7d.

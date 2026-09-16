@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.12.35",
+    VERSION: "0.12.36",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -201,10 +201,21 @@
         // card-minus-AE, as every constrainedFit does, so it is written down
         // rather than treated as disqualifying. recommendFromGB 12 keeps
         // every tier default where the owner left it (16f, 5a-4e).
+        //
+        // RETAKEN 2026-09-16 (NEXT UP 7c) on the boot that now ships, which
+        // adds --use-ck-attention wherever the kernel exists. Seed 12345:
+        //
+        //   room left for the backend   delta MiB   s    output
+        //     whole card                    7 130    8   f14360...
+        //     4 936                         3 898    6   identical
+        //
+        // A different png from 091c71... (int8 attention moves the sample);
+        // looked at, clean. The references above are the pre-ck boot's.
         kind: "image", sizeMB: 6617, minVramGB: 8, recommendFromGB: 12,
         constrainedFit: { roomMB: 4936, seconds: 6, identical: true,
                           on: "RTX 5090 ballasted to the room by scripts/vram-ballast.py, " +
-                    "managed backend --disable-pinned-memory (0.12.26), 2026-09-16" },
+                    "managed backend --disable-pinned-memory --use-ck-attention " +
+                    "(0.12.34), 2026-09-16" },
         measured: true,
         measuredVramMB: 5050, measuredSeconds: 6,
         measuredAt: "1024x1024 (the template's authored latent), seed 12345",
@@ -254,10 +265,21 @@
         // against 8 s on a whole card. recommendFromGB keeps it OUT of
         // the defaults below 24 until the owner moves the tier picks
         // (tiers.js recommendFloor); a buyer who chooses it can run it.
+        //
+        // RETAKEN 2026-09-16 (NEXT UP 7c) on the boot that now ships, which
+        // adds --use-ck-attention wherever the kernel exists. Seed 12345:
+        //
+        //   room left for the backend   delta MiB   s    output
+        //     whole card                   18 790    8   06b2ee...
+        //     4 937                         3 768   14   identical
+        //
+        // 14 s against the pre-ck 10 at the same room, one run each; inside
+        // the 2x bar and published as read, not averaged away.
         kind: "image", sizeMB: null, minVramGB: 12, recommendFromGB: 24,
-        constrainedFit: { roomMB: 4937, seconds: 10, identical: true,
+        constrainedFit: { roomMB: 4937, seconds: 14, identical: true,
                           on: "RTX 5090 ballasted to the room by scripts/vram-ballast.py, " +
-                    "managed backend --disable-pinned-memory (0.12.26), 2026-09-16" },
+                    "managed backend --disable-pinned-memory --use-ck-attention " +
+                    "(0.12.34), 2026-09-16" },
         measured: true,
         measuredVramMB: 18848, measuredSeconds: 8,
         measuredAt: "1920x1080 (the template's authored latent), seed 12345",
@@ -366,10 +388,20 @@
         // this would otherwise be the first video default (the owner's
         // 5a-4e/5c question), and at 12 and up it still beats
         // ltx-small-distilled on download size, as before.
+        //
+        // RETAKEN 2026-09-16 (NEXT UP 7c) on the boot that now ships, which
+        // adds --use-ck-attention wherever the kernel exists. Seed 12345:
+        //
+        //   room left for the backend   delta MiB   s    clip
+        //     whole card                   10 426   12   239c31...
+        //     841                             122   24   identical
+        //
+        // A different clip from 45630f... (int8 attention); same seconds.
         kind: "video", sizeMB: 10965, minVramGB: 8, recommendFromGB: 12,
         constrainedFit: { roomMB: 841, seconds: 24, identical: true,
                           on: "RTX 5090 ballasted to the room by scripts/vram-ballast.py, " +
-                    "managed backend --disable-pinned-memory (0.12.26), 2026-09-16" },
+                    "managed backend --disable-pinned-memory --use-ck-attention " +
+                    "(0.12.34), 2026-09-16" },
         measured: true,
         measuredVramMB: 10394, measuredSeconds: 14,
         measuredAt: "768x512 x 97 frames = 4.04 s at the template's 24 fps " +
@@ -425,10 +457,20 @@
         // holds every tier default where the owner left it: without it 8
         // and 10 GB cards get this as their first video default (12 GB and
         // up keep ltx-small either way). That is 5a-4e/5c's owner question.
+        //
+        // RETAKEN 2026-09-16 (NEXT UP 7c) on the boot that now ships, which
+        // adds --use-ck-attention wherever the kernel exists. Seed 12345:
+        //
+        //   room left for the backend   delta MiB   s    clip
+        //     whole card                    8 666    8   37444a...
+        //     841                              78   12   identical
+        //
+        // A different clip from b2cc0a... (int8 attention); same seconds.
         kind: "video", sizeMB: 9173, minVramGB: 8, recommendFromGB: 12,
         constrainedFit: { roomMB: 841, seconds: 12, identical: true,
                           on: "RTX 5090 ballasted to the room by scripts/vram-ballast.py, " +
-                    "managed backend --disable-pinned-memory (0.12.26), 2026-09-16" },
+                    "managed backend --disable-pinned-memory --use-ck-attention " +
+                    "(0.12.34), 2026-09-16" },
         measured: true,
         measuredVramMB: 8637, measuredSeconds: 8,
         measuredAt: "768x512 x 97 frames = 4.04 s at the template's 24 fps " +
