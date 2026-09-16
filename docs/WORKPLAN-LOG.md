@@ -27291,3 +27291,19 @@ No `extension/` change, so **no version bump**.
 **Bump: none.** extension/ changed but was not verified in real AE (daytime). It rides with NEXT UP 12a, whose row now spells out the panel check (click Scan, type a bad path).
 
 **Decisions made unattended** are written into WORKPLAN §19b: check on blur, not per keystroke, because it walks the disk; uncovered candidates start ticked; a per-kind yaml root is added as `kind=path`; an empty scan names the places it looked. **Hit:** a Node heredoc through the Bash tool turned `\r` inside a template literal into a real CR, so regex-heavy edits went through the Edit tool instead. Next daytime pass: 19c is owner-gated, so take the next row of the always-takeable list (§15 prompt deletions need chat-probe, which is night work; `test-context-budget.js` starve row is repo-only).
+
+## 2026-09-16 (local session) - test-context-budget.js starve row: a typical project at 16K must not starve (§15 item 2)
+
+**Item:** `test-context-budget.js` starve row, next repo-only row of the "always takeable" list, as the 11:08 pass directed. DAYTIME pass, started 11:12 EDT inside the `-UntilHour 17` loop.
+
+**Harness: NOT RUN, on purpose.** Same reading as today's earlier daytime passes (17a is unanswered and CLAUDE.md's daytime rule is the written one). AE not touched. No backend, no GPU, no network, no full suite.
+
+**Changed:** `tests/test-context-budget.js` only. It adds one row: build the system prompt with `Tools.promptOptsFor({ctxSize: 16384}, ...)` (shipped settings, so compact and unrouted today, and it follows the default if it flips) plus a state fixture of exactly 2,682 chars, then assert `!historyBudget(16384, len).starved`.
+
+**Measured (Node, current tools.js):** compact prompt with no state is 39,803 chars (ceiling 40,000) and leaves 4,704 chars of history. A 2,682-char state leaves **2,728** (floor 2,000). The 6,000-char state cap leaves 303, which is starved, as REFINED said. So the prompt has **~990 chars** of growth left before this row goes red. The memory block (~700 rules + ~539 tool docs) does not fit that and must be paid for first, which is what the row is for. Checked that it can fail: a 3,800-char fixture gives 1,912 and FAILS.
+
+**Verified:** test-context-budget ALL TESTS PASSED; test-es3-ternary passes. Nothing else touched.
+
+**Bump: none.** extension/ unchanged.
+
+**Decision made unattended:** REFINED uses "2,682" for two different things: history left over (its correction table) and state size (its acceptance formula). They are close by coincidence (a ~2.7K state costs ~2.0K history chars). The row follows the formula and treats it as state size. Written into WORKPLAN §15. Next daytime pass: `--store-root` on `chat-probe.js` (§15 item 3) is repo-only; the §25 `outputPath` row needs chat-probe, which is night work.

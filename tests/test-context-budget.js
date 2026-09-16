@@ -417,6 +417,34 @@ Tools.fetchProjectState(function (json) {
   assert(hb16c.chars > hb16.chars,
          "and the compact prompt leaves more room (" + hb16c.chars + " vs " +
          hb16.chars + ")");
+  // The starve row (WORKPLAN §15 item 2, REFINED "The acceptance
+  // criterion"). A default user (16K, settings as shipped) with a TYPICAL
+  // project must not get main.js's starve notice, whose advice — raise
+  // Context size, it costs VRAM — is the one thing an 8-12 GB buyer
+  // cannot do. The state is the size context-budget-probe measured on a
+  // real project (~2.7K chars; the 6,000 cap itself starves, 303 chars,
+  // and that is a known separate fact). Measured 2026-09-16: 2,725 chars
+  // of history against the 2,000 floor, so the prompt has ~990 chars of
+  // growth left before this goes red. The memory block (~700 rules +
+  // ~539 tool docs) does NOT fit that; it has to be paid for first.
+  const TYPICAL_STATE_CHARS = 2682;
+  const typicalState = JSON.stringify({
+    activeComp: { name: "SHOT 010 main comp", numLayers: 12, layers: [],
+                  pad: "" }
+  });
+  const stateFixture = typicalState.replace('"pad":""',
+    '"pad":"' + "x".repeat(TYPICAL_STATE_CHARS - typicalState.length) + '"');
+  assert(stateFixture.length === TYPICAL_STATE_CHARS,
+         "the typical-state fixture is " + TYPICAL_STATE_CHARS + " chars");
+  const defaults = { ctxSize: 16384 };
+  const dOpts = Tools.promptOptsFor(defaults, "make it red", []).opts;
+  const hbTypical = Tools.historyBudget(16384,
+    Tools.buildSystemPrompt(stateFixture, dOpts).length);
+  assert(!hbTypical.starved,
+         "at the default 16K with a typical project the prompt does NOT " +
+         "starve (" + hbTypical.chars + " chars of history, floor 2000) — " +
+         "growth past this needs a matching cut");
+
   const hb32 = Tools.historyBudget(32768, full.length);
   assert(!hb32.starved && hb32.chars > 20000,
          "at 32K the full prompt leaves a real conversation (" +
