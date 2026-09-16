@@ -27049,3 +27049,29 @@ Rows above 18 were skipped. Owner: 5, 5a-4e, 5a-5b, 5a-5c, 5c, 6b, 17a. Backend,
 
 - This has not yet been seen in a real loop night. The first night pass that runs the harness should leave `[harness] Crash flag:`, `[harness] Running self-test via` and `[harness] SELF-TEST PASSED n/t` lines in `logs/local-agent-*.log`. If they are absent, the variable did not survive the WMI detach plus the CLI's own tool shells.
 - NEXT UP 17a is still open.
+
+## 2026-09-16 (local session) - a guard test for the pass invocation: the bypass must parse as a real flag (NEXT UP 20, §20d)
+
+**Item:** NEXT UP 20. DAYTIME pass, started 10:38 EDT, same `-UntilHour 17` loop as the two entries above.
+
+**Harness: NOT RUN, on purpose**, for the same reason as the previous pass: NEXT UP 17a is unanswered and CLAUDE.md's daytime rule is the written one. AfterFX.exe (pid 9580) was running and was not touched. Nothing in extension/ changed. Items 1-19 were skipped: each is done, needs the owner, or needs AE, the backend, the GPU or a chat model.
+
+### Changed
+
+- `tests/test-pass-invocation.js` (new, 17 checks). It never copies the brief. It slices `run-local-agent.ps1` from `$prompt = @'` to `$claudeArgs = $claudeFlags + @('-p')` and runs that block in real PowerShell. Then it runs the loop's own pass pipeline line (`Get-Content -Raw $promptFile | & $ClaudePath @claudeArgs`), with the CLI swapped for `node fake-cli.js`, which records argv and stdin. Node parses its command line with the same MSVCRT rules as the CLI binary.
+  - The argv is read by a small parser with the CLI's rules: a bare `--` ends options, and a valued flag eats the next token. The valued flags are read from the block's `@('--x', $X)` pairs, so a new pair needs no test edit.
+  - Asserts: the bypass is an OPTION, not merely present; `-p` is last; no bare `--` and no positional text; the stdin equals the whole brief (4849 of 4849 chars).
+  - Wiring: `-SkipPermissions` defaults on; every `& $ClaudePath` call passes only the flag array and `-p`; the pass AND the preflight both pipe their prompt on stdin; the real brief still contains both hazards (` -- ` and double quotes), so the run is the hard case.
+- **Mutation checks, both went red as they should:**
+  - In-test, on PS 5.1: the pre-09-08 shape `& $ClaudePath -p $prompt @claudeFlags` reproduced the four-night bug exactly. The bypass was still in argv and parsed as prompt text. On pwsh 7 this check is only a note, because pwsh passes native arguments correctly.
+  - On the real script: injecting `$claudeFlags = @('--') + $claudeFlags` into `run-local-agent.ps1` failed 3 checks. I reverted it with `git checkout`.
+- Also green: `test-powershell-syntax`, `test-source-control-chars`. CI picks the file up by its `test-*.js` glob.
+
+### Decisions I made unattended
+
+- **Execute the real block instead of parsing strings.** The bug lived in how PS 5.1 builds a command line, and only running PS 5.1 shows that. Without PowerShell the test SKIPs the behaviour half and still checks the wiring, as `test-harness-loop-tee.js` does.
+- **No bump.** Nothing in extension/ changed.
+
+### Needs a human eye
+
+- NEXT UP 17a is still open.
