@@ -549,7 +549,7 @@ Queued (see WORKPLAN for owners/order):
   at 8 GB**: the same checkpoint, its UNet cast to fp8 by core
   `UNETLoader` straight out of the file (the panel's yaml maps every
   checkpoints folder as a diffusion_models folder too), so it adds zero
-  bytes. 5 050 MiB in 6 s on the whole card; at an 8 GB card's room
+  bytes. 7 130 MiB peak (the VAE decode spike) in 6 s on the whole card; at an 8 GB card's room
   beside After Effects, 6 s and a byte-identical png. A different sample
   from fp16 sdxl at the same seed, not a worse one. Its default is held
   at 12 like the others, so an 8 GB buyer still defaults to SD 1.5 and

@@ -27404,3 +27404,30 @@ I looked at frame 60 of the Sage clip: a correct picture, not the old black or n
 **Assumed / skipped:** the 841 MiB-room run the row asked for was NOT taken. The owner is at the machine in the daytime, and a ballast leaving under 1 GB free is exactly the display risk 5a-5c has not answered yet. With no whole-card win, that run could not change the verdict. The copy `python_sage7b` was deleted afterwards. The card is back to 2 005 MiB, with nothing listening on :8288. `local/headroom-run.sh` (gitignored) now takes `PYDIR`.
 
 **Changed:** docs only (WORKPLAN rows 7b/7b-2 and §13a, the measured doc, this entry). Nothing in extension/, so no bump.
+
+## 2026-09-16 (local session) - sdxl-fp8's 5 050 MiB was a missed decode spike, not a flag cost; republished 7 130 (NEXT UP 7d, §13a)
+
+SUPERSEDES: 25680,25700 -- that entry's whole-card "cold 5 050 / warm 4 672" read as sdxl-fp8's VRAM cost; both were 250 ms samples that missed all or part of a VAE decode spike, and the real whole-card peak is ~6 900-7 130
+
+**Item:** NEXT UP 7d, the first row with its needs met. Rows above it are owner-only (6, 5a-4e, 5a-5b, 5a-5c, 5c, 6b) or done. Started 11:36 EDT, which is daytime. `run-local-agent.ps1` (PID 47376) is running, and a loop the owner started is the permission (17a), so I used AE, the backend and the GPU. About 2 minutes of GPU in total.
+
+**Harness: 770/770 PASSED** before the change and again after it.
+
+**Measured** (managed ComfyUI 0.34.0, shipped args, whole card, seed 12345). Runner: `local/d7-run.sh` over `local/headroom-run.sh`. Transcripts: `logs/catalog-vram-probe-2026-09-16T15-38-35.md` through `T15-39-52.md`.
+
+| run | flag | delta MiB | peak | executed s | png |
+|---|---|---|---|---|---|
+| ck1 | --use-ck-attention | 4 730 | 7 164 | 5.67 | f14360... |
+| base1 | none | 6 906 | 9 340 | 4.50 | 091c71... |
+| ck2 | --use-ck-attention | 6 906 | 9 340 | 4.48 | f14360... |
+| base2 | none | 4 826 | 7 260 | 4.43 | 091c71... |
+
+**Reading:** the flag does not change the VRAM. Every curve climbs to a ~7 200 MiB absolute plateau while sampling (about 4 800 MiB delta), and the high runs show one extra sample at 9 340 around 4.4 s. That sample is the VAE decode at 1024x1024, and it lasts less than one 250 ms sample, so the probe catches it or not by phase. The pre-ck 5 050 cold run (`T09-23-09`) also peaks at 4.4 s, so it caught only part of the spike. 7c's 7 130 caught it. Both pngs match their references, so determinism held.
+
+**Changed:** `extension/js/version.js` sdxl-fp8 `measuredVramMB 5050 -> 7130` (the highest reading on the shipped boot), with a REPUBLISHED comment. `docs/CAPABILITIES.md` sentence updated. Gate 8 (8 192 >= 7 130) and recommendFromGB 12 do not move. Stubs pass: model-catalog, tiers, capability-doc, workflow-bundle, comfy-backend, es3-ternary.
+
+**No bump, on purpose:** extension/ changed, but every commit since 0.12.36 says "rides with 12a". A bump now would publish main.js changes (12, 13, 13a) that have never loaded in a real panel. This data change is added to 12a's carry list instead.
+
+**Filed:** NEXT UP 7e. `catalog-vram-probe.js` samples every 250 ms and misses short peaks, so any entry that ends in a decode may be published LOW. The fix belongs in the probe (the backend's own peak, or a faster sampler, plus a max over repeated runs), followed by re-reading the other image and LTX entries.
+
+Card back to 2 003 MiB, nothing listening on :8288, AE left running and untouched.

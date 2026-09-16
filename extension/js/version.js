@@ -222,13 +222,24 @@
         //
         // A different png from 091c71... (int8 attention moves the sample);
         // looked at, clean. The references above are the pre-ck boot's.
+        //
+        // REPUBLISHED 2026-09-16 (NEXT UP 7d): 5 050 was a missed SPIKE, not
+        // a flag cost. Four whole-card runs, two with the flag and two
+        // without, all sample at a ~4 800 MiB delta plateau. Then the
+        // 1024x1024 VAE decode spikes ~2 100 MiB higher for less than one
+        // 250 ms sample. The probe caught the top of the spike in 2 of 4
+        // (6 906 each, one flagged and one not) and read 4 730 / 4 826
+        // when it missed. The 09-16 cold 5 050 caught only part of it.
+        // Published: the highest reading on the shipped boot (7c's 7 130),
+        // still inside minVramGB 8. The gate does not move (it rests on the
+        // 4 936 room run).
         kind: "image", sizeMB: 6617, minVramGB: 8, recommendFromGB: 12,
         constrainedFit: { roomMB: 4936, seconds: 6, identical: true,
                           on: "RTX 5090 ballasted to the room by scripts/vram-ballast.py, " +
                     "managed backend --disable-pinned-memory --use-ck-attention " +
                     "(0.12.34), 2026-09-16" },
         measured: true,
-        measuredVramMB: 5050, measuredSeconds: 6,
+        measuredVramMB: 7130, measuredSeconds: 6,
         measuredAt: "1024x1024 (the template's authored latent), seed 12345",
         measuredOn: "NVIDIA GeForce RTX 5090, managed ComfyUI backend " +
                     "(ComfyUI 0.34.0, torch 2.13.0+cu130), 2026-09-16",
