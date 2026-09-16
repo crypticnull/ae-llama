@@ -181,10 +181,20 @@ if (!shell) {
       "-p is the last argument and takes no value");
     assert(!p.ended && p.positional.length === 0,
       "no bare -- and no positional prompt text reached the command line");
-    const got = pass.rec.stdin.replace(/\r\n/g, "\n").replace(/\n+$/, "");
-    assert(briefBody && got === briefBody[1],
+    // Normalise BOTH sides. The stdin side was normalised and the source
+    // side was not, so this comparison depended on how the checkout wrote
+    // its line endings: green on a CRLF working copy, one character out on
+    // an LF one (CI, 2026-09-16: "4850 chars of 4849"). The bug was in the
+    // assertion, not the invocation -- every other check here passed,
+    // including that the bypass parses as a real OPTION.
+    const eol = function (t) {
+      return String(t).replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+                      .replace(/\n+$/, "");
+    };
+    const got = eol(pass.rec.stdin);
+    assert(briefBody && got === eol(briefBody[1]),
       "the CLI received the WHOLE brief on stdin (" + got.length + " chars" +
-      (briefBody ? " of " + briefBody[1].length : "") + ")");
+      (briefBody ? " of " + eol(briefBody[1]).length : "") + ")");
   }
 
   // Mutation: the pre-2026-09-08 shape, prompt on the command line ahead
