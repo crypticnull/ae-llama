@@ -2964,6 +2964,22 @@
       });
   }
 
+  /**
+   * The managed backend's command line. `--disable-pinned-memory` is
+   * there because pinned staging is not safe under host-RAM pressure:
+   * measured 2026-09-16 (WORKPLAN 18 P7c step 2g, 5a-4d), Wan 2.2 5B on
+   * a box with 16 GB of RAM rendered a DIFFERENT clip on each of two
+   * runs, one visibly degraded, with no error anywhere. The same box with
+   * the flag was frame-identical, and the flag cost no measurable speed.
+   * A wrong picture with no error is worse than a slow one, so it is
+   * unconditional. Only OUR backend gets it; a user's own ComfyUI is left alone.
+   */
+  function managedBootArgs(install, base) {
+    return ["-s", install.mainPy, "--windows-standalone-build",
+            "--port", String(base.port), "--listen", "127.0.0.1",
+            "--disable-auto-launch", "--disable-pinned-memory"];
+  }
+
   /** Spawn the vendor install on `base`'s port and health-poll it up. */
   function bootManaged(base, say, cb) {
     ensureNode();
@@ -2989,10 +3005,7 @@
     }
     var proc;
     try {
-      proc = child_process.spawn(install.python,
-        ["-s", install.mainPy, "--windows-standalone-build",
-         "--port", String(base.port), "--listen", "127.0.0.1",
-         "--disable-auto-launch"],
+      proc = child_process.spawn(install.python, managedBootArgs(install, base),
         { cwd: install.root, windowsHide: true,
           detached: managedDetached,
           stdio: logFd === null

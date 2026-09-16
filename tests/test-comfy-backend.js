@@ -555,6 +555,34 @@ step(function (next) {
   });
 });
 
+// 4b-2. The managed backend boots with pinned memory OFF.
+//
+// Measured 2026-09-16 (WORKPLAN 18 P7c step 2g, 5a-4d): under host-RAM
+// pressure (a 16 GB box) pinned staging made Wan render a different clip
+// on every run, one visibly degraded, and nothing reported an error. The
+// flag made it frame-identical again at no measured speed cost. Pinned on
+// what reaches spawn, so a tidy-up of the arg list cannot drop it quietly.
+step(function (next) {
+  const seen = [];
+  const rec = spawnRecorder([]);
+  const realSpawn = rec.spawn;
+  rec.spawn = function (cmd, args, opts) {
+    seen.push(args || []);
+    return realSpawn(cmd, args, opts);
+  };
+  const C = comfyWith([], null, true, MANAGED, null, rec);
+  C.ensureRunning("http://127.0.0.1:8288", null, function () {
+    assert(seen.length === 1, "the managed boot spawns once");
+    const a = seen[0] || [];
+    assert(a.indexOf("--disable-pinned-memory") !== -1,
+           "the managed backend boots with --disable-pinned-memory: " +
+           a.join(" "));
+    assert(a.indexOf("--port") !== -1 && a[a.indexOf("--port") + 1] === "8288",
+           "and still on the configured port");
+    next();
+  });
+});
+
 // 4c. The script path actually ASKS for that, and only through the lib.
 //
 // scripts/lib/comfy-managed.js exists so three scripts share one boot.

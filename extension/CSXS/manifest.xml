@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <ExtensionManifest ExtensionBundleId="com.cptk.aellama"
                    ExtensionBundleName="AE Llama"
-                   ExtensionBundleVersion="0.12.25"
+                   ExtensionBundleVersion="0.12.26"
                    Version="7.0"
                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <ExtensionList>
-    <Extension Id="com.cptk.aellama.panel" Version="0.12.25"/>
+    <Extension Id="com.cptk.aellama.panel" Version="0.12.26"/>
   </ExtensionList>
   <ExecutionEnvironment>
     <HostList>

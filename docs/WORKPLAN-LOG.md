@@ -25390,3 +25390,65 @@ The backend log carried no warning in the bad runs.
 - **5a-5** - lead added: the vendor has `--vram-headroom GB`, described
   as DynamicVRAM headroom counting other apps' VRAM. Unmeasured.
 - §18 P7c step 2g carries the table.
+
+## 2026-09-16 (local session) - the managed backend boots unpinned now: twenty runs, every clip identical, and pinning bought no speed
+
+**Item:** NEXT UP 5a-4d / WORKPLAN 18 P7c step 2g - pinned staging under
+RAM pressure silently changes the output; fix it before any gate moves.
+
+**Harness: 770/770 PASSED** before the work and again after the change
+(the second run overlapped the pressured sweep and still passed).
+**Bumped 0.12.25 -> 0.12.26**: `extension/js/comfy.js` changed. Items
+above it: 3 blocked on the owner, 5a-4c needs this one.
+
+### Changed
+
+- `extension/js/comfy.js`: `bootManaged` spawns through a new
+  `managedBootArgs()`, which adds `--disable-pinned-memory` to the
+  managed backend's command line, unconditionally. The launcher for a
+  user's OWN portable ComfyUI (the other `--windows-standalone-build`
+  spawn) is deliberately untouched.
+- `tests/test-comfy-backend.js` 4b-2: records the args that reach spawn
+  and requires the flag (and the port). Red against the old comfy.js,
+  green now.
+
+### Measured (RTX 5090, managed backend via the 5a-4b shim, seed 12345, shipped graphs)
+
+Driver `local/pin-sweep.sh` over `local/ramhost-run.sh` (git-ignored).
+Seconds are the backend's own `Prompt executed in`; identity is png md5
+or `ffmpeg -f md5` over decoded frames. Room 9 033 MiB = 12 GB card
+minus AE. 16 GB box = `scripts/ram-ballast.py` locking 46 468 MiB, 4.2-8.4
+GB physical left, psutil total capped at 16 384.
+
+| entry | whole card pin / nopin | 12 GB room pin / nopin | 16 GB box nopin, twice | outputs |
+|---|---|---|---|---|
+| sdxl | 5.59 / 4.12 | 5.38 / 5.08 | 6.10 / 5.88 | all 6 identical (72bfc2...) |
+| krea2 | 8.29 / 7.03 | 12.22 / 10.83 | 14.08 / 13.35 | all 6 identical (18f456..., same as 5a-4b) |
+| ltx-small | 12.80 / 11.93 | 13.29 / 13.33 | 14.24 / 14.12 | all 6 identical (45630f...) |
+| wan22-5b fp16 | not rerun | 130.03 / 132.72 | 139.58 / 139.77 | all 4 identical (60f984...) |
+
+Transcripts `logs/catalog-vram-probe-2026-09-16T08-24-30.md` onward,
+backend logs `local/backend-pin-*.log`, summary `local/pin-sweep.txt`.
+Backend stopped by port after every run; card back at 1 815 MiB after.
+
+### Reading, and what I assumed
+
+- Unpinned was never slower beyond noise (Wan +2 percent at 12 GB room,
+  everything else equal or faster). Pinning buys nothing measurable on
+  this machine, and under pressure it was the thing that rendered wrong.
+- I chose **always** over a host-RAM threshold: a threshold is a second
+  code path whose wrong side fails silently, and there is no speed to
+  protect. If a slower PCIe link or a real 16 GB machine ever shows
+  pinning mattering, revisit it there.
+- I did NOT rerun the pinned pressured case for sdxl/ltx-small/fp16 Wan
+  to reproduce the corruption on them; 5a-4b already showed it on fp8
+  Wan, and the fix does not depend on which entries are affected.
+- The Wan fp16 whole-card pair was skipped to keep the pass inside its
+  timeout; 5a-4b has the fp8 whole-card pair (126-130 pinned, 129 not).
+- Not measured: a physically 16 GB machine (ballast + shim only),
+  boxes under 16 GB, slower PCIe.
+
+### Filed (WORKPLAN)
+
+- 5a-4d struck with the table in §18 P7c step 2g; 5a-4c marked
+  takeable. No new work found.
