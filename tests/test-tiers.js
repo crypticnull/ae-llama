@@ -240,16 +240,17 @@ const T = window.Tiers;
   // wan22-5b-fp8 went further, 12 -> 8 (NEXT UP 6a): identical clip twice
   // at 841 MiB of room in 135 / 131 s. An 8 GB card can RUN Wan now, and
   // recommendFromGB 32 is the only thing keeping it off 8 GB's default.
-  {
-    const w = byName("wan22-5b-fp8");
+  // The fp16 wan22-5b followed (NEXT UP 6c), 130 / 131 s, identical.
+  ["wan22-5b", "wan22-5b-fp8"].forEach((n) => {
+    const w = byName(n);
     const c8 = { vramGB: 8, arch: "ada" };
     assert(w && w.minVramGB === 8 && T.entryFits(w, c8),
-           "wan22-5b-fp8: an 8 GB card CAN run it (gate " +
+           n + ": an 8 GB card CAN run it (gate " +
            (w && w.minVramGB) + ")");
     assert(w && !T.entryRecommendable(w, c8) && w.recommendFromGB === 32,
-           "wan22-5b-fp8: but 8 GB is not DEFAULTED to it (recommendFromGB " +
+           n + ": but 8 GB is not DEFAULTED to it (recommendFromGB " +
            (w && w.recommendFromGB) + ")");
-  }
+  });
   // And the field is the whole lever: strip it and the 12 GB video default
   // becomes Wan -- the change the owner is being asked about.
   const stripped = cat.map((e) => {

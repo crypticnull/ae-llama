@@ -530,8 +530,13 @@ if (krea2) {
 // and DynamicVRAM streams it -- and the "it GRINDS" premise above did not
 // hold: at 841 MiB of room the shipped graph rendered the identical clip
 // twice in 135 / 131 s against 129 unconstrained (constrainedFit carries
-// it). The fp16 sibling was NOT run there and is not seated.
-const GATE_UNDER_ITS_BIGGEST_FILE = ["wan22-5b-fp8"];
+// it).
+//
+// wan22-5b (fp16) took the second seat the same day (NEXT UP 6c), by the
+// same run: gate 8 against the same 9536 MiB file, loaded WITHOUT a cast,
+// identical clip twice at 841 MiB of room in 130 / 131 s against 127.
+// A file bigger than the card is not a grind on this backend; it streams.
+const GATE_UNDER_ITS_BIGGEST_FILE = ["wan22-5b", "wan22-5b-fp8"];
 
 /* The entries the rule below cannot ask the question OF, named rather than
  * silently skipped (WORKPLAN 18 P8a). krea2 carries `urls: []`, so there are
@@ -723,11 +728,20 @@ const ALLOW_UNMEASURED = [];
     // It moved, 2026-09-16 (NEXT UP 6a), and not via a 24 GB card: both
     // gates went 32 -> 12 on constrained runs (5a-4c), then the fp8 cast
     // alone ran at an 8 GB card's room (841 MiB), identical clip twice,
-    // 135 / 131 s. The fp16 was not run there, so the pair now DIFFERS,
-    // and the fp8 must stay the lower of the two or it is dead weight.
-    assert(fp8.minVramGB === 8 && fp16.minVramGB === 12,
-           "the cast moved the gate: fp8 Wan runs at 8 GB, the fp16 is " +
-           "gated at 12 (got " + fp8.minVramGB + " / " + fp16.minVramGB + ")");
+    // 135 / 131 s.
+    //
+    // And then the fp16 ran there too (NEXT UP 6c): identical clip twice in
+    // 130 / 131 s. So the CAST did not move the gate, DynamicVRAM did, and
+    // the pair is equal again. The fp8 stays worth shipping for the reading
+    // above (1.9 GB cheaper where the card has room), not for reach. Both
+    // are pinned so neither can drift back up unnoticed.
+    assert(fp8.minVramGB === 8 && fp16.minVramGB === 8,
+           "both Wan 5B entries run at 8 GB, measured at 841 MiB of room " +
+           "(got " + fp8.minVramGB + " / " + fp16.minVramGB + ")");
+    assert(fp8.constrainedFit && fp16.constrainedFit &&
+           fp8.constrainedFit.roomMB === 841 &&
+           fp16.constrainedFit.roomMB === 841,
+           "and each gate carries its own 841 MiB constrainedFit reading");
   }
 }
 

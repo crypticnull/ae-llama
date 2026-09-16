@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.12.32",
+    VERSION: "0.12.33",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -488,8 +488,22 @@
         // recommendFromGB holds the DEFAULT at 32 until the owner moves
         // the tier picks: on 12-24 GB it would displace ltx-small's 12 s
         // clip with this 130 s one, and that is his call (16f).
-        kind: "video", sizeMB: 17304, minVramGB: 12, recommendFromGB: 32,
-        constrainedFit: { roomMB: 4937, seconds: 130, identical: true,
+        //
+        // GATE 12 -> 8, 2026-09-16 (NEXT UP 6c), the same run its fp8
+        // sibling passed (6a): 841 MiB of room = an 8 GB card minus AE
+        // (3 255) minus the DESKTOP_FREE_MB floor, shipped unpinned boot,
+        // seed 12345:
+        //
+        //   room left for the backend   delta MiB   s     clip
+        //     841                              8    130   identical
+        //     841, rerun                      51    131   identical
+        //
+        // 1.03x the unconstrained 127 s. The fp16 FILE (9 536 MiB) is
+        // bigger than the whole card and still streams; WDDM shared memory
+        // peaked at 1 123 / 1 071 MiB. The cast is no longer what buys an
+        // 8 GB card Wan -- DynamicVRAM is. Default still held at 32.
+        kind: "video", sizeMB: 17304, minVramGB: 8, recommendFromGB: 32,
+        constrainedFit: { roomMB: 841, seconds: 131, identical: true,
                           on: "RTX 5090 ballasted to the room by scripts/vram-ballast.py, " +
                     "managed backend --disable-pinned-memory (0.12.26), 2026-09-16" },
         measured: true,

@@ -539,7 +539,11 @@ Queued (see WORKPLAN for owners/order):
   DEFAULTS did not move: `recommendFromGB` keeps Wan out of the picks
   under 32 GB and Krea 2 under 24, because a 12 GB buyer's default clip
   would go from 12 s to 130 s, and that is an owner call (WORKPLAN
-  NEXT UP 5a-4e). SDXL stayed at 12: at an 8 GB card's room it was
+  NEXT UP 5a-4e). **Later the same day both Wan entries went to gate
+  8**: at an 8 GB card's room beside After Effects (841 MiB) each
+  rendered its identical clip twice, fp8 in 135 / 131 s and fp16 in
+  130 / 131 s, so an 8 GB buyer can choose Wan with no quantized build
+  and no node pack. Default still held at 32. SDXL stayed at 12: at an 8 GB card's room it was
   identical but 2.8x slower, all of it the fp16 UNet streaming over PCIe
   every step. **`sdxl-fp8` (2026-09-16) is the first image entry gated
   at 8 GB**: the same checkpoint, its UNet cast to fp8 by core

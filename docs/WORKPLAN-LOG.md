@@ -26158,3 +26158,54 @@ far inside the 2x bar; rerun anyway because the ltx-small move did.
 - 6b (quantized Wan) marked not needed for reach.
 - Filed **NEXT UP 6c**: the fp16 `wan22-5b` was not run at 841; same
   procedure, reference md5 60f984....
+
+## 2026-09-16 (local session) - the fp16 wan22-5b also runs at an 8 GB card's room, identical twice, and ships at gate 8 with the default held
+
+**Item:** NEXT UP 6c / WORKPLAN 18 P7c step 4. Items above it: 3, 5a-4e,
+5a-5b, 5a-5c, 5c are owner-only, 6b is marked not needed, the rest
+struck. Not attempted before. Taken at 06:41, inside the loop window.
+
+**Harness: 770/770 PASSED** at the start and again after the change.
+AE left running, untouched. Backend booted and stopped by
+`catalog-vram-probe.js --boot --stop` (via `local/gate-run.sh`); card
+back to 1 152 MiB.
+
+### Runs (`local/gate-run.sh wan22-5b 841 <tag>`)
+
+Shipped unpinned managed boot (`--disable-pinned-memory` read off the
+live command line), seed 12345, `scripts/vram-ballast.py` leaving
+841 MiB = 8 GB card minus AE 3 255 minus DESKTOP_FREE_MB.
+
+| tag | room | delta MiB | s | WDDM shared max | decoded-frame md5 | transcript |
+|---|---|---|---|---|---|---|
+| wan16-841 | 841 | 8 | 130 | 1 123 | 60f9842ecbc378f7389c8c3f3a239c55 | catalog-vram-probe-2026-09-16T10-45-12.md |
+| wan16-841-b | 840 | 51 | 131 | 1 071 | 60f9842ecbc378f7389c8c3f3a239c55 | catalog-vram-probe-2026-09-16T10-47-52.md |
+
+Reference: same md5 at 4 937 MiB (130 s) and on the whole card (127 s).
+1.03x, inside the 2x bar.
+
+### Changed (0.12.33)
+
+- `extension/js/version.js`: wan22-5b `minVramGB 12 -> 8`,
+  `constrainedFit {roomMB 841, seconds 131}`, table in the comment,
+  `recommendFromGB 32` kept (owner, 5a-4e).
+- `tests/test-model-catalog.js`: wan22-5b SEATED in
+  `GATE_UNDER_ITS_BIGGEST_FILE` beside its fp8 sibling; the pin that
+  asserted fp8 8 / fp16 12 now asserts both 8 and that each carries its
+  own 841 MiB `constrainedFit`, as the 6c item asked.
+- `tests/test-tiers.js`: the 8 GB "can run, not defaulted" pin covers
+  both Wan entries.
+- `docs/CAPABILITIES.md`: curated gate paragraph says both Wans gate 8.
+- Stubbed suite: 92/92 files pass.
+
+### Assumed / observed
+
+- Assumed "identical twice within 2x" is the whole bar, as 6a and
+  5b-1 used; nothing beyond it was run.
+- Observed, not filed as work: at 841 MiB the fp8 cast buys neither
+  reach nor speed over the fp16 (131-135 s vs 130-131 s). Its remaining
+  reason is the 1.9 GB lower peak on a card with room, which the
+  catalog-test assertion "fp8 measured CHEAPER" still pins. Whether a
+  buyer needs two Wan 5B choices is a product call for the owner, and
+  it rides on the same 5a-4e tier decision, so it was not queued
+  separately.
