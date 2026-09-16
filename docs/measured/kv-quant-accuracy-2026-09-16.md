@@ -237,3 +237,46 @@ flags, only the cache types changed):
 - A `q8_0` K + `q4_0` V mix is the one smaller cache left that this
   measurement does not rule out. It is one sentence, not a matrix; filed
   as NEXT UP 11d, lower priority.
+
+## 11b-2, shipped (f16) 32K r1+r2: separating KV type from prompt mode (loop pass, 16:00- EDT)
+
+**Question, declared before either run (16:05 EDT):** do the three rows
+q8_0 32K failed 2 of 2 (`take a mask off again / typo`, `un-animate the
+squares / canonical`, `an effect on everything except one layer / casual`)
+also fail on f16 KV at 32K, i.e. on the same FULL prompt?
+
+- Each of the three fails in **at least 1 of 2** f16 32K runs, and f16 32K
+  means are within noise of q8_0 32K (HARM within 3, pass within 4, the
+  width of shipped 16K's 4-run range): the 32K regression belongs to FULL
+  mode / the 32K window, not to q8_0. q8_0 32K is then NOT RED on KV
+  grounds, and a §24 row is filed for FULL mode.
+- All three pass in **2 of 2** f16 32K runs AND f16 32K HARM mean <= 27:
+  q8_0 is implicated at 32K; 11c still ships q8_0 at 16K only, and any
+  future raise of the default must not carry q8_0 without its own gate.
+- Anything between: inconclusive at n=2, r3/r4 next pass.
+
+**Ran 16:00-16:13 EDT.** Server `kv-quant-probe.js --serve --models 7B
+--ctx 32768 --kv shipped` (no `-ctk/-ctv`, n_ctx 32768, 4 slots, build
+b10240), `--rig-check` before each run, probe `--reuse-server --ctx 32768
+--temperature 0 --variants --steps 1-11,15-36`, nothing else on 8737,
+server stopped by PID after. Both transcripts say `tool docs: FULL`.
+
+| run | transcript | pass | miss | HARM | canonical not passing |
+|---|---|---|---|---|---|
+| shipped 32K T0 r1 | 20-06-36 | 53 | 14 | 32 | 13 |
+| shipped 32K T0 r2 | 20-13-36 | 56 | 14 | 29 | 13 |
+| (q8_0 32K r1/r2, above) | | 55 / 56 | 14 / 15 | 30 / 28 | 12 / 10 |
+
+- 2-run means f16 32K: pass 54.5, miss 14, **HARM 30.5**, canonical 13.
+  q8_0 32K: 55.5 / 14.5 / 29 / 11. HARM within 1.5, pass within 1.
+- The three rows on f16 32K: `take a mask off again / typo` HARM, HARM
+  (2 of 2); `un-animate the squares / canonical` pass, HARM (1 of 2);
+  `an effect on everything except one layer / casual` miss, miss (2 of 2).
+- **By the declared bar: the 32K regression is NOT q8_0's.** f16 KV at
+  32K fails the same rows and is, if anything, slightly worse on HARM.
+  q8_0 is not RED on KV grounds at 32K either.
+- **What remains real:** FULL docs at a 32K window score HARM ~30 against
+  shipped COMPACT 16K's 25-28, with the same pass rate. That is what a
+  user gets by raising Context size to 24576 or more. This pair cannot
+  say whether the FULL prompt or the larger window is responsible, because
+  `chat-probe` has no way to force the prompt mode. Filed as NEXT UP 11e.

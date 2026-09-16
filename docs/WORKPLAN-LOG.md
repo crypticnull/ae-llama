@@ -27682,3 +27682,19 @@ SUPERSEDES: 27624,27641 -- that entry's "Bar for q8_0 32K, declared before any 3
 **Filed:** 11b-2's head is now the lower-priority f16 32K pair. 11c now says to hard-code q8_0, add a stub assert that the argv never carries `-ctk q4_0`, and never expose the K type as a setting. New **11d**: the K q8_0 + V q4_0 mix, VRAM half first. It closes if the saving is under ~150 MiB at 16K. That threshold is my own assumption: a matrix costs ~15 min of the owner's GPU time.
 
 **Assumed:** (1) A one-run RED is final when the run passes nothing. (2) One correct answer from K q8_0 + V q4_0 is enough to file 11d, but not enough to call that mix safe.
+
+## 2026-09-16 (local session) - KV quant 11b-2, shipped f16 32K r1+r2: fails the same three rows as q8_0 32K, so the 32K regression is not the KV type (NEXT UP 11b-2, §13b)
+
+**Item:** NEXT UP 11b-2, f16 32K pair. Every row above it is owner-only, blocked or struck. Pass started 15:58 EDT, in daytime. `run-local-agent.ps1` PID 47376 (-UntilHour 17) is running, so the loop the owner started is the permission (17a).
+
+**Harness: 770/770 PASSED** at the start. Nothing under extension/ changed (docs only), so **no bump** and no re-run.
+
+**Bar declared before either run** (in the measured doc, 16:05). If each of the three q8_0-32K failure rows fails in at least 1 of 2 f16 runs, and the means are within noise, the regression belongs to FULL mode / the 32K window. If all three pass 2 of 2 and HARM <= 27, q8_0 is implicated. Anything else is inconclusive.
+
+**Measured:** `kv-quant-probe.js --serve --models 7B --ctx 32768 --kv shipped` (no -ctk/-ctv, 4 slots, b10240). `--rig-check` before each run. Probe `--reuse-server --ctx 32768 --temperature 0 --variants --steps 1-11,15-36`. r1 `logs/chat-probe-2026-09-16T20-06-36.md` 53/14/32/13, r2 `20-13-36.md` 56/14/29/13 (pass/miss/HARM/canonical not passing), both `tool docs: FULL`. Means 54.5/14/30.5/13 against q8_0 32K's 55.5/14.5/29/11. The three rows: mask-off typo HARM/HARM, un-animate canonical pass/HARM, effect-except casual miss/miss. The server was stopped by PID (llama-server 44924) and nothing is listening on 8737. AE 9580 was not touched. Each run took ~7 min.
+
+**Reading:** by the declared bar, the 32K regression is not q8_0's, so q8_0 is not RED at 32K on KV grounds. What stays real is that FULL docs at a 32K window score HARM ~30 against COMPACT 16K's 25-28 at the same pass rate. A user gets that by raising Context size to 24576 or more. These runs cannot split prompt mode from window size, because chat-probe cannot force the prompt mode.
+
+**Filed:** 11b-2 is closed (every config it set out to grade is graded). 11c gets a note that the 32K result no longer counts against q8_0. New **11e**: step 1 is a chat-probe `--prompt-mode` override (repo-only). Step 2 is a COMPACT-at-32K pair, to learn whether FULL docs or the window does the harm.
+
+**Assumed:** (1) "1 of 2" is enough to call a row shared, because q8_0 32K's own 2-of-2 is also n=2 and T=0 is not deterministic. (2) 11e is lower priority than the owner rows and 11c, since nothing ships at 32K by default.
