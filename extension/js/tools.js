@@ -1743,7 +1743,8 @@
     }
     var tail = missing.length > shown
       ? " and " + (missing.length - shown) + " more" : "";
-    var advice = onDisk === missing.length
+    var castAdvice = describeCheckpointAsUnet(missing, manifest, s);
+    var advice = castAdvice ? castAdvice : (onDisk === missing.length
       ? "Every one of those files IS on this machine, so the running " +
         "ComfyUI is searching a different models tree — point it at them " +
         "(extra_model_paths.yaml, or the --base-directory it was started " +
@@ -1751,12 +1752,81 @@
       : (onDisk > 0
           ? "Some are on this machine and some are not, so both the " +
             "download and the backend's model search path need checking."
-          : "Download them into the models tree ComfyUI searches.");
+          : "Download them into the models tree ComfyUI searches."));
     return "ComfyUI at " + global.Comfy.backendUrl(s) + " cannot load " +
            missing.length +
            " of this workflow's weights, so the generation would fail even " +
            "after freeing VRAM for it. Missing from the backend's own model " +
            "list: " + lines.join("; ") + tail + ". " + advice;
+  }
+
+  /**
+   * The advice for a checkpoint read as a UNet (WORKPLAN 18 P7c step 2g,
+   * 5a-4i). sdxl-fp8 feeds a whole checkpoint to core UNETLoader so it can
+   * cast on load, and UNETLoader searches only diffusion_models folders.
+   * The panel maps checkpoints there in the yaml it writes for its OWN
+   * backend; a ComfyUI the user runs never got that yaml, so the generic
+   * "point it at them" is true and useless. This names the one line that
+   * fixes it, the setting that makes it unnecessary, and the sibling entry
+   * that reads the same file without the cast. null when it does not apply.
+   */
+  function describeCheckpointAsUnet(missing, manifest, s) {
+    var hit = null, where = null;
+    for (var i = 0; i < missing.length && !hit; i++) {
+      var w = missing[i];
+      if (w.classType !== "UNETLoader") continue;
+      var base = String(w.value).replace(/^.*[\\\/]/, "");
+      var models = (manifest && manifest.models instanceof Array)
+        ? manifest.models : [];
+      for (var j = 0; j < models.length; j++) {
+        var m = models[j];
+        if (!m || m.dir !== "checkpoints" ||
+            String(m.file).replace(/^.*[\\\/]/, "") !== base) continue;
+        where = modelFilePath(m, s);
+        if (where) { hit = w; break; }
+      }
+    }
+    if (!hit) return null;
+    var folder = String(where).replace(/[\\\/][^\\\/]*$/, "");
+    var sibling = checkpointSiblingLabel(manifest);
+    var own = !s || s.comfyBackend !== "managed";
+    return hit.value + " is a whole checkpoint that this workflow loads " +
+      "through UNETLoader (so it can be cast on load), and UNETLoader only looks in " +
+      "diffusion_models folders. " +
+      (own
+        ? "The built-in backend (Settings > ComfyUI > Backend: Built-in) is " +
+          "set up for this already. To use your own ComfyUI instead, add " +
+          "the line  diffusion_models: " + folder + "  to a section of its " +
+          "extra_model_paths.yaml and restart it."
+        : "The built-in backend is normally set up for this; restart it " +
+          "from Settings so it rereads the model paths the panel writes.") +
+      (sibling ? " Or pick " + sibling + ", which reads the same file " +
+                 "without the cast and needs no change." : "");
+  }
+
+  /** The label of a catalog entry downloading exactly what this one does. */
+  function checkpointSiblingLabel(manifest) {
+    var catalog = [];
+    try { catalog = (global.AELL && global.AELL.COMFY_CATALOG) || []; }
+    catch (e) { return null; }
+    var me = null, i;
+    for (i = 0; i < catalog.length; i++) {
+      if (manifest && catalog[i].name === manifest.catalogEntry) me = catalog[i];
+    }
+    if (!me) return null;
+    function urlsOf(e) {
+      var u = [];
+      var list = e.urls instanceof Array ? e.urls : [];
+      for (var k = 0; k < list.length; k++) u.push(String(list[k].url));
+      return u.sort().join("\n");
+    }
+    var mine = urlsOf(me);
+    for (i = 0; i < catalog.length; i++) {
+      var e = catalog[i];
+      if (e === me || e.kind !== me.kind || !mine) continue;
+      if (urlsOf(e) === mine) return e.label || e.name;
+    }
+    return null;
   }
 
   /**

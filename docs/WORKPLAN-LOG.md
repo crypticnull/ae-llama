@@ -25740,3 +25740,53 @@ same urls, cheaper, gated lower, held at sdxl's gate),
 - 5a-4h struck. **5a-4i**: on a user's OWN ComfyUI the yaml is not
   written, so sdxl-fp8 is refused with advice ("point it at them via
   extra_model_paths.yaml") a motion designer cannot act on.
+
+## 2026-09-16 (local session) - sdxl-fp8 on a user's own ComfyUI is refused with the yaml line that fixes it, not "point it at them"
+
+**Item:** NEXT UP 5a-4i / WORKPLAN 18 P7c step 2g. Version **0.12.29**.
+
+**Harness: 770/770 PASSED** at the start and again on the changed tree.
+Stubbed suite 91/91 files. Items above 5a-4i: 5a-4e is the owner's, the
+rest struck. AE left running (pid 40976), untouched.
+
+### What changed
+
+- `extension/js/tools.js`: `describeMissingWeights` asks a new
+  `describeCheckpointAsUnet(missing, manifest, s)` before its generic
+  advice. It fires only when a missing weight is read by `UNETLoader`
+  AND the manifest lists that file under `dir: checkpoints` AND
+  `modelFilePath` finds it on disk. The sentence then says: the file is a
+  whole checkpoint read through UNETLoader, which only searches
+  diffusion_models folders; on the user's own backend, the built-in
+  backend (Settings > ComfyUI > Backend: Built-in) is already set up for
+  it, or add `diffusion_models: <folder the file sits in>` to a section of
+  their extra_model_paths.yaml and restart; or pick the sibling entry.
+  The sibling is found by `checkpointSiblingLabel`: the catalog entry of
+  the same kind with the identical url set (sdxl-fp8 -> "SDXL"). With
+  `comfyBackend: "managed"` the advice is a restart of the built-in
+  backend instead, since the panel writes that yaml itself.
+- `tests/test-weight-availability.js`: +7 asserts against the real
+  sdxl-fp8 manifest and version.js catalog: the yaml line with the real
+  folder, the setting, the sibling (never itself), no generic advice, the
+  managed branch, a not-on-disk checkpoint stays "Download them", and
+  H3's real diffusion_models UNETLoader never gets the checkpoint advice.
+  5 of them fail on the old tools.js.
+
+### What I assumed / decided
+
+- **Words, not hiding.** The row offered hiding the entry from the picker
+  off the managed backend. Not done: a user who already has the
+  diffusion_models line (or a UNet-capable path) would lose a working
+  entry, and the preflight refusal is cheap (it fires before any handoff).
+- The harness does not exercise this message (it is panel-side, the
+  preflight needs a backend); the verification is the stub test plus a
+  green harness proving nothing else moved. Bumped because extension/
+  changed, per the brief.
+- Not measured against a real own-ComfyUI install: the backend's
+  refusal shape (`UNETLoader.unet_name` missing) is the one 5a-4h
+  observed before the yaml existed, which is what the stub replays.
+
+### Filed
+
+Nothing new. Still open from the row: whether any buyer runs their own
+ComfyUI with this panel at all.

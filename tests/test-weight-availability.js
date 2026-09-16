@@ -611,6 +611,55 @@ function layer2(done) {
            /and 3 more/.test(t3),
            "a long list is capped with a COUNT, never silently truncated");
   }
+  {
+    // WORKPLAN 18 P7c step 2g, 5a-4i: sdxl-fp8 reads a whole CHECKPOINT
+    // through UNETLoader. A user's own ComfyUI never got the panel's
+    // checkpoints-as-diffusion_models yaml, so it refuses a file that is on
+    // disk, and "point it at them (extra_model_paths.yaml ...)" is not an
+    // action a motion designer can take. The advice must name the line.
+    const fp8Manifest = JSON.parse(fs.readFileSync(path.join(WF_DIR,
+      "AE_LLAMA_SDXL_FP8_T2I_V1.manifest.json"), "utf8"));
+    const ckptDir = path.join(SHARED, "checkpoints");
+    const saved = DISK;
+    DISK = { [path.join(ckptDir, "sd_xl_base_1.0.safetensors")]: 6617 };
+    (function (window) {
+      eval(fs.readFileSync(path.join(REPO, "extension", "js", "version.js"),
+                           "utf8"));
+    })(window);
+    const CAST_MISSING = [
+      { node: "8", classType: "UNETLoader", input: "unet_name",
+        value: "sd_xl_base_1.0.safetensors", choiceCount: 4 }
+    ];
+    const own = Object.assign({}, settings, { comfyBackend: "own" });
+    const t4 = Tools._describeMissingWeights(CAST_MISSING, fp8Manifest, own);
+    assert(t4.indexOf("diffusion_models: " + ckptDir) !== -1,
+           "a checkpoint read as a UNet on the user's OWN backend names the " +
+           "exact yaml line, with the folder the file sits in (got: " + t4 +
+           ")");
+    assert(/Backend: Built-in/.test(t4),
+           "…and names the setting that makes the line unnecessary");
+    assert(/Or pick SDXL,/.test(t4) && !/SDXL \(fp8\),/.test(t4),
+           "…and the sibling entry that reads the same download without " +
+           "the cast, never itself");
+    assert(!/searching a different models tree/.test(t4),
+           "…instead of the generic advice, which is true and useless here");
+    const managed = Object.assign({}, settings, { comfyBackend: "managed" });
+    const t5 = Tools._describeMissingWeights(CAST_MISSING, fp8Manifest,
+                                             managed);
+    assert(/restart it from Settings/.test(t5) && !/Backend: Built-in/.test(t5),
+           "on the BUILT-IN backend the panel writes that yaml itself, so " +
+           "the advice is a restart, not a setting the user already has");
+    DISK = {};
+    const t6 = Tools._describeMissingWeights(CAST_MISSING, fp8Manifest, own);
+    assert(/Download them/.test(t6) && !/diffusion_models:/.test(t6),
+           "a checkpoint that is not on disk at all is a DOWNLOAD, and is " +
+           "never told to edit a yaml");
+    DISK = saved;
+    const t7 = Tools._describeMissingWeights(FIELD_MISSING, h3Manifest, own);
+    assert(!/diffusion_models:/.test(t7),
+           "a real diffusion_models weight (H3's UNETLoader) never gets the " +
+           "checkpoint advice");
+  }
 
   // ---- WHEN it happens: the bug class ---------------------------------
   function generate(cb) {
