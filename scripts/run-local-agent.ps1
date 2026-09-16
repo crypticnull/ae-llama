@@ -58,6 +58,13 @@ param(
     # timeout that kills the item it exists to protect is worse than no
     # timeout. Lower it once that item is done.
     [int]$PassTimeoutMin = 45,
+    # Reasoning effort for every pass, passed straight to `claude --effort`
+    # (low, medium, high, xhigh, max). Empty = the CLI's own default.
+    # Owner asked for "extra" on 2026-09-16, which is xhigh. Higher effort
+    # costs more of the 5-hour window per pass, so a night trades pass
+    # COUNT for pass depth -- the 2026-09-15 night hit the window once at
+    # six passes on the default.
+    [string]$Effort = '',
     # Skip the write-probe that runs before pass 1. Only for debugging
     # the loop itself -- the probe is one small CLI call and it is what
     # stands between a misconfigured machine and a wasted night.
@@ -99,6 +106,7 @@ if (-not $Detached) {
     $fwd = $fwd + ' -Iterations ' + $Iterations
     $fwd = $fwd + ' -PauseSec ' + $PauseSec
     $fwd = $fwd + ' -PassTimeoutMin ' + $PassTimeoutMin
+    if ($Effort) { $fwd = $fwd + ' -Effort "' + $Effort + '"' }
     $fwd = $fwd + ' -UntilHour ' + $UntilHour.ToString(
         [System.Globalization.CultureInfo]::InvariantCulture)
     if ($RepoRoot)   { $fwd = $fwd + ' -RepoRoot "' + $RepoRoot + '"' }
@@ -356,6 +364,7 @@ Hard limits for this session:
 $claudeFlags = @()
 if ($SkipPermissions) { $claudeFlags += '--dangerously-skip-permissions' }
 if ($Model) { $claudeFlags += @('--model', $Model) }
+if ($Effort) { $claudeFlags += @('--effort', $Effort) }
 
 # Force the OUTPUT STYLE back to default for passes.
 #
@@ -421,6 +430,7 @@ Write-Log ('claude : ' + $ClaudePath)
 Write-Log ('flags  : ' + $(if ($claudeFlags.Count) { $claudeFlags -join ' ' }
                           else { '(none)' }))
 Write-Log ('model  : ' + $(if ($Model) { $Model } else { '(CLI default)' }))
+Write-Log ('effort : ' + $(if ($Effort) { $Effort } else { '(CLI default)' }))
 Write-Log ('branch : ' + $Branch)
 Write-Log ('log    : ' + $logFile)
 Write-Log ('plan   : ' + $Iterations + ' iterations, ' + $PauseSec + 's pause')
