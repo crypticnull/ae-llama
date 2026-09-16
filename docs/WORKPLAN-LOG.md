@@ -27698,3 +27698,23 @@ SUPERSEDES: 27624,27641 -- that entry's "Bar for q8_0 32K, declared before any 3
 **Filed:** 11b-2 is closed (every config it set out to grade is graded). 11c gets a note that the 32K result no longer counts against q8_0. New **11e**: step 1 is a chat-probe `--prompt-mode` override (repo-only). Step 2 is a COMPACT-at-32K pair, to learn whether FULL docs or the window does the harm.
 
 **Assumed:** (1) "1 of 2" is enough to call a row shared, because q8_0 32K's own 2-of-2 is also n=2 and T=0 is not deterministic. (2) 11e is lower priority than the owner rows and 11c, since nothing ships at 32K by default.
+
+## 2026-09-16 (local session) - KV quant 11c: the panel starts llama-server with a q8_0 cache and respawns once on the default cache if the build refuses it (NEXT UP 11c, §13b)
+
+**Item:** NEXT UP 11c. Every row above it is owner-only, blocked or struck. Pass started 16:15 EDT, in daytime. `run-local-agent.ps1` PID 47376 (-UntilHour 17) is running, so the loop the owner started is the permission (17a).
+
+**Harness: 770/770 PASSED** at the start and **770/770 PASSED** after the change.
+
+**Changed (extension/js/llama.js):** `serverArgs(opts, plainKv)` builds the argv and adds `-ctk q8_0 -ctv q8_0` unless `plainKv` is set. `KV_CACHE_TYPE` is a constant, not a setting (q4_0 garbles from a server that loads healthy, 11b-2), and there is no `-fa`. `spawnServer` keeps what the server prints while it is `starting`. If a quantized start exits and a line in that log refuses the cache (`kvRefusal`), it logs `[panel] this llama-server refused the q8_0 KV cache (...)` and respawns ONCE with the plain argv. `done` fires once, from whichever spawn ends the attempt. A refusal counts only when the line names the cache (`-ctk`/`-ctv`/`cache type`/`V cache`), so an unrelated bad argument or a model load failure is not retried. Node can fire `exit` before the pipes drain, so while a quantized start is loading, the exit is handled on `close`. A stop during load never respawns (the `thisProc !== proc` guard). `scripts/lib/kv-quant.js`: the comment now says the panel's config is `--kv q8_0`, and "shipped" means the f16 cache from before 11c.
+
+**Real refusal lines, measured on build 10240** (arg parsing only, exits 1 before any load): `error while handling argument "-ctk": Unsupported cache type: bogus` and `error: invalid argument: --cache-type-zz`.
+
+**Verified against the real exe:** (1) llama.js loaded in Node, 7B at 16K: the argv logs as `... -c 16384 -ngl 99 -ctk q8_0 -ctv q8_0`, and the state reaches `running`. (2) Same, with `KV_CACHE_TYPE` swapped to `bogus` in memory only: the server refused it, the panel logged the reason, respawned without the flags and reached `running`. `done` fired once, with no error. (3) `chat-probe --steps 1,2,3 --temperature 0` (32B from settings, through the real `Llama.start`): 3/3, `logs/chat-probe-2026-09-16T20-22-39.md`. No llama-server was left running afterwards.
+
+**Stubs:** new `tests/test-llama-kv-cache.js` (24 checks, executed against a fake child process and fake HTTP). It covers: the argv has q8_0, never q4_0, and no -fa. Both real refusal lines end `running` after exactly one respawn, with `done` called once. A refusal printed after `exit` is still caught. A second refusal does not loop. A model load failure and an unrelated invalid argument do not respawn. A stop during load does not respawn. The panel and `kv-quant.js` read the same real lines. The whole stubbed suite is green.
+
+**NOT BUMPED, on purpose, against the brief's "bump when verified" rule.** 0.12.36 to HEAD already carries ~1.9k lines under extension/ (main.js, tools.js, setup.js, comfy.js, and more) that NEXT UP 12a holds back until a real panel proves a send works. A patch bump now would ship all of that past 12a's gate. So 11c rides with 12a, as 13a/16/17/18/25/26/28/32 did. 12a's row lists it.
+
+**Hand-off for later passes:** `chat-probe` WITHOUT `--reuse-server` now runs on a q8_0 cache, because it goes through `Llama.start`. A "shipped" baseline taken that way from here on is q8_0, not f16. `kv-quant-probe --kv shipped` is still f16. 11d (mixed K q8_0 + V q4_0) is unblocked by this, but it is lower priority.
+
+**Assumed:** (1) Holding the bump for 12a beats following the brief's bump rule to the letter. The rule exists so verified fixes reach panels, and this bump would also ship unverified ones. (2) The "V cache requires flash attention" refusal shape is reasoned, not measured, because build 10240 does not print it. It is matched only if it names the cache.

@@ -14,8 +14,10 @@
  */
 "use strict";
 
-/* The panel's own argv (llama.js spawnServer) plus the KV flags. `kv` of
- * null / "shipped" adds nothing, which is exactly what ships today. */
+/* The panel's own argv (llama.js serverArgs) plus the KV flags. `kv` of
+ * null / "shipped" adds nothing: that is the f16 cache the panel shipped
+ * until NEXT UP 11c (2026-09-16). Since then the panel passes q8_0 itself
+ * (and f16 only after a refusal), so the panel's config is `--kv q8_0`. */
 function buildArgs(o) {
   const args = [
     "-m", o.modelPath,

@@ -271,7 +271,35 @@
     });
   }
 
-  function spawnServer(serverPath, opts, finish) {
+  // KV CACHE (WORKPLAN §13b, NEXT UP 11c). q8_0 on both K and V halves the
+  // cache at an accuracy chat-probe could not tell from f16 at 16K (11b-2),
+  // so 32K costs what 16K cost before. HARD-CODED on purpose: q4_0 on the
+  // KEY cache returns garbage from a server that loads healthy (measured
+  // 2026-09-16), so no fallback could catch it; never make it a setting.
+  // Flash attention is already auto-on (build 10240), and a bare `-fa`
+  // takes a value there, so it is not passed.
+  var KV_CACHE_TYPE = "q8_0";
+
+  // What a build prints when it does not know the flags or the type; the
+  // same shapes scripts/lib/kv-quant.js parseServerLog reads. Measured on
+  // build 10240: `error: invalid argument: --cache-type-zz` and `error
+  // while handling argument "-ctk": Unsupported cache type: bogus`, exit 1
+  // before any load. A quantized V cache refused without flash attention
+  // is reasoned, not measured. The line must NAME the cache, so a refusal
+  // of some other argument is not answered by dropping ours.
+  var KV_REJECT_RE = /(error: (?:invalid|unknown) argument[^\r\n]*|invalid value for[^\r\n]*|Unsupported cache type[^\r\n]*|[^\r\n]*quantized V cache[^\r\n]*requires[^\r\n]*|[^\r\n]*V cache quantization requires[^\r\n]*)/i;
+  var KV_NAMED_RE = /-ctk|-ctv|cache.type|V cache/i;
+
+  function kvRefusal(log) {
+    var lines = String(log).split(/\r?\n/);
+    for (var i = 0; i < lines.length; i++) {
+      var m = KV_REJECT_RE.exec(lines[i]);
+      if (m && KV_NAMED_RE.test(lines[i])) return m[1].trim();
+    }
+    return "";
+  }
+
+  function serverArgs(opts, plainKv) {
     var args = [
       "-m", opts.modelPath,
       "--host", "127.0.0.1",
@@ -279,6 +307,13 @@
       "-c", String(opts.ctxSize),
       "-ngl", String(opts.gpuLayers)
     ];
+    if (!plainKv) args.push("-ctk", KV_CACHE_TYPE, "-ctv", KV_CACHE_TYPE);
+    return args;
+  }
+
+  function spawnServer(serverPath, opts, finish, plainKv) {
+    var args = serverArgs(opts, plainKv);
+    var bootLog = "";   // what the server said before it was ready
 
     emit("log", "[panel] starting: " + serverPath + " " + args.join(" ") + "\n");
     setState("starting", "Loading model…");
@@ -300,8 +335,13 @@
     var thisProc = proc;
     rememberPid(proc.pid, serverPath);
 
-    proc.stdout.on("data", function (d) { emit("log", d.toString()); });
-    proc.stderr.on("data", function (d) { emit("log", d.toString()); });
+    function onData(d) {
+      var t = d.toString();
+      if (state === "starting" && bootLog.length < 65536) bootLog += t;
+      emit("log", t);
+    }
+    proc.stdout.on("data", onData);
+    proc.stderr.on("data", onData);
 
     proc.on("error", function (err) {
       if (thisProc !== proc) return;
@@ -312,17 +352,36 @@
       finish(err);
     });
 
-    proc.on("exit", function (code, signal) {
+    function onGone(code, signal) {
       if (thisProc !== proc) return;   // an old process exiting after restart
       clearHealthTimer();
       proc = null;
       forgetPid();
+      var rejected = !plainKv && state === "starting" && kvRefusal(bootLog);
+      if (rejected) {
+        emit("log", "[panel] this llama-server refused the " + KV_CACHE_TYPE +
+          " KV cache (" + rejected + "); restarting it with the " +
+          "default cache, which uses more VRAM per token of context\n");
+        spawnServer(serverPath, opts, finish, true);
+        return;
+      }
       if (state !== "stopped") {
         var ok = code === 0 || !!signal;
         setState(ok ? "stopped" : "error",
                  ok ? "Server stopped" : "Server exited with code " + code);
       }
       finish(new Error("llama-server exited before becoming ready"));
+    }
+
+    proc.on("exit", function (code, signal) {
+      // Node may fire 'exit' before the pipes drain, and a refusal is the
+      // LAST thing the server writes. While a quantized start is loading,
+      // decide on 'close', when every byte of the boot log is in.
+      if (!plainKv && state === "starting" && thisProc === proc) {
+        thisProc.once("close", function () { onGone(code, signal); });
+        return;
+      }
+      onGone(code, signal);
     });
 
     // Poll /health until the model finishes loading (can take minutes for
@@ -582,6 +641,8 @@
     start: startServer,
     stop: function () { stopServer(false); },
     reapOrphan: reapOrphan,
+    serverArgs: serverArgs,
+    kvRefusal: kvRefusal,
     chat: chat,
     getState: function () { return state; },
     getCurrentModel: function () { return currentModel; },
