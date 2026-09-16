@@ -258,9 +258,20 @@ PAIRS.forEach(function ([rel, kind]) {
   assert(dec.class_type === "VAEDecodeTiled",
          "ltx-small node 8 decodes tiled (1 338 MiB, measured 2026-09-16)");
   const inp = dec.inputs || {};
-  assert(inp.tile_size === 512 && inp.overlap === 64 &&
-         inp.temporal_size === 64 && inp.temporal_overlap === 8,
-         "and at VAEDecodeTiled's own defaults (512/64/64/8), untuned");
+  /* WORKPLAN 18 P7c step 2e TUNED one of the four, and only one. tile_size
+   * 256 took the job from 12 576 to 10 272 MiB at the same 12s with no seam
+   * (SSIM 0.9951 vs the plain decode, no per-frame dip). temporal_size is
+   * pinned at its DEFAULT on purpose: 32 and 16 were measured smaller still
+   * and REJECTED, because every temporal chunk boundary showed as a periodic
+   * per-frame PSNR dip and luma jump -- a pulse in the clip. A pass that
+   * "finishes the tuning" by shrinking it is re-buying that defect for under
+   * 250 MiB; read the manifest's (6) first. */
+  assert(inp.tile_size === 256,
+         "tile_size is 256, tuned (10 272 MiB, step 2e) -- not the default 512");
+  assert(inp.overlap === 64 && inp.temporal_size === 64 &&
+         inp.temporal_overlap === 8,
+         "overlap/temporal_size/temporal_overlap stay at the node's defaults " +
+         "(64/64/8): a smaller temporal_size seams in time (step 2e)");
   assert(String(inp.samples && inp.samples[0]) === "72" &&
          String(inp.vae && inp.vae[0]) === "44",
          "wired to SamplerCustom 72 and the checkpoint's VAE 44, as the " +

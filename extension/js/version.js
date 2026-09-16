@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.12.23",
+    VERSION: "0.12.24",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -261,6 +261,15 @@
         // graph cannot take that trick.
         //
         // 68x faster per clip than Wan, incidentally: 12 s against 127.
+        //
+        // The graph has since shed its decode spike (18 P7c steps 2d/2e:
+        // VAEDecodeTiled, tile_size tuned to 256) and the SHIPPED graph now
+        // measures 10 176-10 272 MiB in 12 s. measuredVramMB below is left
+        // at the plain-decode reading on purpose: the gate is still 16,
+        // because 10.0 GiB plus After Effects' own resident footprint is
+        // more than a 12 GB card holds, and whether ComfyUI's offload makes
+        // it RUN there (rather than grind) is step 2f's measurement, not
+        // arithmetic. Lower the number when the gate moves, not before.
         kind: "video", sizeMB: 10965, minVramGB: 16, measured: true,
         measuredVramMB: 13921, measuredSeconds: 14,
         measuredAt: "768x512 x 97 frames = 4.04 s at the template's 24 fps " +

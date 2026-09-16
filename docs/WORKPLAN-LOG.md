@@ -25069,3 +25069,77 @@ under the managed root. It does not touch "own" mode, `findLocalComfy`,
 or the elsewhere-hint. An adopted backend is treated as fully ours from
 that moment, including being stopped at unload - which is the point: it
 IS ours, and the only thing that was ever missing was the bookkeeping.
+
+## 2026-09-16 (local session) - tile_size 256 ships 10 272 MiB with no seam, temporal tiling seams and is rejected, and the gate waits on a constrained-card run
+
+**Item:** NEXT UP 5a-2 / WORKPLAN 18 P7c step 2e - sweep `VAEDecodeTiled`'s
+`temporal_size` and `tile_size` on `ltx-small`, reading peak, clock and seam.
+
+**Harness: 770/770 PASSED** before the work and after. **Version 0.12.24**
+(patch) - `extension/comfy-workflows/` and `extension/js/version.js` changed.
+
+### What was measured
+
+One managed backend (booted once, stopped after; card back to 3 536 MiB,
+port 8288 free - verified), seed 12345, RTX 5090, only node 8's inputs
+varied. Reference is the plain-decode clip from step 2d
+(`AELlama_LTXV_2B__00004_.mp4`). **Clips are deterministic**: two runs
+of one setting are byte-identical, so the seam numbers are signal.
+
+| node 8 (tile/overlap/temporal/t_overlap) | delta MiB | s | SSIM vs plain | Y PSNR avg / min | temporal dip |
+|---|---|---|---|---|---|
+| 512/64/64/8 default | 12 576 | 12 | 0.9958 | 46.8 / 36.6 @58 | no |
+| 512/64/32/8 | 10 784 | 12 | 0.9949 | 44.0 / 35.0 @74 | yes @24/48/72 |
+| 512/64/16/8 | 10 048 | 12 | 0.9920 | 39.6 / 34.1 @82 | yes, every 8 frames |
+| 512/64/8/8 | 10 048 | 12 | clip identical to 16 | | |
+| **256/64/64/8 SHIPPED** | **10 272** | **12** | **0.9951** | **43.9 / 36.7 @58** | **no** |
+| 256/64/32/8 | 9 856 | 12 | 0.9943 | 42.3 / 34.9 @74 | yes @24/48/72 |
+| 256/64/16/8 | 9 860 | 16 | 0.9915 | 39.0 / 34.0 @90 | yes, every 8 |
+
+Shipped file re-probed afterwards: 10 176 MiB, 12 s, output byte-identical
+to the sweep's 256 clip. Logs: `logs/catalog-vram-probe-2026-09-16T07-12-54`
+through `07-14-52`, plus the re-probe after them.
+
+### Decisions, and what I assumed
+
+- **Temporal tuning REJECTED.** Per-frame PSNR against the plain decode
+  dips 3-5 dB at every temporal chunk boundary (an 8-frame sawtooth at
+  16), and `tblend=difference` luma jumps 0.5-0.7 at exactly those frames
+  vs 0.3-0.4 in the plain clip. A periodic pulse for < 250 MiB. 16 and 8
+  are one job: `nodes.py` floors the latent chunk at 2.
+- **Spatial 256 SHIPPED.** No new temporal dip (same worst frame, same
+  value as default); a x10 amplified difference image at frame 58 shows
+  object-edge noise only, no tile grid. I judged that from one frame
+  image plus the band/frame statistics - no human has watched the clip.
+- **Gate NOT moved (16).** Assumption stated: 10 272 over idle + tiers.js
+  `AE_RESIDENT_MB` 3 255 = 13 527 > 12 288, and the 5090 never had to
+  offload, so I did not lower a gate on arithmetic that cannot see
+  offload. Filed as **18 P7c step 2f / NEXT UP 5a-3**: constrain the
+  managed backend to a 12 GB card's room and see whether it runs or
+  grinds. `measuredVramMB` in version.js left at the plain-decode reading
+  on purpose, with a comment saying when to lower it.
+- The decode spike is now spent: peak ~550 MiB above the post-decode rest.
+
+A first sweep attempt wrote its config edit through a `/tmp` path Node on
+Windows cannot read, so seven runs measured the unchanged default (peak
+16 761 every time) - kept only as a noise reading; the sweep was re-run
+with a repo-local (git-ignored) path.
+
+### Changed
+
+- `extension/comfy-workflows/AE_LLAMA_LTXV_2B_T2V_V1.json` - node 8
+  `tile_size` 512 -> 256.
+- `...manifest.json` - change (6), the table's key numbers, why temporal
+  was rejected, why the gate holds; (5)'s "all defaults" clause corrected.
+- `.hash-history.json` regenerated.
+- `extension/js/version.js` - comment on `ltx-small`; no value changed.
+- `tests/test-workflow-manifests.js` - pins tile_size 256 AND pins
+  temporal_size at its default, with the reason, so a pass cannot
+  "finish the tuning" and re-buy the seam.
+- `docs/WORKPLAN.md` - 5a-2 done, 5a-3 filed, step 2e results, step 2f.
+
+### Verification
+
+- `node tests/test-workflow-manifests.js`, `test-workflow-hash-history.js`,
+  `test-model-catalog.js` green; full stub suite zero failing.
+- Real AE harness 770/770 before and after.

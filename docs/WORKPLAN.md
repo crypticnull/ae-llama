@@ -62,7 +62,8 @@ every pass and finished work costs the same context as live work.
 | 5 | ~~**Settle what `ltx-small` is, then measure it.**~~ **DONE 2026-09-16 (0.12.20).** It is real: LTX-Video 2B, `AE_LLAMA_LTXV_2B_T2V_V1`, all-core graph copied from the vendor template the MANAGED backend ships, **measured 13 921 MiB in 12 s**. The catalog's video floor went **32 -> 16** and a 16 GB card has a runnable video graph for the first time; 8 and 12 GB now get an honest no video instead of an entry that could never run. Both of this item's premises were wrong - the backend has 30 core LTX classes, and the "fixture says zero" evidence was a false NO from a 52-class demand harvest (filed as §17l-b). Full table in §18 P7c step 2. **§18 P7a is still open for 8-12 GB**; the cheapest lever left is now §18 P7c step 2a, and step 2c is cheaper still and should go first. | §18 P7c step 2 | backend, disk | yes |
 | 5a | ~~**Does the 13 921 MiB peak even HOLD the text encoder?**~~ **DONE 2026-09-16. It does: one hump, no release before the peak, gate stays 16.** The trace this item said to re-read did not exist - the probe streamed nvidia-smi at 250 ms and threw every sample away, keeping one number. Fixed at the root first: `scripts/lib/vram-curve.js` + a `## curve` section in every transcript, `tests/test-vram-curve.js`. Third run measured 13 658 MiB, within 263 of the other two. **What the curve then showed is item 5a-1 below and it is bigger than this question was.** See §18 P7c step 2c. | §18 P7c step 2c | nothing | no |
 | 5a-1 | ~~**31 percent of ltx-small's peak is a HALF-SECOND VAE decode spike.**~~ **DONE 2026-09-16 (0.12.21). It paid 1 338 MiB and the gate did NOT move.** `VAEDecodeTiled` at the node's own defaults is in the shipped graph: 13 882 -> **12 544 MiB**, 12 s either way, SSIM 0.9958 / PSNR 45.6 dB against the plain decode with no error at the seam. 12.3 GiB is still more than a 12 GB card has, so `ltx-small` stays gated at 16 and P7a's open half stays open. The defaults barely tile - `temporal_size 64` is 8 LATENT frames against 13, `tile_size 512` is 2 columns - which is why only a quarter of the spike went. Pinned by `tests/test-workflow-manifests.js` so a tidy-up cannot put the plain decoder back. See §18 P7c step 2d. | §18 P7c step 2d | backend | done |
-| 5a-2 | **Tune the tile: the DEFAULTS barely tiled, and the rest of the spike is the whole distance to a 12 GB card.** Step 2d left 3 392 MiB of spike above a sampling plateau of 9 152 and a post-decode rest of 9 632 MiB over idle - so a decode that cost nothing would peak near **9.4 GiB**, inside a 12 GB card. Sweep `temporal_size` 64/32/16/8 and `tile_size` 512/256, one run each, reading the CURVE; check the SEAM every time (ssim + per-band psnr, the way 2d did) and watch the clock. A tuned decode stops being 'the vendor's shape', so it needs its own number and its own manifest sentence. | §18 P7c step 2e | backend | maybe |
+| 5a-2 | ~~**Tune the tile: the DEFAULTS barely tiled.**~~ **DONE 2026-09-16 (0.12.24). `tile_size 256` ships: 12 576 -> 10 272 MiB, 12 s, no seam - and the gate STILL does not move, for a new reason.** `temporal_size` 32/16/8 measured smaller (10 784 / 10 048 / 10 048 - 16 and 8 are one job, `nodes.py` floors the chunk at 2 latent frames) and was REJECTED: every temporal chunk boundary is a periodic per-frame PSNR dip and a frame-to-frame luma jump against the plain decode. Spatial-only 256 adds no dip (min 36.7 dB at frame 58, same as the default), SSIM 0.9951, x10 diff image shows no tile grid. The peak is now within ~550 MiB of the post-decode REST, so decode tuning is spent. Why the gate holds: 10 272 over idle + `AE_RESIDENT_MB` 3 255 = 13 527 > 12 288 on paper - but the 5090 never had to offload, so paper is not the answer. That is item 5a-3. See §18 P7c step 2e. | §18 P7c step 2e | backend | done |
+| 5a-3 | **Can a 12 GB card RUN ltx-small, or does it grind?** The shipped graph needs 10.0 GiB over idle on a card with room; on a card WITHOUT room ComfyUI's model management should evict the 4 918 MiB T5 encoder before sampling (it never did on the 5090 because it never had to), which could put it inside 12 GB with After Effects open - or could turn a 12 s clip into minutes per frame, which CLAUDE.md forbids shipping silently. Constrain the managed backend to what a 12 GB card has left after AE (`--reserve-vram`, or a ballast allocation - pick one and say why), run the shipped graph, read the CURVE and the CLOCK. Completes in under ~2x the 12 s: gate 16 -> 12 with the number. Grinds or OOMs: the gate stays 16 and the manifest says so. | §18 P7c step 2f | backend | maybe |
 | 5b | **The distilled fp8 2B: 4 255 MiB instead of 6 047**, which would put resident weights at 9 173 and the job near 12.1 GB — the first thing that might give a 12 GB card video. NOT a drop-in: distillation retunes steps and cfg, and `CheckpointLoaderSimple` has no `weight_dtype`, so the free cast that made `wan22-5b-fp8` work is unavailable. Look for the vendor's own distilled template among the managed backend's 24 LTX ones before inventing values. | §18 P7c step 2a | backend, disk | yes |
 | 5c | **OWNER, one line: the LTX weights are "LTXV Open Weights License 0.X", not Apache-2.0.** The panel redistributes nothing (the buyer downloads from Lightricks' own repo), so this is about what a commercial product RECOMMENDS. Refusing it means going back to no video under 32 GB, because Wan is the only Apache-2.0 video entry and it gates at 32. | §18 P7c step 2b | owner | no |
 | 5d | **`comfy-node-defs.json` holds 52 defs beside a `class_count` of 3487**, so asking it whether a node exists returns a false NO for ~3 435 classes, by design. That false NO is what gave §18 P7c step 2 a wrong premise and nearly cost the catalog the whole LTX line. Name the count, refuse existence lookups, one stub test. Distinct from §17l (staleness) and both are live. No backend. | §17l-b | nothing | no |
@@ -4171,6 +4172,12 @@ The levers left are both about the WEIGHTS:
   temporal chunks, two spatial columns), so the other 3 392 MiB of the
   spike is still there and still the whole distance to a 12 GB card:
   **§18 P7c step 2e**, a tuning sweep, is that lever and it is filed.
+- **§18 P7c step 2e — TAKEN 2026-09-16 (0.12.24).** `tile_size 256`:
+  **10 272 MiB**, 12 s, no seam. Temporal tuning measured smaller and
+  was rejected for a periodic seam. The decode spike is now spent (peak
+  within ~550 MiB of the post-decode rest). **The gate stays 16** until
+  **§18 P7c step 2f** measures a CONSTRAINED card - on paper 10.0 GiB +
+  AE's 3.2 GiB is over 12, but offload is exactly what paper cannot see.
 - **§18 P7c step 2a** — the distilled fp8 2B, `4255 MiB` instead of
   `6047`, which would put resident weights at 9 173 MiB. Filed below.
 - **§18 P7c step 4** — GGUF Q4/Q5, NEXT UP item 6, still unsurveyed.
@@ -4641,6 +4648,63 @@ number in §18 P7a a 12 GB card could hold.
    closes. Then the entry is no longer "the vendor's template node for
    node" and the manifest must say so in those words.
 
+
+#### MEASURED 2026-09-16 (0.12.24): tile_size 256 ships, temporal tuning is REJECTED, the gate still does not move
+
+One backend, seed 12345, RTX 5090, the shipped graph with only node 8's
+inputs varied (tile / overlap / temporal / temporal_overlap). Every clip
+is DETERMINISTIC - two runs of one setting are byte-identical - so the
+seam numbers are signal, not noise. Reference is the plain `VAEDecode`
+clip from step 2d (`AELlama_LTXV_2B__00004_.mp4`). Seven repeat runs of
+the default first gave peak 16 761 every time; the delta moved only with
+the idle floor (3 967 vs 4 185), so read peaks, not deltas, across days.
+
+| node 8 | delta MiB | s | SSIM | Y PSNR avg / min frame | temporal dip? |
+|---|---|---|---|---|---|
+| 512/64/64/8 (default, 2d) | 12 576 | 12 | 0.9958 | 46.8 / 36.6 @58 | no |
+| 512/64/**32**/8 | 10 784 | 12 | 0.9949 | 44.0 / 35.0 @74 | **yes, @24/48/72** |
+| 512/64/**16**/8 | 10 048 | 12 | 0.9920 | 39.6 / 34.1 @82 | **yes, every 8 frames** |
+| 512/64/**8**/8 | 10 048 | 12 | identical clip to 16 | | |
+| **256**/64/64/8 **(SHIPPED)** | **10 272** | **12** | **0.9951** | **43.9 / 36.7 @58** | **no** |
+| 256/64/32/8 | 9 856 | 12 | 0.9943 | 42.3 / 34.9 @74 | yes, @24/48/72 |
+| 256/64/16/8 | 9 860 | 16 | 0.9915 | 39.0 / 34.0 @90 | yes, every 8 |
+
+The shipped file re-measured afterwards: **10 176 MiB, 12 s**, output
+byte-identical to the sweep's 256 run.
+
+**Why temporal tuning is rejected.** `nodes.py` turns temporal_size into
+`max(2, size // 8)` latent frames, so 16 and 8 are the same job (the
+identical clips prove it). At every chunk boundary the per-frame PSNR
+against the plain decode dips 3-5 dB and recovers - a sawtooth with an
+8-frame period at 16 - and `tblend=difference` shows the frame-to-frame
+luma change jumping 0.5-0.7 at exactly those frames against 0.3-0.4 in
+the plain clip. That is a 3 Hz pulse in a buyer's render, and it buys
+under 250 MiB over the spatial-only setting. Spatial 256 changes neither
+the frame nor the value of the per-frame minimum; its amplified (x10)
+difference image at that worst frame shows object-edge noise and no tile
+lines.
+
+**Why the gate does not move, and why that is not the end.** The peak is
+now ~550 MiB above the post-decode REST (13 817 absolute), so decode
+tuning is spent: what is left is weights and activations. 10 272 over
+idle plus `AE_RESIDENT_MB` 3 255 is 13 527 MiB against a 12 GB card's
+12 288. But on the 5090 ComfyUI never had to evict anything - the T5
+encoder (4 918 MiB) sat resident through sampling because there was room.
+On a card without room it would be offloaded after encoding, and whether
+that makes the job FIT or makes it GRIND is a measurement. Filed as
+step 2f.
+
+### Step 2f - does ltx-small RUN on a constrained card, or grind? (filed 2026-09-16)
+
+See NEXT UP 5a-3 for the procedure. The rule it answers to is CLAUDE.md's
+"never a silent grind": a gate lowered to 12 on arithmetic that ignores
+offload would offer a 12 GB buyer a clip that might take minutes per
+frame with no error. Constrain the MANAGED backend (`--reserve-vram` is
+ComfyUI's own flag; a ballast allocation is the alternative - state which
+and why), leave room for AE's 3 255 MiB, run the shipped graph through
+`catalog-vram-probe`, and read peak, curve and seconds. The `measuredVramMB`
+in `version.js` is still the plain-decode reading ON PURPOSE; lower it when
+the gate moves.
 
 **The same question applies to every video entry**, and Wan is where it
 came from: §18 P7 concluded "the floor is resident weights, not the

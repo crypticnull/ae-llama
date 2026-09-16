@@ -73,11 +73,13 @@
     ],
     "AE_LLAMA_LTXV_2B_T2V_V1.json": [
       "e55a122190eda0976428b4f40731817ef4a37a78",
-      "bb1294712648f913c0d68f519ff58dfe61ed05ee"
+      "bb1294712648f913c0d68f519ff58dfe61ed05ee",
+      "b50c48197a887a1624079152fc2795657c065f71"
     ],
     "AE_LLAMA_LTXV_2B_T2V_V1.manifest.json": [
       "7748a5b21c46bcc3f814c77353cc01cbec5e5b11",
-      "ae53e81dc73c29f713b426ebd46e16cae2ee007b"
+      "ae53e81dc73c29f713b426ebd46e16cae2ee007b",
+      "f1ead944d469aa36d8dfceb53847470aa30aceda"
     ]
   }
 }
