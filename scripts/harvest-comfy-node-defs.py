@@ -170,9 +170,14 @@ def main():
                      "scripts/harvest-comfy-node-defs.py. Input ORDER is what "
                      "scripts/adapt-workflow.js needs: the UI format stores "
                      "widget values positionally and only names the ones that "
-                     "are linked."),
+                     "are linked. This is NOT a complete node list: "
+                     "classes_recorded is what was written down, class_count "
+                     "is what the install defined, and a class absent here "
+                     "may well exist - ask a running backend's /object_info "
+                     "whether a node exists (WORKPLAN 17l-b)."),
         "comfyui_version": comfyui_version.__version__,
         "class_count": len(nodes.NODE_CLASS_MAPPINGS),
+        "classes_recorded": len(defs),
         "missing": missing,
         "defs": defs,
     }

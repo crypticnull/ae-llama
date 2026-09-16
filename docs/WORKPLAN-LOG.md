@@ -26004,3 +26004,41 @@ still null (held for the owner, not unmeasured). `test-model-catalog.js`
 WORKPLAN 5b-1 struck. 5a-4e extended: the 8 GB video default is now a
 one-field decision on EITHER LTX entry (ltx-small 24 s, distilled 12 s).
 Nothing blocked.
+
+## 2026-09-16 (local session) - comfy-node-defs.json says it is a partial harvest, and a lookup of a class it does not hold throws instead of answering NO
+
+**Item:** NEXT UP 5d / WORKPLAN 17l-b. Items above it: 3 is blocked on
+the owner, 5a-4e, 5a-5b, 5a-5c and 5c are owner-only, the rest struck.
+Not attempted before.
+
+**Harness: 770/770 PASSED** at the start; PASSED again (exit 0) after the
+change. Full stubbed suite 92/92 (one new file). AE left running,
+untouched. No backend booted, no GPU used.
+
+### Changed (all three steps of 17l-b, as written)
+
+1. `scripts/comfy-node-defs.json`: `classes_recorded: 52` beside
+   `class_count: 3487`, and one sentence in `_comment`: not a complete
+   node list, a class absent here may exist, ask a running backend's
+   `/object_info`. Edited as text (two lines), not re-serialised, so the
+   input-order payload is untouched.
+2. `scripts/harvest-comfy-node-defs.py` writes both the field
+   (`len(defs)`) and the sentence, so a re-harvest cannot drop them.
+3. `scripts/adapt-workflow.js`: new exported `defOf(defs, class, where)`,
+   the only reader of `defs.defs`. A miss THROWS naming both counts,
+   "does NOT mean the class is missing", `/object_info`, and the
+   `--classes-from` re-harvest for the adapting case. The three raw
+   `defs.defs[...]` reads (the old existing error plus two that would have
+   thrown a bare TypeError) go through it.
+4. `tests/test-comfy-node-defs.js`, 14 asserts: counts differ and
+   `classes_recorded` equals what is held; comment and harvester name
+   `/object_info`; `LTXVScheduler` (core, the class the false NO was
+   about) is refused with the right words; adapt-workflow.js has no raw
+   `.defs[` outside `defOf`. Fails on the old code.
+
+Assumed: no reader other than adapt-workflow.js needs converting - grep
+finds only it and its test reading the file. A future reader that
+bypasses `defOf` is not caught by the test (it only scans
+adapt-workflow.js); that is the documented route, not an enforced one.
+
+No bump: nothing under `extension/` changed.

@@ -396,6 +396,28 @@ function flattenSubgraphs(uiGraph, warn) {
   return flat;
 }
 
+// The ONE reader of a harvested defs file. That file is a DEMAND harvest -
+// only the classes some workflow named (52 of the 3487 the author's install
+// had, WORKPLAN 17l-b) - so a class it does not hold says nothing about
+// whether the class EXISTS. Returning undefined let a caller read that
+// absence as "no such node", which is how 18 P7c step 2 concluded the
+// backend had no LTX nodes when it had 30. A miss throws, and says where
+// the real answer lives.
+function defOf(defs, classType, where) {
+  var def = defs && defs.defs && defs.defs[classType];
+  if (def) return def;
+  var held = defs && defs.defs ? Object.keys(defs.defs) : [];
+  fail("no harvested definition for node type '" + classType + "'" +
+       (where ? " (" + where + ")" : "") + ". The defs file is a partial " +
+       "harvest (" + held.length + " classes recorded" +
+       (defs && defs.class_count ? " of " + defs.class_count : "") +
+       "), not a node list, so this does NOT mean the class is missing: " +
+       "ask a running backend's /object_info whether it exists. To adapt " +
+       "a workflow that uses it, re-run scripts/harvest-comfy-node-defs.py " +
+       "with --classes-from that workflow against a ComfyUI that has it. " +
+       "Recorded types: " + held.sort().join(", "));
+}
+
 function adapt(uiGraph, defs, manifest, warn) {
   if (!warn) warn = function () {};
   if (!uiGraph || !(uiGraph.nodes instanceof Array)) {
@@ -527,13 +549,7 @@ function adapt(uiGraph, defs, manifest, warn) {
       return;
     }
 
-    var def = defs.defs[node.type];
-    if (!def) {
-      fail("no harvested definition for node type '" + node.type + "' (node " +
-           id + "). Re-run scripts/harvest-comfy-node-defs.py against a " +
-           "ComfyUI that has it. Known types: " +
-           Object.keys(defs.defs).sort().join(", "));
-    }
+    var def = defOf(defs, node.type, "node " + id);
 
     var values = node.widgets_values instanceof Array
       ? node.widgets_values : [];
@@ -611,7 +627,7 @@ function adapt(uiGraph, defs, manifest, warn) {
   Object.keys(api).forEach(function (id) {
     var node = byId[id];
     var target = api[id];
-    var types = defs.defs[target.class_type].input_types;
+    var types = defOf(defs, target.class_type, "node " + id).input_types;
     (node.inputs || []).forEach(function (slot) {
       if (slot.link != null || slot.widget) return;
       var src = ueByType[String(slot.type)];
@@ -635,7 +651,7 @@ function adapt(uiGraph, defs, manifest, warn) {
   // error the user cannot act on; say it here instead.
   Object.keys(api).forEach(function (id) {
     var node = api[id];
-    var required = (defs.defs[node.class_type].input_types.required) || {};
+    var required = (defOf(defs, node.class_type, "node " + id).input_types.required) || {};
     Object.keys(required).forEach(function (name) {
       var type = specType(required[name]);
       if (type === AUTOGROW || type === DYNAMIC_COMBO) return;
@@ -737,7 +753,7 @@ function main(argv) {
   }
 }
 
-module.exports = { adapt: adapt, flattenWidgets: flattenWidgets,
+module.exports = { adapt: adapt, defOf: defOf, flattenWidgets: flattenWidgets,
                    flattenSubgraphs: flattenSubgraphs };
 
 if (require.main === module) {

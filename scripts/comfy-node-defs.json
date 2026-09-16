@@ -1,7 +1,8 @@
 {
- "_comment": "Raw INPUT_TYPES harvested from a real ComfyUI install by scripts/harvest-comfy-node-defs.py. Input ORDER is what scripts/adapt-workflow.js needs: the UI format stores widget values positionally and only names the ones that are linked.",
+ "_comment": "Raw INPUT_TYPES harvested from a real ComfyUI install by scripts/harvest-comfy-node-defs.py. Input ORDER is what scripts/adapt-workflow.js needs: the UI format stores widget values positionally and only names the ones that are linked. This is NOT a complete node list: classes_recorded is what was written down, class_count is what the install defined, and a class absent here may well exist - ask a running backend's /object_info whether a node exists (WORKPLAN 17l-b).",
  "comfyui_version": "0.32.0",
  "class_count": 3487,
+ "classes_recorded": 52,
  "missing": [
   "MarkdownNote",
   "Label (rgthree)",
