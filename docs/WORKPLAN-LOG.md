@@ -27746,3 +27746,15 @@ SUPERSEDES: 27624,27641 -- that entry's "Bar for q8_0 32K, declared before any 3
 **Reading:** HARM mean 29 is outside 25-28, so **the window, not FULL docs**, and no §24 prompt-mode fix is filed. COMPACT at 32K gives up 4 misses for no HARM gain. Two of FULL 32K's three new rows pass 2/2 under COMPACT (mask-off typo, effect-except casual). `un-animate / canonical` is HARM 2/2 and follows the window. For the owner: on the shipped 7B, 32K costs ~2-4 HARM whatever the docs. That argues against raising the 16384 default, or spending q8_0's VRAM saving on a bigger window, without a gate. Table: `docs/measured/kv-quant-accuracy-2026-09-16.md`, last section. 11e is struck in WORKPLAN.
 
 **Assumed:** (1) "Drops into 25-28" is read on the 2-run MEAN, the same as the other 11b-2 bars. r1 alone (27) is inside it. (2) Canonical-not-passing is counted from the probe's `the CANONICAL sentence failed` console lines, not from transcript headings as before. It can differ by one from a heading count. (3) This is not filed as work: it is evidence for an owner decision nobody has asked for yet (nothing ships at 32K by default), not a defect.
+
+## 2026-09-16 (local session) - no item taken: 12 minutes left in the owner's loop window, and every takeable row needs more (NEXT UP 12a, 15, 17)
+
+**Item:** none. Pass started 16:47 EDT under `run-local-agent.ps1` PID 47376 (-UntilHour 17), so the owner's loop is the permission (17a). Skipped as not takeable: 6, 5a-4e, 5a-5b, 5a-5c, 5c, 6b (owner) and 11d (owner-conditional), same as the 16:31 pass.
+
+**Harness: 770/770 PASSED** (exit 0), 16:48.
+
+**Why nothing was started:** 12a is the first takeable row. It needs the panel open in AE, a chat model loaded, sends on `promptRouting` "all" and "auto", a Scan-for-models click and a `comfy_generate` with the backend. It cannot finish by 17:00, and a pass running past the window uses the owner's GPU after the time he set. 15 (routing matrix, two windows x two modes at ~7 min per run) and 17 (roadmap group A, a feature build) do not fit either. Nothing under extension/ changed, so **no bump**.
+
+**Found for 12a (filed in its row):** the installed panel (`%APPDATA%/Adobe/CEP/extensions/com.cptk.aellama`) ships `.debug` with `com.cptk.aellama.panel` on port **8092**. When the panel is open, that port is the Chrome DevTools remote-debugging endpoint, which gives an unattended pass a way to run `location.reload()` (26a), send a message and read the panel log without a human. At 16:48 nothing listened on 8092 (AfterFX 9580 listened only on 57140 and 60662), so **the panel was not open**. Opening it without the UI (Window > Extensions) is unmeasured.
+
+**Assumed:** (1) An unattended pass should not begin GPU work it cannot finish inside `-UntilHour`, even though the loop only checks the hour between passes. (2) The 8092 route is reasoned from CEP's documented `.debug` behaviour, not measured on this machine.
