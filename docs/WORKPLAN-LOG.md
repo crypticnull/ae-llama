@@ -27307,3 +27307,30 @@ No `extension/` change, so **no version bump**.
 **Bump: none.** extension/ unchanged.
 
 **Decision made unattended:** REFINED uses "2,682" for two different things: history left over (its correction table) and state size (its acceptance formula). They are close by coincidence (a ~2.7K state costs ~2.0K history chars). The row follows the formula and treats it as state size. Written into WORKPLAN §15. Next daytime pass: `--store-root` on `chat-probe.js` (§15 item 3) is repo-only; the §25 `outputPath` row needs chat-probe, which is night work.
+
+## 2026-09-16 (local session) - chat-probe --store-root: a probe never runs against the owner's memory store (§15 item 3)
+
+**Item:** `--store-root` on `chat-probe.js`, the next repo-only row of the "always takeable" list, as the 11:12 pass directed. DAYTIME pass, started 11:14 EDT inside the `-UntilHour 17` loop. Checked first that it was not done: no `store-root` or `storeRoot` anywhere outside WORKPLAN.
+
+**Harness: NOT RUN, on purpose.** Same reading as today's earlier daytime passes (17a is unanswered and CLAUDE.md's daytime rule is the written one). AE not touched. No backend, no GPU, no network, no full suite.
+
+**Changed:**
+- `scripts/lib/probe-store-root.js` (new): `resolve({storeRoot, dataRoot})`, `describe`, `cleanup`, `isInside`. By default it makes a fresh `aell-probe-store-*` folder under the OS temp. `--store-root D` is honoured and created if missing.
+- `scripts/chat-probe.js`: parses `--store-root`, and a bare flag becomes `""` so it is refused rather than turning into a temp store. `main()` resolves the store right after `reportSettingsOrigin()` and before the bridge check, AE or the model. It prints `store : <path> (<fate>)`, exits 2 on a refusal, and removes a temp root at exit unless `--keep`. It also sets `PROBE_STORE_ROOT`. The usage header lists the flag.
+- `tests/test-probe-store-root.js` (new, 31 checks) covers:
+  - temp roots: unique per run, outside the data folder, removed at exit, kept with `--keep`;
+  - named roots: created, never removed;
+  - refusals: roots inside the data folder (exact, nested, upper-case with a trailing separator, `..` spelling), and a bare or flag-shaped value;
+  - a prefix-sharing sibling (`AE-Llama-copy`) is allowed;
+  - cleanup refuses a folder without the prefix;
+  - the chat-probe wiring and its order.
+
+**Verified (stubs only):** test-probe-store-root ALL CHECKS PASSED. Negative control: with the data-folder check removed, 8 checks fail. `node --check scripts/chat-probe.js` passes. The 30 tests that mention chat-probe or scripts/lib all pass, including test-chat-probe and test-source-control-chars. chat-probe itself was not run, because it needs AE and the chat model.
+
+**Bump: none.** Nothing in extension/ changed.
+
+**Decisions made unattended** (also written into WORKPLAN §15 item 3):
+- A `--store-root` inside `Settings.dataRoot()` is refused, and no flag overrides that. REFINED §9's reason for the flag is that a probe must never write the owner's store.
+- A temp root is deleted at exit, so the seeded-store rows cannot pile up in %TEMP%.
+
+**Needs a later pass:** nothing reads `PROBE_STORE_ROOT` yet. When the memory store ships, chat-probe must hand that variable to the store's `opts.root`, or this seam protects nothing. The note is in §15 item 3. Next daytime pass: the §16f 1-2 row ("Persist `_floorMB`; launch-time `memory.used` read") is next in the always-takeable list. Check whether its launch-time read needs nvidia-smi, which is a daytime-forbidden GPU probe. The Option A deletions and §25 need chat-probe, which is night work.

@@ -27,6 +27,7 @@
  *   node scripts/chat-probe.js --carry-history  # the old shared history
  *   node scripts/chat-probe.js --variants       # the paraphrase matrix
  *   node scripts/chat-probe.js --route auto     # routed prompt (§24b)
+ *   node scripts/chat-probe.js --store-root D   # memory store folder (§15)
  *
  * VARIANTS. --variants runs each selected step's canonical sentence AND
  * every paraphrase it declares (casual / vague / typo'd), each as its own
@@ -92,6 +93,11 @@ const { spawn, execFileSync } = require("child_process");
 const ROOT = path.join(__dirname, "..");
 const EXT = path.join(ROOT, "extension");
 const HOSTSCRIPT = path.join(EXT, "jsx", "hostscript.jsx");
+const ProbeStore = require(path.join(__dirname, "lib", "probe-store-root.js"));
+// The memory store's root for this run (see main). Nothing reads it until
+// the store ships; it exists now so the store cannot default to the
+// owner's folder the day it does.
+let PROBE_STORE_ROOT = null;
 
 // ------------------------------------------------------------------ args
 
@@ -105,6 +111,10 @@ const OPT = {
   model: argValue("--model"),
   ctx: argValue("--ctx"),
   route: argValue("--route"),
+  // "" when the flag is given with no folder, so it is refused rather
+  // than silently falling back to a temp store.
+  storeRoot: argv.indexOf("--store-root") === -1 ? null
+    : (argValue("--store-root") || ""),
   keep: argv.indexOf("--keep") !== -1,
   afterFX: argValue("--afterfx"),
   reuseServer: argv.indexOf("--reuse-server") !== -1,
@@ -3560,6 +3570,14 @@ function main() {
   // Before any measurement: whose settings are these? (Throws unless
   // --defaults-ok when there is no settings file to read.)
   reportSettingsOrigin();
+  // Before anything could write one: whose memory store is this? A temp
+  // folder unless --store-root names one, never the owner's (§15 item 3).
+  const store = ProbeStore.resolve({ storeRoot: OPT.storeRoot,
+                                     dataRoot: Settings.dataRoot() });
+  for (const line of ProbeStore.describe(store, OPT.keep)) console.log(line);
+  if (!store.ok) process.exit(2);
+  PROBE_STORE_ROOT = store.root;
+  process.on("exit", function () { ProbeStore.cleanup(store, OPT.keep); });
 
   // --bridge-check: prove the AE round trip works before spending ten
   // minutes loading a model behind it.

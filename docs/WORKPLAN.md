@@ -145,7 +145,7 @@ NOTHING but the repo and are always takeable:
 | The four Option A prompt deletions, one per pass, each gated on `chat-probe --variants` | §15 | yes |
 | ~~`test-context-budget.js` starve row~~ DONE 2026-09-16 (2,728 chars of history at 16K with a 2,682-char state; ~990 chars of prompt growth left) | §15 | no |
 | Does the model pass `outputPath` when it queues a render? One `chat-probe` run decides whether §25 needs anything at all — a destination-less add leaves an item AE never renders | §25 | no |
-| `--store-root` on `chat-probe.js` | §15 | no |
+| ~~`--store-root` on `chat-probe.js`~~ **DONE 2026-09-16 (no bump, scripts/tests only)** | §15 | no |
 | Persist `_floorMB`; launch-time `memory.used` read | §16f 1-2 | yes |
 | Mid-render VRAM reading in the scratch comp | §16f 3 | no |
 | The 7B at ctx 16,384 and 20,480, fp16 vs `q8_0` KV, via a standalone launcher | §16f 4 | no |
@@ -3293,6 +3293,18 @@ Preparatory, non-shipping-surface, each verified by its own instrument:
 3. **A `--store-root` on `chat-probe.js`** defaulting to a temp
    directory, with provenance printed the way `reportSettingsOrigin`
    does. Harmless before the store exists; mandatory after.
+   **DONE 2026-09-16.** `scripts/lib/probe-store-root.js`, resolved in
+   `main()` right after `reportSettingsOrigin` and printed as a `store :`
+   line. Default: a fresh `aell-probe-store-*` folder under the OS temp,
+   removed at exit (kept with `--keep`). `--store-root D` is created if
+   missing and never removed. Decided unattended: a root INSIDE
+   `Settings.dataRoot()` (any case, `..` spelling) is REFUSED with exit 2,
+   with no override, because that folder is where the owner's store will
+   live; a bare `--store-root` with no folder is refused too, not read as
+   "temp". Nothing reads `PROBE_STORE_ROOT` yet. **When the store ships,
+   its constructor must be handed that variable in chat-probe**, or this
+   seam protects nothing. `tests/test-probe-store-root.js` pins it (31
+   checks; dropping the data-folder check turns 8 red).
 
 ### Build order when the gate opens (REFINED §10)
 
