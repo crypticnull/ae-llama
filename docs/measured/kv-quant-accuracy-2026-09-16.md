@@ -280,3 +280,46 @@ server stopped by PID after. Both transcripts say `tool docs: FULL`.
   user gets by raising Context size to 24576 or more. This pair cannot
   say whether the FULL prompt or the larger window is responsible, because
   `chat-probe` has no way to force the prompt mode. Filed as NEXT UP 11e.
+
+## 11e step 2, shipped (f16) 32K with COMPACT docs forced (loop pass, 16:32-16:46 EDT)
+
+**Question and bar, declared in the 11e row before either run:** with the
+prompt held at COMPACT (`chat-probe --prompt-mode compact`), does 32K HARM
+drop into shipped 16K's 25-28? If yes, FULL docs are the harm and
+`promptModeFor`'s threshold is a §24 fix. If not, the window is.
+
+Server `kv-quant-probe.js --serve --models 7B --ctx 32768 --kv shipped` (no
+`-ctk/-ctv`, n_ctx 32768, build b10240), `--rig-check` first (rigs OK),
+probe `--reuse-server --ctx 32768 --prompt-mode compact --temperature 0
+--variants --steps 1-11,15-36`, nothing else on 8737, server stopped by PID
+after. Both transcript headers say `tool docs COMPACT (forced by
+--prompt-mode; the window alone gives FULL)`. Pass/miss/HARM from the
+probe's own summary line; canonical not passing counted from its `the
+CANONICAL sentence failed` lines.
+
+| run | transcript | pass | miss | HARM | canonical not passing |
+|---|---|---|---|---|---|
+| f16 32K COMPACT T0 r1 | 20-39-07 | 54 | 18 | 27 | 14 |
+| f16 32K COMPACT T0 r2 | 20-45-38 | 50 | 18 | 31 | 15 |
+| (f16 32K FULL r1/r2, above) | | 53 / 56 | 14 / 14 | 32 / 29 | 13 / 13 |
+| (shipped 16K COMPACT bar, 4 runs) | | 53-60 | 12-18 | 25-28 | 12-14 |
+
+- 2-run means COMPACT 32K: pass 52, miss 18, **HARM 29**, canonical 14.5.
+  FULL 32K: 54.5 / 14 / 30.5 / 13.
+- **By the declared bar: HARM did not drop into 25-28, so FULL docs are
+  not the harm; the 32K window is.** No `promptModeFor` fix follows.
+- Forcing COMPACT at 32K is not better overall, only different: misses
+  rise 14 -> 18 and pass falls 54.5 -> 52, so FULL docs do help recall at
+  32K. HARM is flat within noise (29 vs 30.5).
+- The three FULL-32K rows: `take a mask off again / typo` pass, pass (FULL
+  HARM, HARM); `an effect on everything except one layer / casual` pass,
+  pass (FULL miss, miss); `un-animate the squares / canonical` HARM, HARM
+  (FULL pass, HARM; shipped 16K 0 of 4). Two of the three were the FULL
+  prompt's; the third follows the window. `take a mask off again / casual`
+  ("get that oval off HELLO") is HARM 2 of 2 here, via `set_mask` instead
+  of `delete_mask`; not checked against the 16K transcripts.
+- **Reading for the owner:** on the shipped 7B, a 32K window scores
+  about 2-4 more HARM than 16K whichever doc form it gets. That is evidence
+  against raising the 16384 default, and against spending q8_0's VRAM
+  saving (11c) on a bigger window without its own gate. n=2 at T=0 on a
+  4-slot server that is not batch-invariant, so it is a lean, not a proof.

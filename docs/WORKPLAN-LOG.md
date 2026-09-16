@@ -27732,3 +27732,17 @@ SUPERSEDES: 27624,27641 -- that entry's "Bar for q8_0 32K, declared before any 3
 **Not done: step 2** (COMPACT at 32K, r1+r2 on the model). It was 16:30 when step 1 landed, and the loop stops at 17:00. Two 32K `--variants` runs plus a server would take GPU time past the owner's window. The exact commands are now in the 11e row.
 
 **No bump:** nothing under extension/ changed.
+
+## 2026-09-16 (local session) - 11e step 2, f16 32K with COMPACT docs forced: the 32K HARM rise is the window, not FULL docs (NEXT UP 11e, §24, §13b)
+
+**Item:** NEXT UP 11e, step 2. Pass started 16:31 EDT, in daytime, under `run-local-agent.ps1` PID 47376 (-UntilHour 17), so the owner's loop is the permission (17a). Skipped as not takeable: 6, 5a-4e, 5a-5b, 5a-5c, 5c, 6b (owner) and 11d (owner-conditional). The previous pass left step 2 because it was 16:30 with the loop ending at 17:00. Each 32K run took ~7 min in 11b-2, so two runs fit, and they did (16:32-16:46).
+
+**Harness: 770/770 PASSED** at the start. Nothing under extension/ changed (docs only), so **no bump** and no re-run.
+
+**Bar, declared in the 11e row before either run:** if HARM drops into shipped 16K's 25-28, FULL docs are the harm (a `promptModeFor` fix). If not, the window is.
+
+**Measured:** `kv-quant-probe.js --serve --models 7B --ctx 32768 --kv shipped`, then `--rig-check` (OK). Then `chat-probe --reuse-server --ctx 32768 --prompt-mode compact --temperature 0 --variants --steps 1-11,15-36`, twice. Headers say `COMPACT (forced by --prompt-mode; the window alone gives FULL)`. r1 `logs/chat-probe-2026-09-16T20-39-07.md` 54/18/27/14. r2 `20-45-38.md` 50/18/31/15 (pass/miss/HARM/canonical not passing). Means 52/18/29/14.5. FULL 32K was 54.5/14/30.5/13. The server was stopped by PID (llama-server 21324) and 8737 is closed. AE 9580 was not touched.
+
+**Reading:** HARM mean 29 is outside 25-28, so **the window, not FULL docs**, and no §24 prompt-mode fix is filed. COMPACT at 32K gives up 4 misses for no HARM gain. Two of FULL 32K's three new rows pass 2/2 under COMPACT (mask-off typo, effect-except casual). `un-animate / canonical` is HARM 2/2 and follows the window. For the owner: on the shipped 7B, 32K costs ~2-4 HARM whatever the docs. That argues against raising the 16384 default, or spending q8_0's VRAM saving on a bigger window, without a gate. Table: `docs/measured/kv-quant-accuracy-2026-09-16.md`, last section. 11e is struck in WORKPLAN.
+
+**Assumed:** (1) "Drops into 25-28" is read on the 2-run MEAN, the same as the other 11b-2 bars. r1 alone (27) is inside it. (2) Canonical-not-passing is counted from the probe's `the CANONICAL sentence failed` console lines, not from transcript headings as before. It can differ by one from a heading count. (3) This is not filed as work: it is evidence for an owner decision nobody has asked for yet (nothing ships at 32K by default), not a defect.
