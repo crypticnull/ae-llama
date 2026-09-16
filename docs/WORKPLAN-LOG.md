@@ -27668,3 +27668,17 @@ SUPERSEDES: 27624,27641 -- that entry's "Bar for q8_0 32K, declared before any 3
 **Changed:** docs only. Measured doc gets a 32K section. WORKPLAN 11b-2 now says q4_0 16K next, then a shipped f16 32K pair (lower priority: it only matters if the owner raises the 16384 default) to separate KV type from prompt mode. If f16 32K fails the same rows, the regression is FULL mode, which is what a user gets by raising Context size, and that becomes a §24 filing. 11c's needs changed from `11b-2` to `AE, chat model`.
 
 **Assumed:** (1) Dropping r3/r4 is right, because no result could pass the per-row clause. (2) 11c may ship q8_0 at 16K on its GREEN now without waiting for q4_0, since q4_0 would be a further step and not a precondition. The owner or a later pass can put the gate back. (3) Counting verdicts from the `## N. scenario — verdict` headings reproduces the recorded r4 totals exactly (53/18/28/14), so I used that count and not variants-compare.
+
+## 2026-09-16 (local session) - KV quant 11b-2, q4_0 16K: RED and final, q4_0 on the KEY cache garbles every answer from a healthy server (NEXT UP 11b-2, §13b)
+
+**Item:** NEXT UP 11b-2, q4_0 16K. The rows above it are owner-only, blocked or struck. Pass started 15:42 EDT, daytime; `run-local-agent.ps1` PID 47376 is running, so the owner-started loop is the permission (17a).
+
+**Harness: 770/770 PASSED** at the start. Nothing under extension/ changed (docs only), so **no bump** and no re-run.
+
+**Measured:** `kv-quant-probe.js --serve --models 7B --ctx 16384 --kv q4_0` (build b10240, 4 slots), `--rig-check` OK, then r1 `logs/chat-probe-2026-09-16T19-55-52.md` at T=0 over steps 1-11,15-36: **0 pass / 99 miss / 0 HARM / 33 canonical not passing**. Every turn was unparseable `{"reply":"<< 3 1 1 5 ...` noise, and no tool ran. It took ~12 min, not ~7, because every turn ran to the token cap. r2 was not run, because no run can lift a 0-pass row.
+
+**Isolated (sub-minute, throwaway server on 8791, one plain no-tools prompt at T=0):** f16/f16 answers correctly. K q4_0 + V f16 gives "The capital capital of France is Paris Paris Paris...". K q8_0 + V q4_0 answers correctly. q4_0/q4_0 with `-fa on` or `-np 1` is still garbled. So the KEY cache at q4_0 breaks this model on this build. The server loads and reports healthy, so 11c's detect-and-fallback (which catches a REJECTED flag) cannot catch it. Table in `docs/measured/kv-quant-accuracy-2026-09-16.md`. All llama-servers stopped by PID; none are left running. AE 9580 was not touched.
+
+**Filed:** 11b-2's head is now the lower-priority f16 32K pair. 11c now says to hard-code q8_0, add a stub assert that the argv never carries `-ctk q4_0`, and never expose the K type as a setting. New **11d**: the K q8_0 + V q4_0 mix, VRAM half first. It closes if the saving is under ~150 MiB at 16K. That threshold is my own assumption: a matrix costs ~15 min of the owner's GPU time.
+
+**Assumed:** (1) A one-run RED is final when the run passes nothing. (2) One correct answer from K q8_0 + V q4_0 is enough to file 11d, but not enough to call that mix safe.

@@ -196,3 +196,44 @@ else on 8737, server stopped by PID after. Counted from each transcript's
   same rows, the regression is `promptModeFor`'s FULL mode, which is the
   mode a user gets by raising Context size.
 - r3/r4 not run: no result could turn this bar green.
+
+## 11b-2, q4_0 16K r1: RED and final, the K cache at q4_0 breaks the model outright (loop pass, 15:43-16:05 EDT)
+
+Server `kv-quant-probe.js --serve --models 7B --ctx 16384 --kv q4_0`
+(`-ctk q4_0 -ctv q4_0`, n_ctx 16384, 4 slots, build b10240), `--rig-check`
+first (rigs OK), probe `--reuse-server --temperature 0 --variants --steps
+1-11,15-36 --label "q4_0 16K T0 r1"`, nothing else on 8737, server stopped
+by PID after.
+
+| run | transcript | pass | miss | HARM | canonical not passing |
+|---|---|---|---|---|---|
+| q4_0 16K T0 r1 | 19-55-52 | 0 | 99 | 0 | 33 |
+
+Every turn is `Model returned unparseable output: { "reply" :"<< 3 1 1 1
+5 ...`: numbers and spaces until the token cap, so no tool ever ran. r2
+was not run, because no second run can move a 0-pass row.
+
+**The step-1 fixture is not the cause, and neither is the probe.** A plain
+chat request with no tools and no grammar ("What is the capital of
+France?", T=0, 40 tokens) answered `The capital capital of pérdida`.
+Then the same prompt on a throwaway server (port 8791, same model and
+flags, only the cache types changed):
+
+| `-ctk` | `-ctv` | extra | answer |
+|---|---|---|---|
+| f16 | f16 | | The capital of France is Paris. |
+| q4_0 | f16 | | The capital capital of France is Paris Paris Paris Paris Paris Paris. |
+| q8_0 | q4_0 | | The capital of France is Paris. |
+| q4_0 | q4_0 | `-fa on` | The capital capital of France is Paris Paris Paris Paris Paris Paris. |
+| q4_0 | q4_0 | `-np 1` | The capital capital of France is Paris Paris Paris Paris Paris Paris. |
+
+- **The KEY cache at q4_0 is what breaks it.** With V alone at q4_0 (K at
+  q8_0) this one prompt stays correct. Forcing flash attention on, or using
+  one slot, does not help.
+- This fails SILENTLY. The server loads, reports healthy and answers every
+  request. 11c's detect-and-fallback only catches a server that REJECTS
+  the flag, so it would never catch this. q4_0 on K must never be a value
+  the panel can pass.
+- A `q8_0` K + `q4_0` V mix is the one smaller cache left that this
+  measurement does not rule out. It is one sentence, not a matrix; filed
+  as NEXT UP 11d, lower priority.
