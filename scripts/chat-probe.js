@@ -27,6 +27,8 @@
  *   node scripts/chat-probe.js --carry-history  # the old shared history
  *   node scripts/chat-probe.js --variants       # the paraphrase matrix
  *   node scripts/chat-probe.js --route auto     # routed prompt (§24b)
+ *   node scripts/chat-probe.js --ctx 32768 --prompt-mode compact
+ *                                  # force the tool-doc form (NEXT UP 11e)
  *   node scripts/chat-probe.js --store-root D   # memory store folder (§15)
  *   node scripts/chat-probe.js --reuse-server --label "q8_0 16K"
  *                                  # name a server this probe did not start
@@ -114,6 +116,8 @@ const OPT = {
   model: argValue("--model"),
   ctx: argValue("--ctx"),
   route: argValue("--route"),
+  // "compact" | "full" | null (the window decides, as in the panel).
+  promptMode: argValue("--prompt-mode"),
   // "" when the flag is given with no folder, so it is refused rather
   // than silently falling back to a temp store.
   storeRoot: argv.indexOf("--store-root") === -1 ? null
@@ -464,6 +468,16 @@ if (OPT.temperature !== null) {
   Settings.get().temperature = t;
 }
 
+// --prompt-mode compact|full: NOT a setting, the panel has no such knob.
+// Tools.promptModeFor ties the doc form to the window, so every 32K run
+// changed prompt and window together and 11b-2 could not tell which one
+// raised HARM (NEXT UP 11e). This separates them for the probe only.
+if (argv.indexOf("--prompt-mode") !== -1 &&
+    OPT.promptMode !== "compact" && OPT.promptMode !== "full") {
+  console.error("--prompt-mode wants compact or full, got " + OPT.promptMode);
+  process.exit(2);
+}
+
 // --route auto|all: in-memory like --ctx, so a probe never rewrites the
 // owner's panel setting.
 if (OPT.route) {
@@ -662,7 +676,7 @@ function sendMessage(text, done) {
         // In step with main.js: the prompt form follows the window, and
         // promptRouting (--route) narrows it the same way.
         turnState = stateJson;
-        po = Tools.promptOptsFor(s, text, history);
+        po = probePromptOpts(s, text, history, OPT.promptMode);
         round.route = po.routeInfo;
         if (po.routeInfo) {
           console.log("   route: " + (po.routeInfo.matched
@@ -3544,13 +3558,33 @@ function pickSteps() {
   return r.picked;
 }
 
+/*
+ * Tools.promptOptsFor, the panel's own path, with --prompt-mode laid over
+ * its doc form. Routing and everything else stay the panel's decision.
+ */
+function probePromptOpts(s, text, history, promptMode) {
+  const po = Tools.promptOptsFor(s, text, history);
+  if (promptMode === "compact") po.opts.compact = true;
+  else if (promptMode === "full") po.opts.compact = false;
+  return po;
+}
+
+// The doc form a run really used, and whether it was forced: a forced
+// transcript must never read like one the window chose.
+function toolDocsLabel(s, promptMode) {
+  const byWindow = Tools.promptModeFor(s.ctxSize).compact ? "COMPACT" : "FULL";
+  if (promptMode !== "compact" && promptMode !== "full") return byWindow;
+  return promptMode.toUpperCase() + " (forced by --prompt-mode; the window " +
+    "alone gives " + byWindow + ")";
+}
+
 function startModel(cb) {
   const s = Settings.get();
   const modelPath = OPT.model || s.modelPath;
   console.log("-- model:   " + modelPath);
   console.log("-- ctx:     " + s.ctxSize + ", maxRounds " + s.maxRounds +
               ", temp " + s.temperature + ", tool docs " +
-              (Tools.promptModeFor(s.ctxSize).compact ? "COMPACT" : "FULL") +
+              toolDocsLabel(s, OPT.promptMode) +
               ", routing " + (s.promptRouting || "all"));
   Llama.on("status", function (state, detail) {
     if (state === "error") console.log("!! llama: " + detail);
@@ -3647,8 +3681,7 @@ function transcriptHeader(stamp, s, opt, serverProps) {
     "- model: `" + (opt.model || s.modelPath) + "`",
     "- ctx " + s.ctxSize + ", temperature " + s.temperature +
       ", maxRounds " + s.maxRounds,
-    "- tool docs: " +
-      (Tools.promptModeFor(s.ctxSize).compact ? "COMPACT" : "FULL") +
+    "- tool docs: " + toolDocsLabel(s, opt.promptMode) +
       " (Tools.promptModeFor), routing " + (s.promptRouting || "all")];
   if (opt.label) out.push("- label: " + opt.label);
   if (opt.reuseServer) {
@@ -4052,7 +4085,7 @@ function main() {
 if (require.main === module) {
   main();
 } else {
-  module.exports = { STEPS, parseSteps, squares, transcriptHeader, describeServerProps, undoProbe, SIG_FN, READ_COMP,
+  module.exports = { STEPS, parseSteps, squares, transcriptHeader, probePromptOpts, toolDocsLabel, describeServerProps, undoProbe, SIG_FN, READ_COMP,
                      bridgeWrapper, sweepImports, samePath, rememberGenerated,
                      generated, runPrepare, sweepScript, rememberPrecomp,
                      precomps, toolEntry, rigPlan, rigScript, resetHistory,

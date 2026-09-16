@@ -3702,5 +3702,51 @@ function icons(state) {
          "the whole suite is expressible as one range");
 }
 
+// ---- --prompt-mode: the doc form, separated from the window (NEXT UP 11e).
+// 2026-09-16: every 32K run in 11b-2 changed FULL docs and the window
+// together, so HARM ~30 at 32K could not be pinned on either.
+{
+  const T = ToolsMod;
+  const big = { ctxSize: 32768, promptRouting: "all" };
+  const small = { ctxSize: 16384, promptRouting: "all" };
+  assert(probe.probePromptOpts(big, "hi", [], null).opts.compact === false &&
+         probe.probePromptOpts(small, "hi", [], null).opts.compact === true,
+         "with no --prompt-mode the window decides, exactly as the panel does");
+  const forced = probe.probePromptOpts(big, "hi", [], "compact");
+  assert(forced.opts.compact === true,
+         "--prompt-mode compact at 32K gives compact docs");
+  assert(T.buildSystemPrompt("", forced.opts) ===
+         T.buildSystemPrompt("", T.promptOptsFor(small, "hi", []).opts),
+         "a forced COMPACT prompt at 32K is byte-identical to the 16K one");
+  assert(probe.probePromptOpts(small, "hi", [], "full").opts.compact === false,
+         "--prompt-mode full at 16K gives full docs");
+  const text = "add a gaussian blur to the logo";
+  const routed = probe.probePromptOpts(
+    { ctxSize: 32768, promptRouting: "auto" }, text, [], "compact");
+  const plain = T.promptOptsFor(
+    { ctxSize: 32768, promptRouting: "auto" }, text, []);
+  assert(routed.opts.compact === true &&
+         JSON.stringify(routed.routeInfo) === JSON.stringify(plain.routeInfo),
+         "the override leaves routing to the panel's own decision");
+  const s32 = { modelPath: "m", ctxSize: 32768, temperature: 0, maxRounds: 6 };
+  const h = probe.transcriptHeader("STAMP", s32,
+    { reuseServer: false, promptMode: "compact" }, null).join("\n");
+  assert(/tool docs: COMPACT \(forced by --prompt-mode; the window alone gives FULL\)/
+           .test(h), "the header prints the forced mode (got: " + h + ")");
+  const w = probe.transcriptHeader("STAMP", s32, { reuseServer: false }, null)
+    .join("\n");
+  assert(/tool docs: FULL \(Tools/.test(w) && !/forced/.test(w),
+         "an unforced header is unchanged (got: " + w + ")");
+  const cp = require("child_process");
+  for (const bad of [["--prompt-mode", "tiny"], ["--prompt-mode"]]) {
+    const r = cp.spawnSync(process.execPath,
+      [require("path").join(__dirname, "../scripts/chat-probe.js")].concat(bad),
+      { encoding: "utf8", timeout: 20000 });
+    assert(r.status === 2 && /--prompt-mode wants compact or full/.test(r.stderr),
+           "a bad --prompt-mode is refused with exit 2 before touching AE (" +
+           bad.join(" ") + ": status " + r.status + ", stderr " + r.stderr + ")");
+  }
+}
+
 console.log(failed ? "\n" + failed + " assertion(s) failed"
                    : "\nall chat-probe verdict tests passed");

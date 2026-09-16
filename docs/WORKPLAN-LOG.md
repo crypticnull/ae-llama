@@ -27718,3 +27718,17 @@ SUPERSEDES: 27624,27641 -- that entry's "Bar for q8_0 32K, declared before any 3
 **Hand-off for later passes:** `chat-probe` WITHOUT `--reuse-server` now runs on a q8_0 cache, because it goes through `Llama.start`. A "shipped" baseline taken that way from here on is q8_0, not f16. `kv-quant-probe --kv shipped` is still f16. 11d (mixed K q8_0 + V q4_0) is unblocked by this, but it is lower priority.
 
 **Assumed:** (1) Holding the bump for 12a beats following the brief's bump rule to the letter. The rule exists so verified fixes reach panels, and this bump would also ship unverified ones. (2) The "V cache requires flash attention" refusal shape is reasoned, not measured, because build 10240 does not print it. It is matched only if it names the cache.
+
+## 2026-09-16 (local session) - chat-probe --prompt-mode compact|full: the doc form can be forced apart from the window (NEXT UP 11e step 1)
+
+**Item:** NEXT UP 11e, step 1. Pass started 16:25 EDT, in daytime, under `run-local-agent.ps1` PID 47376 (the owner's loop, so the permission, 17a). Skipped as not takeable: 6, 5a-4e, 5a-5b, 5a-5c, 5c, 6b (owner), and 11d (its row says "only if the owner wants more headroom than q8_0 gives").
+
+**Harness: 770/770 PASSED** at the start and again after the change (nothing under extension/ changed).
+
+**Changed (scripts/chat-probe.js):** `--prompt-mode compact|full`. `probePromptOpts(s, text, history, mode)` calls the panel's own `Tools.promptOptsFor` and then sets only `opts.compact`, so routing stays the panel's decision. `toolDocsLabel` feeds both the console `-- ctx:` line and the transcript header: a forced run prints `COMPACT (forced by --prompt-mode; the window alone gives FULL)`, and an unforced one prints exactly what it printed before. A bad or missing value exits 2 before anything touches AE or a server. Not a setting: the panel has no such knob, and the probe must not invent one in settings.json.
+
+**Stubs (tests/test-chat-probe.js, 718 ok):** with no flag the window decides at 16K and at 32K. A forced COMPACT at 32K builds a prompt BYTE-IDENTICAL to the 16K one. A forced FULL at 16K is full. The override leaves `routeInfo` equal to the panel's under `promptRouting: "auto"`. The header prints the forced mode, and an unforced header is unchanged. `--prompt-mode tiny` and a bare `--prompt-mode` both exit 2 (spawned for real). Whole stubbed suite: 109/109 files green.
+
+**Not done: step 2** (COMPACT at 32K, r1+r2 on the model). It was 16:30 when step 1 landed, and the loop stops at 17:00. Two 32K `--variants` runs plus a server would take GPU time past the owner's window. The exact commands are now in the 11e row.
+
+**No bump:** nothing under extension/ changed.
