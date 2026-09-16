@@ -27638,3 +27638,17 @@ SUPERSEDES: 27609,27624 -- that entry's q8_0 r1/r2 totals (HARM 22/31, pass 57/5
 **Filed:** NEXT UP 33, because `chat-probe --steps 1-11,15-36` silently ran steps 1 and 15 only (`parseInt` per comma piece). That cost one ~1 min run, which was thrown away. The 11b-2 row now gives the literal list, and its next step is q8_0 32K, with its bar declared before any 32K run (measured doc, last section). 11c stays gated until 32K is graded.
 
 **Assumed:** reading the parenting clause by its intent is a judgement made after seeing r3/r4. It rests only on shipped data that already existed, and it is written down so the owner or a later pass can overturn it. If it is overturned, q8_0 16K is RED on that one row and 11c should not ship.
+
+## 2026-09-16 (local session) - chat-probe --steps accepts a-b ranges and refuses anything else before touching AE (NEXT UP 33)
+
+**Item:** NEXT UP 33, the first row not struck or owner-gated (33 sits above 11b-2). Pass started 15:17 EDT, daytime; `run-local-agent.ps1` PID 47376 (-UntilHour 17) is running, so the owner-started loop is the permission (17a).
+
+**Harness: 770/770 PASSED** at the start. Nothing under extension/ changed (scripts/chat-probe.js, tests/test-chat-probe.js, docs), so **no bump** and no re-run.
+
+**Changed:** `scripts/chat-probe.js parseSteps(spec, count)` (exported) turns `1-11,15,17-20` into 0-based indices in the order given, a repeated step once; any piece that is not an integer or an ascending `a-b` inside 1..count (`x`, `5-3`, `0`, `37`, `3-40`, `1-2-3`, an empty piece from a trailing comma) goes to `bad`. `pickSteps()` exits 2 on any bad piece or an empty pick with `!! --steps <spec>: not understood: <pieces>. Understood: <steps>. Use integers or a-b ranges within 1-36.`, and `main()` now calls it FIRST, before settings, the store or AE, so a typo costs nothing. Previously an out-of-range number was also dropped silently; it is refused now too.
+
+**Verified:** `node tests/test-chat-probe.js` all pass (4 new assertions: ranges, spaces/duplicates, the seven refused shapes, the whole suite as one range). CLI: `node scripts/chat-probe.js --steps 1-11,zz,5-3` printed the refusal listing 1..11 as understood and exited 2 with no AE contact.
+
+**Assumed:** refuse rather than run the understood part. A partial run is the exact failure this item came from (a whole run that measured the wrong steps).
+
+**Note for 11b-2:** its row still spells `--steps` as a literal list; that still works, and ranges are now also safe.

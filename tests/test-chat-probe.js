@@ -3682,5 +3682,25 @@ function icons(state) {
          "a probe that started its own server adds no reuse lines");
 }
 
+// ---- --steps: ranges expand, anything else is refused, never dropped.
+// 2026-09-16: "--steps 1-11,15-36" ran steps 1 and 15 only, silently.
+{
+  const r = probe.parseSteps("1-3,15,17-18", 36);
+  assert(JSON.stringify(r.picked) === "[0,1,2,14,16,17]" && !r.bad.length,
+         "ranges expand to every step in them (got " + JSON.stringify(r) + ")");
+  const d = probe.parseSteps("2, 2,1-2", 36);
+  assert(JSON.stringify(d.picked) === "[1,0]" && !d.bad.length,
+         "spaces are tolerated and a repeated step runs once (got " +
+         JSON.stringify(d) + ")");
+  const x = probe.parseSteps("1,x,5-3,0,37,3-40,1-2-3,", 36);
+  assert(JSON.stringify(x.picked) === "[0]" &&
+         JSON.stringify(x.bad) === '["x","5-3","0","37","3-40","1-2-3",""]',
+         "non-integers, reversed or out-of-range ranges and empty pieces " +
+         "are reported, not dropped (got " + JSON.stringify(x) + ")");
+  assert(probe.parseSteps("1-" + probe.STEPS.length, probe.STEPS.length)
+           .picked.length === probe.STEPS.length,
+         "the whole suite is expressible as one range");
+}
+
 console.log(failed ? "\n" + failed + " assertion(s) failed"
                    : "\nall chat-probe verdict tests passed");

@@ -3506,11 +3506,42 @@ const STEPS = [
 
 // ------------------------------------------------------------------ run
 
+/*
+ * "--steps 1-11,15,17-20" -> 0-based indices, in the order given. Every
+ * piece must be a plain integer or an a-b range inside 1..count; anything
+ * else lands in `bad`. The old parser ran parseInt on each piece, so
+ * "1-11" silently meant step 1 and a whole 11b-2 run was wasted
+ * (2026-09-16).
+ */
+function parseSteps(spec, count) {
+  const picked = [];
+  const bad = [];
+  String(spec).split(",").forEach(raw => {
+    const piece = raw.trim();
+    const m = /^(\d+)(?:-(\d+))?$/.exec(piece);
+    const a = m ? parseInt(m[1], 10) : NaN;
+    const b = m && m[2] !== undefined ? parseInt(m[2], 10) : a;
+    if (!m || a < 1 || b > count || b < a) { bad.push(piece); return; }
+    for (let n = a; n <= b; n++) {
+      if (picked.indexOf(n - 1) < 0) picked.push(n - 1);
+    }
+  });
+  return { picked, bad };
+}
+
 function pickSteps() {
   if (!OPT.steps) return STEPS.map((s, i) => i);
-  return OPT.steps.split(",")
-    .map(n => parseInt(n, 10) - 1)
-    .filter(i => i >= 0 && i < STEPS.length);
+  const r = parseSteps(OPT.steps, STEPS.length);
+  if (r.bad.length || !r.picked.length) {
+    console.error("!! --steps " + OPT.steps + ": not understood: " +
+                  (r.bad.length ? r.bad.join(", ") : "(nothing)") +
+                  ". Understood: " +
+                  (r.picked.length ? r.picked.map(i => i + 1).join(",")
+                                   : "nothing") +
+                  ". Use integers or a-b ranges within 1-" + STEPS.length + ".");
+    process.exit(2);
+  }
+  return r.picked;
 }
 
 function startModel(cb) {
@@ -3673,6 +3704,7 @@ function writeTranscript(rows) {
 }
 
 function main() {
+  pickSteps();
   if (!AFTERFX) {
     console.error("AfterFX.exe not found — pass --afterfx <path>");
     process.exit(2);
@@ -4020,7 +4052,7 @@ function main() {
 if (require.main === module) {
   main();
 } else {
-  module.exports = { STEPS, squares, transcriptHeader, describeServerProps, undoProbe, SIG_FN, READ_COMP,
+  module.exports = { STEPS, parseSteps, squares, transcriptHeader, describeServerProps, undoProbe, SIG_FN, READ_COMP,
                      bridgeWrapper, sweepImports, samePath, rememberGenerated,
                      generated, runPrepare, sweepScript, rememberPrecomp,
                      precomps, toolEntry, rigPlan, rigScript, resetHistory,
