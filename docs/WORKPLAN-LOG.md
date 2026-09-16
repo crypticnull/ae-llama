@@ -27114,7 +27114,7 @@ No `extension/` change, so **no version bump**.
 
 ### Hit, needs a human eye
 
-- **A concurrent session's commit swept this pass's in-progress edits.** Commit 4a74e57 ("Queue: the heartbeat elapsed clock runs backwards", 10:44, already pushed) contains my first drafts of the three `.ps1` files and `tests/test-ae-crash-flag.js`, next to its own docs change. It was committed while those drafts were mid-edit, and the pushed version still had the nested-array bug. My commit on top carries the fix and the rest. I did not rewrite shared history. Two sessions working one checkout, each running `git commit -a` or `git add -A`, will do this again.
+- **A concurrent session's commit swept this pass's in-progress edits.** Commit 4a74e57 ("Queue: the heartbeat elapsed clock runs backwards", 10:44, already pushed) contains this pass's changes to the three `.ps1` files and `tests/test-ae-crash-flag.js` (including the nested-array fix, checked with `git show`), next to its own docs change. `tests/test-host-dialogs.js` was still mid-edit and missed it. My commit f966f0d carries that file and the docs. I did not rewrite shared history. Two sessions working one checkout, each running `git commit -a` or `git add -A`, will do this again.
 - §21 step 1 (which key opens AE NORMALLY) is still an owner-eye measurement. Filed as NEXT UP 22a together with step 4.
 
 ### Decisions I made unattended
