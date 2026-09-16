@@ -25529,3 +25529,58 @@ reference that makes a gate pass is loosening the test.
   three entries is the whole change.
 - **5a-4f**: where sdxl's 2.8x goes unpinned at 8 GB rooms.
 - 5a-4c struck; §18 P7c step 2g carries the table.
+
+## 2026-09-16 (local session) - sdxl's 2.8x at an 8 GB card's room is all sampling, a steady per-step stream, and the gate stays 12
+
+**Item:** NEXT UP 5a-4f / WORKPLAN 18 P7c step 2g - where does sdxl's time
+go unpinned at small rooms, before deciding 8 GB is out.
+
+**Harness: 770/770 PASSED** at the start of the pass. **No bump**: nothing
+under `extension/` changed. Items above it: 3 blocked on the owner, 5a-4e
+is the owner's, everything else struck, so 5a-4f was the first takeable.
+
+### How
+
+The backend log carries no timestamps, so the shipped unpinned boot was
+started by hand on 8288 (`--disable-pinned-memory`, no RAM shim) with
+stdout piped through a stamper that splits on `\r` as well as `\n`, which
+turns every tqdm tick into a timed line. Driver `local/phase-run.sh`,
+stamper `local/ts.js`, logs `local/phase-sdxl-{card,4937,6500,8000}-a.log`
+(all git-ignored). Room via `scripts/vram-ballast.py`, seed 12345, probe
+`catalog-vram-probe.js --entry sdxl`.
+
+### Measured (RTX 5090, AE running, card 1 583 MiB before)
+
+| room MiB | encode done | init done | sampling | it/s | backend s | png |
+|---|---|---|---|---|---|---|
+| whole card | 0.98 | 2.50 | 1.42 | 12.0 | 4.27 | 72bfc2... |
+| 8 000 | - | - | 1.41 | 11.9 | 4.21 | identical |
+| 6 500 | - | - | 3.35 | 5.4 | 6.18 | identical |
+| 4 937 | 0.95 | 2.83 | 8.41 | 2.15 | 11.61 | identical |
+
+(seconds from `got prompt`; 4 937 = 8 GB card minus AE_RESIDENT_MB.)
+At 4 937 every step from 2 to 20 took 0.46-0.49 s. Probe peaks: 31 885,
+31 908, 31 592 MiB of 32 607, i.e. ~700-1 000 MiB left free each time.
+Backend killed by port after each run; card back at 1 564 MiB.
+
+### Reading, and what I assumed
+
+- Load, encode, init and VAE do not move with room. The whole 2.7x is
+  the sampler, at a constant per-step rate, so it is DynamicVRAM
+  streaming part of the 4 896 MB fp16 UNet every step. It scales with
+  steps and resolution; it is not a first-run cost that a second image
+  would skip. 11.61 s matches 5a-4c's 11.29/11.85, so one run per room
+  was enough for a phase split.
+- Full speed returns between 6 500 and 8 000 MiB of room. 6 500 is 1.5x
+  and would pass the 2x bar, but no real card has that room with AE
+  (8 GB minus AE is 4 937), so **the gate stays 12** and I did not bend
+  the bar.
+- The lever is a smaller UNet. Filed as **5a-4g**: fp8 sdxl, with the
+  two core routes I found in the vendor tree (a global
+  `--fp8_e4m3fn-unet` boot flag, which would recast every other entry,
+  or a per-graph `UNETLoader.weight_dtype` cast, which needs a UNet-only
+  file). Neither measured tonight: the item was diagnosis only.
+
+### Filed (WORKPLAN)
+
+- 5a-4f struck with the table in 18 P7c step 2g; **5a-4g** added.
