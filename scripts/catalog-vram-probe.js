@@ -58,6 +58,7 @@ const fs = require("fs");
 const path = require("path");
 const http = require("http");
 const { spawn } = require("child_process");
+const curve = require("./lib/vram-curve");
 
 const ROOT = path.join(__dirname, "..");
 const EXT = path.join(ROOT, "extension");
@@ -221,6 +222,32 @@ function writeTranscript() {
                          m.minVramGB].join(" | ") + " |");
     });
     lines.push("");
+  }
+  /* The samples, kept. This probe streamed nvidia-smi at 250 ms from the
+   * day it was written and then reported one number off it; when §18 P7c
+   * step 2c asked whether ltx-small's peak still held the text encoder,
+   * the only honest answer was "re-run it on the owner's GPU". It writes
+   * the series down now, so the NEXT question can be asked of a run that
+   * has already happened. */
+  const curved = measurements.filter(function (m) {
+    return m.samples && m.samples.length;
+  });
+  if (curved.length) {
+    lines.push("## curve", "",
+               "`t_ms:MiB`, one reading per nvidia-smi sample (nominally " +
+               "250 ms). A fall of " + curve.DROP_MB + "+ MiB counts as a " +
+               "release; see `scripts/lib/vram-curve.js`.", "");
+    curved.forEach(function (m) {
+      lines.push("### " + m.name, "", "- shape: " + m.shape);
+      curve.humps(m.samples).forEach(function (h, i) {
+        lines.push("- hump " + (i + 1) + ": peak " + h.peakMB + " MiB at " +
+                   (h.peakT / 1000).toFixed(1) + "s, then " + h.troughMB +
+                   " MiB at " + (h.troughT / 1000).toFixed(1) + "s");
+      });
+      lines.push("", "```");
+      curve.seriesLines(m.samples).forEach(function (l) { lines.push(l); });
+      lines.push("```", "");
+    });
   }
   lines.push("## transcript", "");
   for (const t of transcript) lines.push("- **" + t.kind + "** " + t.text);
@@ -388,9 +415,7 @@ function startWitness() {
   return w;
 }
 
-function peakOf(samples) {
-  return samples.reduce(function (a, s) { return s.mb > a ? s.mb : a; }, 0);
-}
+const peakOf = curve.peakOf;
 
 // ---------------------------------------------------------------- ComfyUI
 
@@ -575,6 +600,15 @@ function measure(plan, done) {
           const delta = peak - idle;
           say("info", "samples " + w.samples.length + " over " + seconds +
               "s; idle " + idle + " -> peak " + peak + " MiB");
+          /* The SHAPE, not just the maximum (§18 P7c step 2c). A peak
+           * reached after the card was dropped by gigabytes does not
+           * contain what was dropped, so "one hump or two" is the
+           * difference between a gate that covers this job and one that
+           * covers the largest thing it ever held. The samples go into
+           * the transcript too — this run's question is not the next
+           * run's, and re-running costs the owner's GPU. */
+          const shape = curve.describe(w.samples);
+          say("info", "curve: " + shape);
 
           if (!r.ok) {
             verdict(false, plan.name + ": generation completed", r.error);
@@ -590,7 +624,8 @@ function measure(plan, done) {
                         seconds: seconds, minVramGB: plan.minVramGB,
                         onDiskMB: plan.onDiskMB, output: geom,
                         file: files[0] || null, cardTotalMB: cardTotalMB,
-                        settled: !stalled };
+                        settled: !stalled,
+                        samples: w.samples, shape: shape };
             measurements.push(m);
             say("info", "OUTPUT " + (geom || "?") + "  " +
                 (files[0] || "(no file)"));

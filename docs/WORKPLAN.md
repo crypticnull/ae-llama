@@ -58,7 +58,8 @@ every pass and finished work costs the same context as live work.
 | 3 | **BLOCKED 2026-09-16 on a rule conflict - see §16b BLOCKER, it needs one line from the owner.** ~~Measure the §16b reserve on the owner's four real projects~~ — copies only, originals hashed before and after, close without saving. The exact eight-step procedure is in §16b; follow it to the letter. Paths are in the git-ignored `local/real-projects.json` and must never be committed. Nothing else loaded on the card while measuring. | §16b | AE | no |
 | 4 | ~~**fp8 Wan 2.2 5B as a second entry, then MEASURE it.**~~ **DONE 2026-09-16 (0.12.19).** There is no fp8 FILE of the 5B; shipped as a load-time `weight_dtype` cast instead, zero extra download. 24 314 MiB vs 26 187 at the authored size, 16 834 vs 21 536 at 704x480. **The gate did not move - §18 P7a is still open.** Full table in §18 P7c step 1; follow-ups in step 1a. The §18 P10 pattern: the shipped Wan graph with the diffusion filename swapped and nothing else. Cheapest route to a video option under 32 GB. | §18 P7c step 1 | backend, disk | yes |
 | 5 | ~~**Settle what `ltx-small` is, then measure it.**~~ **DONE 2026-09-16 (0.12.20).** It is real: LTX-Video 2B, `AE_LLAMA_LTXV_2B_T2V_V1`, all-core graph copied from the vendor template the MANAGED backend ships, **measured 13 921 MiB in 12 s**. The catalog's video floor went **32 -> 16** and a 16 GB card has a runnable video graph for the first time; 8 and 12 GB now get an honest no video instead of an entry that could never run. Both of this item's premises were wrong - the backend has 30 core LTX classes, and the "fixture says zero" evidence was a false NO from a 52-class demand harvest (filed as §17l-b). Full table in §18 P7c step 2. **§18 P7a is still open for 8-12 GB**; the cheapest lever left is now §18 P7c step 2a, and step 2c is cheaper still and should go first. | §18 P7c step 2 | backend, disk | yes |
-| 5a | **Does the 13 921 MiB peak even HOLD the text encoder?** One file read, no GPU: re-read this pass's own nvidia-smi trace (`logs/catalog-vram-probe-2026-09-16T04-47-53.md`) for two humps. 4 918 MiB of ltx-small's 10 965 MiB floor is `t5xxl_fp8`, and ComfyUI was measured EVICTING the encoder before sampling for MiniMax H3. If it evicts here too, the gate may already be under 16 and the measurement is understating the entry. Cheapest possible lever on §18 P7a and it needs nothing. | §18 P7c step 2c | nothing | maybe |
+| 5a | ~~**Does the 13 921 MiB peak even HOLD the text encoder?**~~ **DONE 2026-09-16. It does: one hump, no release before the peak, gate stays 16.** The trace this item said to re-read did not exist - the probe streamed nvidia-smi at 250 ms and threw every sample away, keeping one number. Fixed at the root first: `scripts/lib/vram-curve.js` + a `## curve` section in every transcript, `tests/test-vram-curve.js`. Third run measured 13 658 MiB, within 263 of the other two. **What the curve then showed is item 5a-1 below and it is bigger than this question was.** See §18 P7c step 2c. | §18 P7c step 2c | nothing | no |
+| 5a-1 | **31 percent of ltx-small's peak is a HALF-SECOND VAE decode spike.** It samples at 9 370 MiB over idle for 6.3 s, then spends 0.5 s at 13 658 decoding 97 frames in one shot - and the card is gated on that half second. `VAEDecodeTiled` is CORE (`nodes.py:343`, `temporal_size` for video VAEs), so this is a ONE-NODE swap at the node's own defaults, zero download, and it could put the peak near **9.6 GiB** - the first number in §18 P7a a 12 GB card could hold. Cheaper than step 2a and it should go first. Measure the CURVE, not just the delta. | §18 P7c step 2d | backend | maybe |
 | 5b | **The distilled fp8 2B: 4 255 MiB instead of 6 047**, which would put resident weights at 9 173 and the job near 12.1 GB — the first thing that might give a 12 GB card video. NOT a drop-in: distillation retunes steps and cfg, and `CheckpointLoaderSimple` has no `weight_dtype`, so the free cast that made `wan22-5b-fp8` work is unavailable. Look for the vendor's own distilled template among the managed backend's 24 LTX ones before inventing values. | §18 P7c step 2a | backend, disk | yes |
 | 5c | **OWNER, one line: the LTX weights are "LTXV Open Weights License 0.X", not Apache-2.0.** The panel redistributes nothing (the buyer downloads from Lightricks' own repo), so this is about what a commercial product RECOMMENDS. Refusing it means going back to no video under 32 GB, because Wan is the only Apache-2.0 video entry and it gates at 32. | §18 P7c step 2b | owner | no |
 | 5d | **`comfy-node-defs.json` holds 52 defs beside a `class_count` of 3487**, so asking it whether a node exists returns a false NO for ~3 435 classes, by design. That false NO is what gave §18 P7c step 2 a wrong premise and nearly cost the catalog the whole LTX line. Name the count, refuse existence lookups, one stub test. Distinct from §17l (staleness) and both are live. No backend. | §17l-b | nothing | no |
@@ -4159,13 +4160,21 @@ cares most about.** 10 965 MiB of the 13 921 is RESIDENT WEIGHTS, so
 can inject brings it under 12. A 12 GB card is 12 288 MiB in total.
 The levers left are both about the WEIGHTS:
 
+- **§18 P7c step 2d — the cheapest of all of them, and it is NOT about
+  the weights.** Measured 2026-09-16 off the first trace this probe ever
+  KEPT: the entry samples at 9 370 MiB over idle and then spends half a
+  second at 13 658 decoding 97 frames in one shot. 31 percent of the
+  peak is that spike, `VAEDecodeTiled` is core, and flattening it could
+  put the peak near **9.6 GiB**. One node, no download. Filed below.
 - **§18 P7c step 2a** — the distilled fp8 2B, `4255 MiB` instead of
   `6047`, which would put resident weights at 9 173 MiB. Filed below.
 - **§18 P7c step 4** — GGUF Q4/Q5, NEXT UP item 6, still unsurveyed.
 - A smaller TEXT ENCODER. `t5xxl_fp8_e4m3fn_scaled` is 4 918 MiB of the
   10 965, i.e. 45 percent of the floor is the encoder and not the video
   model at all. Nothing in this repo has asked whether the LTXV line
-  loads a smaller T5. That is a real question and it is step 2c below.
+  loads a smaller T5. Step 2c settled the OTHER half of that question -
+  the encoder is resident at the peak, not evicted before it, so the
+  measurement stands - but whether a smaller T5 exists is still open.
 
 Four pins now assert the state, each with its reason inline: the 6 GB and
 8 GB rows in `test-tiers.js` and the `recommendSetup(8GB)` row in
@@ -4468,24 +4477,92 @@ cannot surface later as a surprise. The alternative if the answer is no:
 Wan 2.2 is Apache-2.0 and gated at 32, so refusing LTX means going back
 to no video at all under 32 GB.
 
-### Step 2c - 45 percent of this floor is the TEXT ENCODER, and nobody has asked whether it can be smaller (filed 2026-09-16)
+### Step 2c - the encoder IS resident at the peak. ANSWERED 2026-09-16, and the trace it asked for did not exist
 
-`t5xxl_fp8_e4m3fn_scaled` is **4 918 MiB of the 10 965 MiB** of resident
-weights. The 2B video model itself is the smaller half. That inverts the
-intuition every VRAM item in this section has worked from, and it means
-an encoder win is worth as much as a diffusion win.
-
-Open, none of it answered here: does the LTXV line load a smaller T5
-build; does ComfyUI EVICT the encoder before sampling the way it does for
-MiniMax H3's (18 P10 measured exactly that, and the 10.9 GB the H3
-encoders differ by turned out to be a DOWNLOAD difference and not a VRAM
-one); and if it evicts, was the encoder even resident at the 13 921 MiB
-peak. **That last one is cheap and should be answered before step 2a:**
-re-read the nvidia-smi trace this pass wrote to
-`logs/catalog-vram-probe-2026-09-16T04-47-53.md` and see whether the
-curve has two humps. If the peak does not include the encoder, the gate
-may already be lower than 16 and this measurement is understating the
+**One hump, no eviction, the gate stands at 16.** The cheap question this
+step reserved - "was the encoder even resident at the 13 921 MiB peak, or
+had ComfyUI already dropped it the way it does for MiniMax H3's?" - is
+answered: nothing was released before the peak, so the peak holds
+everything the job loaded and the measurement is not understating the
 entry.
+
+**But it could not be answered the way this item said.** The instruction
+was "re-read the nvidia-smi trace this pass wrote and see whether the
+curve has two humps". There was no trace to re-read.
+`catalog-vram-probe.js` has streamed nvidia-smi at 250 ms since it was
+written - deliberately, so a VAE spike cannot fall between two samples -
+and then reduced the entire series to ONE number and dropped the samples
+when the process exited. The transcript carries `samples 61 over 14s` and
+a peak, and nothing between them. **Fixed at the root before answering:**
+`scripts/lib/vram-curve.js` (pure, stub-tested in
+`tests/test-vram-curve.js`) reads the SHAPE of a trace, and every
+transcript now carries a `## curve` section with every sample and a
+one-line verdict on it. The next question asked of a past run does not
+cost the owner's GPU again.
+
+**The third ltx-small run, 2026-09-16, curve kept
+(`logs/catalog-vram-probe-2026-09-16T06-10-59.md`):** idle 3 967, delta
+**13 658 MiB in 12 s** - a third reading within 263 MiB of 13 696 and
+13 921. Its shape:
+
+| phase | t | MiB | over idle |
+|---|---|---|---|
+| idle | 0 - 1.0 s | 3 967 | - |
+| weights loading | 1.0 - 2.9 s | 4 567 -> 13 337 | climbing |
+| **sampling, 30 steps** | **2.9 - 9.2 s** | **13 337, flat** | **9 370** |
+| VAE decode | 9.7 - 10.0 s | 16 249 -> **17 625** | **13 658** |
+| after decode | 10.2 s - end | 13 817 | 9 850 |
+
+The climb is monotonic to the peak; the largest fall anywhere before it
+is 672 MiB, which is jitter at the sampling/decode seam (two identical
+runs of this entry already differ by 225). A load-then-evict would look
+like 9 106 -> 4 200 -> 13 921 and it does not.
+
+### Step 2d - 31 percent of ltx-small's peak is a HALF-SECOND VAE decode spike, and the tiled decoder is core (filed 2026-09-16)
+
+**This is what keeping the curve bought, on the first run that kept one,
+and it is the cheapest lever left on §18 P7a.** Read the table above
+again: the model SAMPLES at 9 370 MiB over idle for 6.3 seconds, then
+spends two samples - about half a second of a twelve second job - at
+13 658. **4 288 MiB of the published delta exists for 0.5 s**, and it is
+the VAE decoding 97 frames at 768x512 in one shot.
+
+A card is gated on the peak, so today a 12 GB card is refused this entry
+over half a second it need not spend.
+
+**`VAEDecodeTiled` is CORE** - `ComfyUI/nodes.py:343`, not
+`comfy_extras`, not a pack - so §22a is satisfied with nothing installed,
+and it carries `temporal_size` / `temporal_overlap` inputs documented
+"Only used for video VAEs: Amount of frames to decode at a time". The
+shipped `AE_LLAMA_LTXV_2B_T2V_V1` graph uses plain `VAEDecode` at node 8.
+This is the §18 P10 pattern again: one node swapped, nothing else.
+
+**What it could be worth, and what it is NOT.** If tiling flattens the
+spike, the peak falls toward the post-decode resting level - 9 850 MiB
+over idle, **9.6 GiB** - against 13.3 today. That is the first number in
+this whole section that a 12 GB card could hold, and it costs no
+download and no new weight. It is NOT free, and the item must say so:
+`tile_size` and `overlap` are tuning knobs, tiled decoding trades time
+for memory, and a temporal tile can seam. So:
+
+1. Swap node 8 to `VAEDecodeTiled` at the node's own DEFAULTS (512/64,
+   64/8) - defaults, because "a basic is the shape ComfyUI ships, not a
+   tuned one" is the rule every basic here was built under.
+2. Measure with `catalog-vram-probe --entry ltx-small`, and read the
+   CURVE, not just the delta: the spike either flattens or it does not,
+   and that is now visible.
+3. Watch the seconds. A 12 s clip that becomes 40 s is a different
+   product decision and belongs to the owner.
+4. If the peak lands at or under 12 GiB, a 12 GB card gets video and
+   §18 P7a's open half is closed by a one-node change. If it lands at 13,
+   say so and stop.
+
+**The same question applies to every video entry**, and Wan is where it
+came from: §18 P7 concluded "the floor is resident weights, not the
+frame" from Wan at 704x480 costing 21 536 against 26 187. That is true of
+Wan's dominant term and it is too strong as a general rule - for
+ltx-small the frame-dependent term is 31 percent of the peak. No Wan run
+has had its curve read, because none was kept.
 
 ### Step 2 - the original text, kept because both of its wrong premises are the point
 

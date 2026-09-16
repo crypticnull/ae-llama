@@ -24527,3 +24527,138 @@ into 17q-c rather than NEXT UP. A distinct `"unknown"` return with its own
 sentence is about six lines whenever someone is next in the file.
 
 **Nothing is blocked for a human.**
+
+## 2026-09-16 (local session) - the encoder was never evicted, and the probe had been throwing away the evidence that could say so
+
+SUPERSEDES: 23075,23191 - that entry generalised "the floor is resident
+weights, not the frame" from Wan to every video entry, and used it to
+justify reading a small-card answer off a 5090. For `ltx-small` the
+frame-dependent term is **31 percent of the peak** (4 288 of 13 658 MiB),
+so the generalisation is too strong. The resident-weight half still
+dominates and the reasoning about 8 GB still holds; what does not hold is
+"the frame does not matter", and a whole lever was hiding behind it.
+
+**Item:** NEXT UP 5a / WORKPLAN 18 P7c step 2c - "Does the 13 921 MiB
+peak even HOLD the text encoder?"
+
+**Harness: 770/770 PASSED**, run before the work. **No version bump** -
+nothing under `extension/` changed; the fix is in `scripts/` and
+`tests/`, and the measurement did not move a gate.
+
+### The item could not be done as written, for a reason worth more than the item
+
+It said: "One file read, no GPU: re-read this pass's own nvidia-smi trace
+(`logs/catalog-vram-probe-2026-09-16T04-47-53.md`) for two humps."
+
+**There is no trace in that file.** `catalog-vram-probe.js` has streamed
+`nvidia-smi -lms 250` since the day it was written, and its own header
+says why in as many words: "comfy-probe.js samples with execFile every
+4 s, which is fine for 'did it use the GPU' and useless for a peak: a VAE
+decode spike is shorter than one sample". It collects four readings a
+second into `w.samples`, calls `peakOf()` on them, writes
+`samples 61 over 14s; idle 4188 -> peak 17884 MiB` into the transcript,
+and drops every sample when the process exits.
+
+So the probe had been sampling at 250 ms for the express purpose of
+catching a spike, and then reporting only the height of it. Every
+question after the first one - is the peak one thing or two, when did it
+happen, how long did it last - costs a re-run on the machine the owner
+does paid work on.
+
+### Fixed at the root first
+
+`scripts/lib/vram-curve.js`, pure, no GPU and no backend:
+
+- `humps(samples, drop)` - a single forward pass, no smoothing. A hump
+  closes when the reading falls `drop` below its top and reopens when it
+  climbs `drop` back out of the valley. Default `DROP_MB = 1024`: the
+  smallest thing whose eviction would matter here is a text encoder and
+  the smallest in the catalog is `t5xxl_fp8` at 4 918 MiB, so a gigabyte
+  is far under anything load-bearing while staying clear of the 225 MiB
+  two identical runs of this entry already differ by.
+- `releaseBeforePeak(samples, drop)` - the actual question. A fall AFTER
+  the peak is a tidy-up and proves nothing; only a fall BEFORE it says
+  the peak does not hold what was dropped. The test pins both orderings
+  of the same readings, because a summariser that just looked for "a big
+  fall somewhere" would call them the same trace.
+- `describe()` and `seriesLines()` - one line for the console while the
+  run is still on screen, and every sample for the transcript.
+
+It is a separate file so it can be tested: the probe needs a GPU, a
+running backend and 11 GB of weights to reach one line of this logic.
+`tests/test-vram-curve.js`, 28 assertions, includes four that read
+`catalog-vram-probe.js` itself and fail if the wiring is removed - the
+peak-only report survived as long as it did because nothing tied the
+transcript to the samples already being collected.
+
+Every transcript now carries a `## curve` section: the shape line, one
+line per hump, and `t_ms:MiB` for every sample.
+
+### The answer: ONE hump. The encoder is resident at the peak.
+
+Third run of `ltx-small`, managed backend booted and stopped by the probe
+(`logs/catalog-vram-probe-2026-09-16T06-10-59.md`): idle 3 967, delta
+**13 658 MiB in 12 s**, a third reading within 263 MiB of 13 696 and
+13 921. Shape:
+
+| phase | t | MiB | over idle |
+|---|---|---|---|
+| idle | 0 - 1.0 s | 3 967 | - |
+| weights loading | 1.0 - 2.9 s | 4 567 -> 13 337 | climbing |
+| sampling, 30 steps | 2.9 - 9.2 s | 13 337, flat | 9 370 |
+| VAE decode | 9.7 - 10.0 s | 16 249 -> 17 625 | **13 658** |
+| after decode | 10.2 s - end | 13 817 | 9 850 |
+
+`1 hump; peak 17625 MiB; no release of 1024+ MiB before it`. The largest
+fall anywhere before the peak is 672 MiB at the sampling/decode seam. A
+load-then-evict - what ComfyUI was measured doing with MiniMax H3's
+encoder - would read 9 106 -> 4 200 -> 13 921, and it does not.
+
+**So the gate stays 16 and the measurement was not understating the
+entry.** That is the item, answered, and it is the smaller half of what
+the curve said.
+
+### What the curve actually found: 31 percent of the peak lasts half a second
+
+The entry SAMPLES at 9 370 MiB over idle for 6.3 seconds. It then spends
+**two samples - about half a second of a twelve second job - at 13 658**,
+decoding 97 frames at 768x512 in one shot. A card is gated on the peak,
+so a 12 GB card is refused this entry over half a second it need not
+spend.
+
+`VAEDecodeTiled` is **core** - `ComfyUI/nodes.py:343` in the managed
+backend's own tree, not `comfy_extras`, not a pack - and carries
+`temporal_size` / `temporal_overlap`, documented "Only used for video
+VAEs: Amount of frames to decode at a time". The shipped
+`AE_LLAMA_LTXV_2B_T2V_V1` uses plain `VAEDecode` at node 8. One node, at
+the node's own defaults, zero download, 22a satisfied with nothing
+installed.
+
+If tiling flattens the spike the peak falls toward the post-decode
+resting level, **9 850 MiB over idle = 9.6 GiB**, against 13.3 today.
+That is the first number in this whole section a 12 GB card could hold,
+and it is cheaper than step 2a (4.3 GB of download and a steps/cfg
+retune) which the previous pass named as the cheapest lever left. Filed
+as **18 P7c step 2d** and as NEXT UP **5a-1**, with the honest caveats
+attached: tiling trades time for memory, `tile_size`/`overlap` are knobs,
+and a temporal tile can seam - so it is a measurement, not a decision.
+
+**No Wan run has ever had its curve read**, because none was kept. The
+same question applies to all four 32 GB video entries and can now be
+asked of any future run for free.
+
+### Verification
+
+- `node tests/test-vram-curve.js` - 28 assertions, all pass.
+- `node tests/test-model-catalog.js`, `tests/test-probe-backend-url.js`,
+  `tests/test-probe-bundle.js` - green (the probe's neighbours).
+- Full stub suite green: **91 of 91** `tests/test-*.js`, zero failing.
+  (90 before; the 91st is this pass's.)
+- Real AE harness **770/770** before the work; nothing in `extension/`
+  was touched, so it cannot have moved.
+- The measurement itself is the verification of the wiring: the `##
+  curve` section above came out of a real run, on the real card, and the
+  probe stopped the backend it booted (card back to 4 185 MiB).
+
+**Nothing is blocked for a human.** Step 2b (the LTXV licence) is still
+the one open owner question in this section and it is unchanged.
