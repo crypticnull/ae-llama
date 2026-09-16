@@ -25858,3 +25858,96 @@ decoded frames. Seed 12345, shipped graphs. Backend logs
 - **5a-5c OWNER EYE:** does the display survive a Wan run at ~600 MiB
   free? Needs someone at the monitor; decides whether Wan at gate 12
   needs a smaller working set.
+
+## 2026-09-16 (local session) - the distilled fp8 LTX 2B runs on an 8 GB card's room in 12 s and ships at gate 8, defaults held
+
+**Item:** NEXT UP 5b / WORKPLAN 18 P7c step 2a. Items above it: 3, 5a-4e,
+5a-5b and 5a-5c are owner-only, the rest struck. Not attempted before
+tonight (log grep for "distilled").
+
+**Harness: 770/770 PASSED** at the start and again after the change.
+Full stubbed suite 91/91. AE left running, untouched. Backend stopped by
+the probe's `--stop`; card back to 1 169 MiB, nothing on 8288.
+
+### The premise had moved, and what the item was really worth
+
+5b was filed as "the first thing that might give a 12 GB card video". By
+tonight ltx-small was already at gate 12 (5a-3), so the question left was
+**8 GB**, and 5a-3 had never run the room that answers it: an 8 GB card
+minus AE (3 255) minus tiers.js DESKTOP_FREE_MB (4 096) = **841 MiB**.
+
+### Step 1: no vendor template
+
+The managed backend's `comfyui_workflow_templates_json` holds 24 LTX
+templates; the only two named "distilled" (`video_ltx2_t2v_distilled`,
+`video_ltx2_i2v_distilled`) are the 19B LTX-2 line. So step 2: values
+from Lightricks' own `configs/ltxv-2b-0.9.8-distilled-fp8.yaml`. That is
+a TWO-pass multi-scale pipeline (first_pass `1.0 .9937 .9875 .9812 .975
+.9094 .725` at 2/3 size, spatial upscaler, second_pass `.9094 .725
+.4219`, guidance 1). Assumed and written in the manifest: one pass at the
+authored size through first_pass plus second_pass's `.4219`, to 0 (8
+steps, the README's recommendation for its distilled builds), cfg 1, no
+upscaler download. Core `ManualSigmas` carries it.
+
+### Built
+
+`AE_LLAMA_LTXV_2B_DISTILLED_T2V_V1` = ltx-small's shipped graph with the
+checkpoint swapped (`ltxv-2b-0.9.8-distilled-fp8`, 4 461 695 684 B =
+4 255 MiB, equal to the HF tree API size), node 71 LTXVScheduler ->
+ManualSigmas, cfg 3 -> 1, its own filename prefix. Catalog entry
+`ltx-small-distilled` in version.js with the measured block and
+constrainedFit. 0.12.30.
+
+### Measured (RTX 5090, managed backend unpinned, seed 12345, 768x512 x 97)
+
+`local/gate-run.sh` (ballast + `catalog-vram-probe --boot --stop` +
+decoded-frame md5 + WDDM shared-usage sampler).
+
+| entry | room MiB | delta MiB | s | shared max MiB | md5 |
+|---|---|---|---|---|---|
+| distilled | whole card | 8 637 | 8 | - | b2cc0a... |
+| distilled | 4 966 | 3 928 | 8 | 369 | b2cc0a... |
+| distilled | 841 | 52 | **12** | 1 410 | b2cc0a... |
+| ltx-small | 841 | 58 | **24** | 1 406 | 45630f... (= its reference) |
+| ltx-small | whole card, motion prompt | 10 394 | 14 | - | - |
+| distilled | whole card, motion prompt | 8 634 | 8 | - | - |
+
+Transcripts `logs/catalog-vram-probe-2026-09-16T10-02-13.md` (card),
+`10-04-23` (4 966), `10-04-59` (841), `10-05-47` (ltx-small 841).
+
+At 841 roughly 1.1 GB went to WDDM shared memory. The ballast holds the
+dedicated memory, so that is the driver's sysmem fallback, which is also
+what a real 8 GB card does under the default driver setting. Output still
+identical and 1.5x.
+
+**Looked at the frames.** Distilled is sharper than ltx-small. On the
+probe's default toy-car prompt it came out nearly still (frame 0 vs 96
+PSNR 43.8 dB against ltx-small's 18.3); with a drone/coastal-road motion
+prompt it moved properly (20.6 vs 18.9). One seed per prompt, so that is
+an observation, not a verdict on motion.
+
+### Decisions (made unattended, stated)
+
+- **Gate 8**, constrainedFit `{roomMB 841, seconds 12}` (bar: <= 4 937
+  room, <= 2x 8 s, identical, unpinned boot).
+- **recommendFromGB 12: defaults held.** Stripping it makes this the
+  video default on 8 and 10 GB, which today get NONE; 12 GB and up keep
+  ltx-small either way (checked, not assumed). Giving 8 GB its first video
+  default is the owner's tier call (16f) and also carries 5c's licence
+  question, so it joins 5a-4e.
+- PATCH, not MINOR, on the sdxl-fp8 / wan22-5b-fp8 precedent and the
+  loop brief.
+
+### Tests
+
+`test-tiers.js`: every size 4-96 GB picks what it picked without the
+entry, and without `recommendFromGB` exactly 8 and 10 GB get it.
+`test-model-catalog.js`: byte count for the new file. Hash history
+recorded. `docs/CAPABILITIES.md` template list updated.
+
+### Filed
+
+- **5b-1:** ltx-small at 841 room ran identical in 24 s, within 2x of
+  its measuredSeconds 14, so it passes the gate-8 bar too. Not moved
+  tonight (one item).
+- **5a-4e extended:** the 8 GB video default is now a one-field decision.

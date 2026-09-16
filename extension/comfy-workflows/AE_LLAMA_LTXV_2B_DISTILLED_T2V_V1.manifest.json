@@ -1,0 +1,63 @@
+{
+  "workflow": "AE_LLAMA_LTXV_2B_DISTILLED_T2V_V1",
+  "kind": "video",
+  "catalogEntry": "ltx-small-distilled",
+  "notes": "The text-to-video graph for the ltx-small-distilled catalog entry (WORKPLAN 18 P7c step 2a, NEXT UP 5b). Core nodes only -- CheckpointLoaderSimple / CLIPLoader / CLIPTextEncode x2 / LTXVConditioning / EmptyLTXVLatentVideo / ManualSigmas / KSamplerSelect / SamplerCustom / VAEDecodeTiled / CreateVideo / SaveVideo -- so it runs on the backend the panel installs with nothing added. It is AE_LLAMA_LTXV_2B_T2V_V1 (ltx-small's graph, itself the vendor's ltxv_text_to_video.json) with three sampling changes and one weight change, listed in whatChangedFromLtxSmall. The managed backend (ComfyUI 0.34.0) ships NO vendor template for the 2B distilled build: its two 'distilled' templates (video_ltx2_t2v_distilled / video_ltx2_i2v_distilled) are the 19B LTX-2 line, checked on disk 2026-09-16. ManualSigmas is core (comfy_extras/nodes_custom_sampler.py).",
+  "whyTheNegativeIsThis": "It is the vendor template's own negative, copied verbatim. Unlike Wan's, it is already English, so nothing had to be translated. The panel replaces it whenever the request carries a negative.",
+  "procedural": {
+    "prompt": {
+      "nodeId": 6,
+      "input": "text",
+      "note": "NOT reachable by the panel's usual introspection, and that is the one thing about this graph a reader must not miss. The panel follows KSampler.positive/negative back to the CLIPTextEncode pair (comfy-workflows/README.md); this graph has no KSampler -- it uses SamplerCustom, and its positive/negative come from LTXVConditioning, one hop further back. Declaring the prompt node here is what makes injection work. See whyTheNegativeIsNotDeclared."
+    }
+  },
+  "whyTheNegativeIsNotDeclared": "procedural carries only the positive because that is all the schema takes; the negative sits on node 7, one hop behind LTXVConditioning.negative the same way. If a future request needs the negative injected on this graph, that hop is the work -- it is not a missing value, it is a missing edge in the resolver's walk.",
+  "whyNoResolution": "No procedural.resolution, for the reason measured on the sd15 basic and written up as WORKPLAN 18 P5a. procedural.resolution means 'this template derives its pixel dimensions from a MEGAPIXEL widget' (comfy.js injectProcedural), which is true of H3's ResolutionSelector and false of an EmptyLTXVLatentVideo that takes literal width and height -- those are injected by introspection, which is what the README contract promises.",
+  "whyNoDurationSeconds": "No procedural.durationSeconds either, for the same reason the Wan basic has none: this graph carries a literal numeric `length` on node 70, which is exactly what injectParams' generic frame walk writes to (comfy.js frameKeys = length/frames/video_frames/num_frames). Declaring durationSeconds here would flip lengthIn to 'seconds' and make the panel REFUSE a frames request against a graph that takes frames.",
+  "lengthIsOnAGridOfEight": "LTX-Video samples 8n+1 frames and /object_info gives node 70's `length` a step of 8 (min 1, max 16384, default 97) -- a DIFFERENT grid from Wan's 4n+1, which is why this is stated per template rather than assumed. ComfyUI does not enforce the step server-side, so a frames request that is not 8n+1 is accepted and rounded by the model rather than refused. 97 frames at the CreateVideo fps of 24 is 4.04 s, which is the clip a request naming no length gets -- already under the 6 s cap WORKPLAN 18 P3a(b) is about to impose, unlike minimax-h3's >15-minute authored default.",
+  "theTwoFrameRatesAreTheVendorsOwn": "LTXVConditioning.frame_rate is 25 and CreateVideo.fps is 24, and that is not a transcription error -- the vendor's ltxv_text_to_video.json ships exactly those two numbers. The first is what the MODEL is told it is generating; the second is the container's playback rate. They are left as the vendor set them, because a basic is the shape ComfyUI ships and not a tuned one, but the authored clip length follows the CONTAINER rate (97/24 = 4.04 s), which is what AE will import.",
+  "models": [
+    {
+      "file": "ltxv-2b-0.9.8-distilled-fp8.safetensors",
+      "role": "checkpoint (diffusion + vae, all-in-one, fp8 distilled)",
+      "dir": "checkpoints",
+      "sizeMB": 4255,
+      "url": "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltxv-2b-0.9.8-distilled-fp8.safetensors"
+    },
+    {
+      "file": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+      "role": "text_encoder",
+      "dir": "text_encoders",
+      "sizeMB": 4918,
+      "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn_scaled.safetensors"
+    }
+  ],
+  "licenseIsNotApacheAndTheOwnerShouldKnow": "The checkpoint's own safetensors metadata carries the 'LTXV Open Weights License 0.X' (license date April 15, 2025, covering every LTXV release since v0.9.6), NOT Apache-2.0 as Wan 2.2 is. The panel never redistributes a weight -- a buyer downloads it from Lightricks' own HuggingFace repo -- so this is a question about what the panel RECOMMENDS, not about what it ships. Flagged for the owner in WORKPLAN 18 P7c step 2b; no pass should decide it.",
+  "customNodes": [
+    {
+      "pack": "(comfy-core)",
+      "nodes": [
+        "CLIPLoader",
+        "CLIPTextEncode",
+        "CheckpointLoaderSimple",
+        "CreateVideo",
+        "EmptyLTXVLatentVideo",
+        "KSamplerSelect",
+        "LTXVConditioning",
+        "ManualSigmas",
+        "SamplerCustom",
+        "SaveVideo",
+        "VAEDecodeTiled"
+      ]
+    }
+  ],
+  "panelIntegration": {
+    "promptInjection": "declared: procedural.prompt -> node 6. Introspection cannot find it -- there is no KSampler in this graph (see procedural.prompt.note).",
+    "frameInjection": "introspection: node 70's literal `length` (comfy.js frameKeys)",
+    "resolutionCeilingFrom": "tier ceilings (COMFY_TIERS_PLAN)",
+    "saveNode": "SaveVideo 79 -- mp4/h264 so AE can import it; filename_prefix is RELATIVE, so ComfyUI joins it onto its own output dir"
+  },
+  "nodeAttributionScannedOn": "2026-09-16 (managed backend; ManualSigmas read from ComfyUI/comfy_extras/nodes_custom_sampler.py, core; the rest as AE_LLAMA_LTXV_2B_T2V_V1)",
+  "whatChangedFromLtxSmall": "FOUR things; everything else, node ids included, is ltx-small's shipped graph (tiled decode at tile_size 256, fp8 T5 encoder, mp4/h264, relative prefix, seed 12345). (1) The CHECKPOINT is ltxv-2b-0.9.8-distilled-fp8.safetensors (4 255 MiB, mixed BF16/F8_E4M3, same 944-tensor all-in-one shape) instead of ltxv-2b-0.9.6-dev-04-25 (6 047). (2) Node 71 is ManualSigmas '1.0, 0.9937, 0.9875, 0.9812, 0.975, 0.9094, 0.725, 0.4219, 0.0' instead of LTXVScheduler at 30 steps: 8 steps, taken from Lightricks' own configs/ltxv-2b-0.9.8-distilled-fp8.yaml, not invented. That config is a TWO-pass multi-scale pipeline (first_pass to 0.725 at 2/3 size, a spatial upscaler, second_pass 0.9094/0.725/0.4219); this graph runs ONE pass at the authored size through first_pass's timesteps and second_pass's last, to 0 -- the 8-step single-pass shape the README recommends for its distilled builds, without the upscaler model (which would be a third download). (3) SamplerCustom cfg is 1, not 3: the config's guidance_scale is 1 for both passes, and ComfyUI skips the negative pass entirely at cfg 1. (4) filename_prefix names LTXV_2B_DISTILLED so its clips do not interleave with ltx-small's. MEASURED 2026-09-16 on an RTX 5090, managed backend booted unpinned, seed 12345: whole card 8 637 MiB / 8 s (ltx-small 10 394 / 12-14); ballasted to 4 966 MiB of room 3 928 / 8 s; to 841 MiB of room (an 8 GB card minus After Effects and tiers.js DESKTOP_FREE_MB) 52 MiB over a full card / 12 s with ~1.1 GB in WDDM shared memory; decoded-frame md5 identical in all three (b2cc0a...). ltx-small at the same 841 took 24 s. Looked at: sharper than ltx-small; the probe's default prompt gave a near-still shot (frame 0 vs 96 PSNR 43.8 dB, ltx-small 18.3), a camera-motion prompt moved (20.6 vs 18.9).",
+  "theSamplerIsNotTheVendorTemplates": "A basic here is normally the vendor's own graph. There is none for this build, so the sampling values are Lightricks' published config and the manifest says where they came from, per WORKPLAN 18 P7c step 2a step 2."
+}

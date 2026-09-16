@@ -157,6 +157,9 @@ const MEASURED_BYTES = {           // filename -> bytes, 2026-08-30
   // about: the file the panel's downloader would fetch is already here.
   "ltxv-2b-0.9.6-dev-04-25.safetensors": 6340743924,
   "t5xxl_fp8_e4m3fn_scaled.safetensors": 5157348688,
+  // 2026-09-16, 18 P7c step 2a: stat of the downloaded file, equal to the
+  // HuggingFace tree API size to the byte.
+  "ltxv-2b-0.9.8-distilled-fp8.safetensors": 4461695684,
   "minimax_h3_fl2va_pruned_int8_convrot.safetensors": 20970379616,
   "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors": 15687142551,
   "qwen3vl_32b_minimax_h3_int8_convrot.safetensors": 27141342152,

@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.12.29",
+    VERSION: "0.12.30",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -373,6 +373,64 @@
         note: "short clips (97 frames at 24 fps = 4.04 s authored); the " +
               "weights are the LTXV Open Weights License, not Apache-2.0 " +
               "like Wan -- see 18 P7c step 2b"
+      },
+      {
+        name: "ltx-small-distilled",
+        label: "LTX video (small, fast)",
+        // THE DISTILLED fp8 BUILD of ltx-small's model line (WORKPLAN 18 P7c
+        // step 2a, NEXT UP 5b): ltxv-2b-0.9.8-distilled-fp8, 4 255 MiB
+        // against the 6 047 of ltx-small's 0.9.6-dev, same T5 encoder file.
+        // The graph is ltx-small's with three changes: the checkpoint, cfg 3
+        // -> 1, and LTXVScheduler's 30 steps replaced by core ManualSigmas
+        // carrying Lightricks' own 8-step distilled schedule. No vendor
+        // template exists for this build (the backend's two "distilled"
+        // templates are the 19B LTX-2 line), so the values come from
+        // Lightricks' configs/ltxv-2b-0.9.8-distilled-fp8.yaml, run as ONE
+        // pass: first_pass timesteps plus second_pass's 0.4219, to 0.
+        //
+        // MEASURED 2026-09-16, RTX 5090, scripts/catalog-vram-probe.js on the
+        // managed backend booted unpinned, seed 12345, the authored 768x512 x
+        // 97 frames. Every clip decoded-frame md5 b2cc0a...:
+        //
+        //   room left for the backend   delta MiB   s     ltx-small at same
+        //   whole card                      8 637    8     10 394 / 12-14 s
+        //   4 966 (12 GB - AE - desktop)    3 928    8      3 621 / 12.69 s
+        //     841 (8 GB - AE - desktop)        52   12         58 / 24 s
+        //
+        // At 841 about 1.1 GB spilled into WDDM shared memory (the default
+        // driver fallback, which is what a real 8 GB card does too) and it
+        // still ran at 1.5x. Looked at: sharper than ltx-small and follows a
+        // camera-motion prompt; the probe's default toy-car prompt gave a
+        // near-still shot (frame 0 vs 96 PSNR 43.8 dB against 18.3), a
+        // motion prompt moved (20.6 vs 18.9).
+        //
+        // Gate 8 with the 841 reading as constrainedFit. recommendFromGB 12
+        // holds every tier default where the owner left it: without it 8
+        // and 10 GB cards get this as their first video default (12 GB and
+        // up keep ltx-small either way). That is 5a-4e/5c's owner question.
+        kind: "video", sizeMB: 9173, minVramGB: 8, recommendFromGB: 12,
+        constrainedFit: { roomMB: 841, seconds: 12, identical: true,
+                          on: "RTX 5090 ballasted to the room by scripts/vram-ballast.py, " +
+                    "managed backend --disable-pinned-memory (0.12.26), 2026-09-16" },
+        measured: true,
+        measuredVramMB: 8637, measuredSeconds: 8,
+        measuredAt: "768x512 x 97 frames = 4.04 s at the template's 24 fps " +
+                    "(the authored latent), seed 12345",
+        measuredOn: "NVIDIA GeForce RTX 5090, managed ComfyUI backend " +
+                    "(ComfyUI 0.34.0, torch 2.13.0+cu130), 2026-09-16",
+        measuredClipSeconds: 4.04,
+        authoredClipSeconds: 4.04,
+        experimental: true,
+        workflowTemplate: "AE_LLAMA_LTXV_2B_DISTILLED_T2V_V1",
+        urls: [{
+          url: "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltxv-2b-0.9.8-distilled-fp8.safetensors",
+          sizeMB: 4255, dir: "checkpoints"
+        }, {
+          url: "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn_scaled.safetensors",
+          sizeMB: 4918, dir: "text_encoders"
+        }],
+        note: "8-step distilled build of ltx-small, 4.04 s clips; same " +
+              "LTXV Open Weights License question as ltx-small (18 P7c step 2b)"
       },
       {
         name: "wan22-5b",

@@ -87,6 +87,12 @@
     ],
     "AE_LLAMA_SDXL_FP8_T2I_V1.manifest.json": [
       "df49a32e01c01ea48a52bd712729043a06e29a0a"
+    ],
+    "AE_LLAMA_LTXV_2B_DISTILLED_T2V_V1.json": [
+      "bc521a8a63c51135cb535b769dc670e12e4eb5fc"
+    ],
+    "AE_LLAMA_LTXV_2B_DISTILLED_T2V_V1.manifest.json": [
+      "83644b66b28e978bcf8fa0fd78910b166c9c4e07"
     ]
   }
 }

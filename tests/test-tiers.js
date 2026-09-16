@@ -272,6 +272,35 @@ const T = window.Tiers;
            "GB would keep sdxl (got " + (s8.image && s8.image.name) + ", " +
            (s12.image && s12.image.name) + ")");
   }
+  // ltx-small-distilled (18 P7c step 2a, NEXT UP 5b) is gated at 8 on a
+  // run at 841 MiB of room and held at 12 the same way. 8 GB had NO video
+  // default before it, so this is the row that would quietly start
+  // offering one: every size must pick what it picked without the entry,
+  // and stripping the field must hand exactly 8 and 10 GB the entry.
+  {
+    const without = cat.filter((e) => e.name !== "ltx-small-distilled");
+    assert(cat.some((e) => e.name === "ltx-small-distilled"),
+           "the catalog holds ltx-small-distilled");
+    const n = (x) => (x ? x.name : null);
+    const stripped = cat.map((e) => {
+      const c = Object.assign({}, e);
+      if (c.name === "ltx-small-distilled") delete c.recommendFromGB;
+      return c;
+    });
+    [4, 6, 8, 10, 12, 16, 20, 24, 32, 48, 96].forEach((g) => {
+      const gpu = { hasNvidia: true, vramGB: g, computeCap: 8.9 };
+      const a = T.recommendGen(cat, gpu, {}), b = T.recommendGen(without, gpu, {});
+      assert(n(a.image) === n(b.image) && n(a.video) === n(b.video),
+             g + " GB: adding ltx-small-distilled moves no default (" +
+             n(a.image) + "/" + n(a.video) + " vs " + n(b.image) + "/" +
+             n(b.video) + ")");
+      const sv = n(T.recommendGen(stripped, gpu, {}).video);
+      const lifted = sv === "ltx-small-distilled";
+      assert(lifted === (g === 8 || g === 10),
+             g + " GB: without recommendFromGB the distilled entry is the " +
+             "video default exactly on 8 and 10 GB (got " + sv + ")");
+    });
+  }
 
   const t7ada = rec(32, 8.9);
   assert(t7ada.video && t7ada.video.name === "minimax-h3-int8",

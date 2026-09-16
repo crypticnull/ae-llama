@@ -1,0 +1,179 @@
+{
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "38",
+        0
+      ],
+      "text": "A woman with long brown hair and light skin smiles at another woman with long blonde hair. The woman with brown hair wears a black jacket and has a small, barely noticeable mole on her right cheek. The camera angle is a close-up, focused on the woman with brown hair's face. The lighting is warm and natural, likely from the setting sun, casting a soft glow on the scene. The scene appears to be real-life footage."
+    },
+    "_meta": {
+      "title": "CLIP Text Encode (Prompt)"
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "38",
+        0
+      ],
+      "text": "low quality, worst quality, deformed, distorted, disfigured, motion smear, motion artifacts, fused fingers, bad anatomy, weird hand, ugly"
+    },
+    "_meta": {
+      "title": "CLIP Text Encode (Negative)"
+    }
+  },
+  "8": {
+    "class_type": "VAEDecodeTiled",
+    "inputs": {
+      "samples": [
+        "72",
+        0
+      ],
+      "vae": [
+        "44",
+        2
+      ],
+      "tile_size": 256,
+      "overlap": 64,
+      "temporal_size": 64,
+      "temporal_overlap": 8
+    },
+    "_meta": {
+      "title": "VAE Decode (Tiled)"
+    }
+  },
+  "38": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+      "type": "ltxv",
+      "device": "default"
+    },
+    "_meta": {
+      "title": "Load CLIP (T5-XXL, ltxv)"
+    }
+  },
+  "44": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "ltxv-2b-0.9.8-distilled-fp8.safetensors"
+    },
+    "_meta": {
+      "title": "Load Checkpoint (LTX-Video 2B 0.9.8 distilled fp8)"
+    }
+  },
+  "69": {
+    "class_type": "LTXVConditioning",
+    "inputs": {
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "frame_rate": 25
+    },
+    "_meta": {
+      "title": "LTXVConditioning"
+    }
+  },
+  "70": {
+    "class_type": "EmptyLTXVLatentVideo",
+    "inputs": {
+      "width": 768,
+      "height": 512,
+      "length": 97,
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "EmptyLTXVLatentVideo"
+    }
+  },
+  "71": {
+    "class_type": "ManualSigmas",
+    "inputs": {
+      "sigmas": "1.0, 0.9937, 0.9875, 0.9812, 0.975, 0.9094, 0.725, 0.4219, 0.0"
+    },
+    "_meta": {
+      "title": "ManualSigmas (Lightricks distilled schedule)"
+    }
+  },
+  "72": {
+    "class_type": "SamplerCustom",
+    "inputs": {
+      "model": [
+        "44",
+        0
+      ],
+      "add_noise": true,
+      "noise_seed": 12345,
+      "cfg": 1,
+      "positive": [
+        "69",
+        0
+      ],
+      "negative": [
+        "69",
+        1
+      ],
+      "sampler": [
+        "73",
+        0
+      ],
+      "sigmas": [
+        "71",
+        0
+      ],
+      "latent_image": [
+        "70",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "SamplerCustom"
+    }
+  },
+  "73": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "_meta": {
+      "title": "KSamplerSelect"
+    }
+  },
+  "78": {
+    "class_type": "CreateVideo",
+    "inputs": {
+      "images": [
+        "8",
+        0
+      ],
+      "fps": 24
+    },
+    "_meta": {
+      "title": "Create Video"
+    }
+  },
+  "79": {
+    "class_type": "SaveVideo",
+    "inputs": {
+      "video": [
+        "78",
+        0
+      ],
+      "filename_prefix": "video/AE-Llama/LTXV_2B_DISTILLED/%date:yyyy-MM-dd%/AELlama_LTXV_2B_DISTILLED_",
+      "format": "mp4",
+      "codec": "h264",
+      "codec.encoding": "auto"
+    },
+    "_meta": {
+      "title": "Save Video"
+    }
+  }
+}
