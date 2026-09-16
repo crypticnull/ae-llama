@@ -70,7 +70,7 @@ function rulesOf(text) {
 }
 
 var rules = rulesOf(lib);
-check("Get-AellDialogRules declares rules", rules.length >= 4,
+check("Get-AellDialogRules declares rules", rules.length >= 3,
       "found " + rules.length);
 
 function field(rule, name) {
@@ -137,6 +137,51 @@ check("it is ordered AFTER the discarding rule, so an owned project " +
       cancelIdx > discardIdx,
       "cancel at " + cancelIdx + ", discard at " + discardIdx);
 
+// --- the crash-recovery prompt: recognised, never answered ---------------
+// WORKPLAN section 21. The measured text (AE 26.3, 2026-09-08, harvested
+// by Write-AellUnknownDialogs). The rule that used to sit in the table
+// keyed on "recover", which this text does not contain, and it passed
+// every check above because those checks read the rule's own guessed
+// wording. So the fixture is the REAL words, and the checks run the
+// rules against it.
+var CRASH_TEXT = "We detected a crash in your last session. Crashes can " +
+  "potentially be caused by faulty plugins, scripts, extensions, or " +
+  "corrupt preferences. We recommend starting a Safe Mode session in " +
+  "order to diagnose the problem. During a Safe Mode session default " +
+  "preferences are used, scripts and extensions are not loaded, custom " +
+  "workspaces are not available, and 3rd party effect plugins can be " +
+  "disabled.";
+var SAVE_TEXT = "Save changes to 'Untitled Project.aep' before closing?";
+
+function listOf(expr) {
+  return (expr.match(/'([^']*)'|"([^"]*)"/g) || []).map(function (q) {
+    return q.slice(1, -1);
+  });
+}
+// Every rule falls back to WM_CLOSE (host-dialogs.selftest.ps1 demands
+// it), so a rule that MATCHED this text would press a blind key on a
+// dialog whose wrong branch is a Safe Mode session with no panel.
+rules.forEach(function (rule, i) {
+  var name = field(rule, "Name") || ("rule " + i);
+  var contains = listOf(field(rule, "Contains") || "");
+  var matches = contains.length > 0 && contains.every(function (f) {
+    return CRASH_TEXT.toLowerCase().indexOf(f.toLowerCase()) !== -1;
+  });
+  check(name + " -- does NOT match the measured crash prompt", !matches,
+        "Contains = " + contains.join(", "));
+});
+check("no rule still keys on the unmeasured word 'recover'",
+      !rules.some(function (r) { return /'recover'/i.test(field(r, "Contains") || ""); }));
+
+var fragsFn = lib.slice(lib.indexOf("function Get-AellCrashPromptFragments"));
+var frags = listOf(fragsFn.slice(0, fragsFn.indexOf("}")));
+check("the crash prompt is recognised from measured fragments",
+      frags.length >= 2 && frags.every(function (f) {
+        return CRASH_TEXT.indexOf(f) !== -1;
+      }), "fragments = " + frags.join(", "));
+check("...which the save-changes prompt does not carry",
+      !frags.every(function (f) { return SAVE_TEXT.indexOf(f) !== -1; }));
+
 // --- the callers declare what they own ----------------------------------
 // The names below are not decoration: each is a project some script in
 // this repo SAVES itself, and a name that drifts out of sync with the
@@ -144,6 +189,10 @@ check("it is ordered AFTER the discarding rule, so an owned project " +
 var ae = fs.readFileSync(AE, "utf8");
 var pp = fs.readFileSync(PP, "utf8");
 
+check("the AE runner NAMES the crash prompt on a startup timeout " +
+      "instead of promising a rule will answer it",
+      /Test-AellCrashPromptText -Text \(Get-AellDialogHarvest\)/.test(ae) &&
+      ae.indexOf("The recovery prompt is meant to be answered") === -1);
 check("the AE runner claims AE's cold-launch project",
       /AellOwnedProjects\s*=\s*@\([^)]*'Untitled Project'/.test(ae));
 check("the AE runner claims the mogrt probe's NAMED scratch project",

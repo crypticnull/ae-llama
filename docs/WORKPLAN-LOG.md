@@ -27089,3 +27089,36 @@ elapsed clock that goes backwards is the same failure in a smaller coat.
 Queued as item 1. Suspect `[int]` rounding where the code wants floor.
 
 No `extension/` change, so **no version bump**.
+
+## 2026-09-16 (local session) - §21 leftovers: the unmatched crash rule deleted, a version-aware AE check, the stale 26.2 flag cleared (NEXT UP 22)
+
+**Item:** NEXT UP 22 (was 21 before commit 4a74e57 renumbered the queue). DAYTIME pass, started 10:41 EDT.
+
+**Harness: NOT RUN, on purpose.** NEXT UP 17a is still unanswered, and CLAUDE.md's daytime rule is the written one. AfterFX.exe 26.3 (pid 9580) was running and was not touched. Nothing in extension/ changed. The earlier items are done, blocked on the owner, or need AE, the backend, the GPU or a chat model.
+
+### Changed
+
+- **`scripts/lib/host-dialogs.ps1`: the `crash / auto-save recovery` rule is DELETED.** It keyed on `recover`, a word the measured prompt does not contain. I did not reword it onto the measured text, because every rule falls back to WM_CLOSE (`host-dialogs.selftest.ps1` enforces that). A rule that matched would press exactly the blind key §21 forbids, and the wrong branch is a Safe Mode session with no panel. Added `Get-AellCrashPromptFragments` (`detected a crash`, `Safe Mode`) and `Test-AellCrashPromptText`. They RECOGNISE the prompt and never answer it. Executed in PS 5.1: True on the measured text, False on the save prompt and on empty text.
+- **`scripts/run-ae-selftest.ps1`:** on a startup timeout, when the harvest matches, the harness says it is the crash-recovery prompt and that a human must choose to open AE normally, not in Safe Mode. It no longer says the prompt "is meant to be answered automatically". Other startup popups still dump their text as before.
+- **`scripts/lib/ae-crash-flag.ps1`:**
+  - New `ConvertTo-AellAeVersionKey` (one conversion, shared).
+  - New `Get-AellRunningAeVersionKeys`: one key per running AfterFX, read from its exe path, and `?` when the version cannot be read.
+  - `Test-AellAeRunning -VersionKey` counts only the AE that owns the key. `?` still counts, so the check stays wrong-safe.
+  - `Clear-AellAeCrashFlag` passes the key. The harness path is unchanged in practice: it keys on the exe it launches, and a warm AE of that version still refuses.
+- **Tests.**
+  - `tests/test-ae-crash-flag.js` now injects the running set by redefining `Get-AellRunningAeVersionKeys`, so every branch runs on every machine: owner running, unknown version, other version, none, `-Force`, and the key conversion. It also asserts that the live read of this machine returns no `?` (it read `...\26.3`).
+  - That injection caught a real bug before commit: `return ,$keys` nested the array, so the unkeyed check would have said "running" with no AE at all.
+  - `tests/test-host-dialogs.js` carries the MEASURED crash text as a fixture. It asserts that no rule matches it, that no rule keys on `recover`, that the fragments are in the text and not in the save prompt, and that the harness uses the recogniser.
+  - Green: test-ae-crash-flag, test-host-dialogs (including its PS -> C# call path), test-powershell-syntax, test-source-control-chars, test-es3-ternary.
+- **Machine state:** `HKCU:\Software\Adobe\After Effects\26.2\CrashOccurred` was 1 and has been REMOVED with the fixed library. The call was unforced, and the running 26.3 no longer blocks it. This is the owner's own 2026-09-08 policy, applied to the key it named.
+
+### Hit, needs a human eye
+
+- **A concurrent session's commit swept this pass's in-progress edits.** Commit 4a74e57 ("Queue: the heartbeat elapsed clock runs backwards", 10:44, already pushed) contains my first drafts of the three `.ps1` files and `tests/test-ae-crash-flag.js`, next to its own docs change. It was committed while those drafts were mid-edit, and the pushed version still had the nested-array bug. My commit on top carries the fix and the rest. I did not rewrite shared history. Two sessions working one checkout, each running `git commit -a` or `git add -A`, will do this again.
+- §21 step 1 (which key opens AE NORMALLY) is still an owner-eye measurement. Filed as NEXT UP 22a together with step 4.
+
+### Decisions I made unattended
+
+- Delete the rule rather than correct it (reason above).
+- No bump: nothing in extension/ changed.
+- The daytime harness skip, as the previous passes did, pending 17a.

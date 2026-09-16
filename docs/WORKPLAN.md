@@ -110,7 +110,8 @@ every pass and finished work costs the same context as live work.
 | 19 | ~~Pin the invariant the whole install plan rests on: refuse a BUNDLED manifest that names a non-core node pack. True today, guaranteed by nothing.~~ **DONE 2026-09-16 (daytime pass, no bump, tests only).** `tests/test-workflow-bundle.js` now refuses, per bundled template: any pack other than `(comfy-core)`, any `optionalNodes`, and any graph `class_type` not listed under `(comfy-core)`. The message names fixtures and §22d as exempt on purpose. All 10 bundled templates pass; the authored H3 i2v fixture copied into the bundle failed all three checks. | §22a | nothing | no |
 | 20 | ~~Tee the harness's stdout into the loop log. `Running self-test via` and `Crash flag:` appear ZERO times across the whole 2026-09-09 night, so a killed pass leaves no record of whether its self-test was green.~~ **DONE 2026-09-16 (daytime pass, no bump, scripts and tests only).** The loop exports `AELL_LOOP_LOG = $logFile`, which every pass inherits. `run-ae-selftest.ps1 Write-AellHarnessLine` appends `[HH:mm:ss] [harness] ...` lines through `lib/log-append.ps1` for `Crash flag:`, `Running self-test via` and one verdict line before every exit (`SELF-TEST PASSED n/t`, `FAILED n/t`, `NOT RUN (exit 2/3/4): <why>`). When the variable is unset (a human run), output is plain Write-Host. `tests/test-harness-loop-tee.js` runs the REAL harness with a missing AfterFX.exe (exit 2, AE never touched) while a reader holds the log open. Not yet seen in a real loop night. | §20e | nothing | no |
 | 21 | ~~A guard test for the pass invocation, so a future brief edit cannot re-inject a bare `--` and silently drop the bypass flag again.~~ **DONE 2026-09-16 (daytime pass, no bump, tests only).** `tests/test-pass-invocation.js` runs the loop's OWN brief + flag block and pass pipeline against a stub CLI and parses argv with end-of-options rules: the bypass must be an OPTION, `-p` last, no positional text, whole brief on stdin. Mutations: the old `-p $prompt` shape on PS 5.1 and a `--` injected into the real `.ps1` both go red. | §20d | nothing | no |
-| 22 | §21 leftovers: the watchdog rule keys on the word "recover" and can never match the real dialog; `Test-AellAeRunning` is version-blind; stale `CrashOccurred = 1` still sits on 26.2. | §21 | nothing | no |
+| 22 | ~~§21 leftovers: the watchdog rule keys on the word "recover" and can never match the real dialog; `Test-AellAeRunning` is version-blind; stale `CrashOccurred = 1` still sits on 26.2.~~ **DONE 2026-09-16 (daytime pass, no bump, scripts/tests only).** The "recover" rule is DELETED, not reworded: every rule falls back to WM_CLOSE, so a rule that matched the real text would press a blind key toward Safe Mode. The measured text is RECOGNISED instead (`Test-AellCrashPromptText`), and the harness names it on a startup timeout. `Test-AellAeRunning -VersionKey` counts only the AE that owns the key (unreadable version still blocks). The 26.2 flag is cleared (was 1). Still open: §21 steps 1 and 4, filed as 22a. | §21 | nothing | no |
+| 22a | **§21 step 1, OWNER EYE: which key opens AE NORMALLY from the crash prompt?** WM_CLOSE, ESC or ENTER on a throwaway AE, each followed by an `AELL_call` `-r` check (Safe Mode fails it). Only then can a rule answer it; `Test-AellCrashPromptText` is the matcher it should use. Step 4 (refuse to start when that prompt is already up, instead of spending 240 s) needs only the recogniser and a pre-launch `Get-AellDialogHarvest`, and could land without the key. | §21 | owner, AE | no |
 | 23 | The managed backend dies silently within the half hour — measure the cause before fixing it. | §17k | backend | maybe |
 | 24 | **No shipped template can take a reference image any more** — i2v left the bundle with the authored H3 graph. | §18 P9a | nothing | yes |
 | 25 | `download-gen-weight` re-downloads a weight already present in another `comfyModelRoots` root (6.4 GB wasted, measured; the next one is 26 GB). | §18 P7b | nothing | yes |
@@ -5839,6 +5840,15 @@ either corrected or deleted so it does not read as coverage that exists.
 
 **Human eye wanted on step 1.** An unattended pass must not press a
 blind key on a dialog whose wrong branch silently removes the panel.
+
+**LEFTOVERS DONE 2026-09-16 (NEXT UP 22).** 21a is settled by DELETION: the
+`recover` rule is gone from `Get-AellDialogRules`, because every rule there
+falls back to WM_CLOSE and a correctly-worded one would press exactly the
+blind key this section forbids. The measured fragments (`detected a crash`,
+`Safe Mode`) live in `Test-AellCrashPromptText`, which only RECOGNISES, and
+`run-ae-selftest.ps1` uses it to name the prompt on a startup timeout.
+Prevention leftover 1 fixed (`Test-AellAeRunning -VersionKey`); leftover 2
+cleared on this machine. Steps 1 and 4 remain: NEXT UP 22a.
 
 ## 22. The install should hand a buyer exactly the setup their card can run (owner direction, filed 2026-09-09)
 
