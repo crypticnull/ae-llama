@@ -26,6 +26,26 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+# WORKPLAN 20e: the loop log never saw this script. A pass runs it as its
+# own child, so its stdout reaches the PASS, and the loop log got only the
+# summary the pass wrote at the end. When the 20b timeout killed a pass
+# (2026-09-09, pass 16) the summary died with it, and nothing recorded
+# whether the self-test had even been green: "Running self-test via" and
+# "Crash flag:" appeared zero times that night.
+#
+# run-local-agent.ps1 exports AELL_LOOP_LOG, which every child of the pass
+# inherits. The lines that decide a night go STRAIGHT into that file as
+# they happen, so a pass killed after this point still leaves them behind.
+# Unset (a human, an interactive session), it is plain Write-Host.
+. (Join-Path (Join-Path $PSScriptRoot "lib") "log-append.ps1")
+function Write-AellHarnessLine([string]$msg) {
+  Write-Host $msg
+  if ($env:AELL_LOOP_LOG) {
+    [void](Add-AellLogLine -Path $env:AELL_LOOP_LOG -Value (
+      '[' + (Get-Date -Format 'HH:mm:ss') + '] [harness] ' + $msg))
+  }
+}
+
 if (-not $RepoRoot) {
   $RepoRoot = Split-Path -Parent $PSScriptRoot
 }
@@ -44,6 +64,7 @@ if (-not $AfterFXPath) {
 }
 if (-not $AfterFXPath -or -not (Test-Path $AfterFXPath)) {
   Write-Host "AfterFX.exe not found - pass -AfterFXPath 'C:\...\AfterFX.exe'"
+  Write-AellHarnessLine "SELF-TEST NOT RUN (exit 2): AfterFX.exe not found"
   exit 2
 }
 
@@ -718,13 +739,13 @@ if ($canProbe -and -not $NoDismissStale) { Clear-AellStaleDialog }
 . (Join-Path $PSScriptRoot "lib\ae-crash-flag.ps1")
 $aeKey = Get-AellAeVersionKey -ExePath $AfterFXPath
 if ($null -eq $aeKey) {
-  Write-Host "Crash flag: could not read AfterFX.exe ProductVersion; skipping"
+  Write-AellHarnessLine "Crash flag: could not read AfterFX.exe ProductVersion; skipping"
 } else {
   $aeClear = Clear-AellAeCrashFlag -VersionKey $aeKey
-  Write-Host ("Crash flag: " + $aeClear.Reason)
+  Write-AellHarnessLine ("Crash flag: " + $aeClear.Reason)
 }
 
-Write-Host ("Running self-test via " + $AfterFXPath)
+Write-AellHarnessLine ("Running self-test via " + $AfterFXPath)
 Start-Process -FilePath $AfterFXPath -ArgumentList @("-r", $wrapper) |
   Out-Null
 
@@ -851,6 +872,8 @@ if ($blocking -and -not (Test-Path $out)) {
     Write-Host 'seeing it here means it came up DURING this run, or came'
     Write-Host 'back after being answered. Dismiss it by hand and re-run.'
   }
+  Write-AellHarnessLine ("SELF-TEST NOT RUN (exit 4): After Effects is " +
+    "blocked on a modal dialog: " + (($blocking -replace "`r?`n", " / ").Trim()))
   exit 4
 }
 
@@ -887,6 +910,11 @@ if (-not (Test-Path $out)) {
       "to Write Files and Access Network' enabled in Preferences > " +
       "Scripting & Expressions?")
   }
+  $why3 = 'AE never ran the suite (no blocking dialog found)'
+  if ($sawRunning) { $why3 = 'AE was still executing the suite' }
+  elseif ($state.SawStartup) { $why3 = 'AE never opened its main window' }
+  Write-AellHarnessLine ("SELF-TEST NOT RUN (exit 3): no results after " +
+    $TimeoutSec + "s; " + $why3)
   exit 3
 }
 
@@ -895,8 +923,8 @@ Write-Host "----"
 Write-Host $res.text
 Write-Host "----"
 if ($res.total -gt 0 -and $res.passed -eq $res.total) {
-  Write-Host "SELF-TEST PASSED"
+  Write-AellHarnessLine ("SELF-TEST PASSED " + $res.passed + "/" + $res.total)
   exit 0
 }
-Write-Host "SELF-TEST FAILED"
+Write-AellHarnessLine ("SELF-TEST FAILED " + $res.passed + "/" + $res.total)
 exit 1

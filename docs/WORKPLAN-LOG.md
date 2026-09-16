@@ -27018,3 +27018,34 @@ Rows above 18 were skipped. Owner: 5, 5a-4e, 5a-5b, 5a-5c, 5c, 6b, 17a. Backend,
 ### Needs a human eye
 
 - NEXT UP 17a (daytime-loop reading) is still open, and it is why this pass did not run the harness.
+
+## 2026-09-16 (local session) - the self-test verdict now reaches the loop log (NEXT UP 19, §20e)
+
+**Item:** NEXT UP 19. This is a DAYTIME pass, started 10:34 EDT, in the same `-UntilHour 17` loop as the entry above.
+
+**Harness: NOT RUN, on purpose.** NEXT UP 17a (does a loop started in the daytime lift CLAUDE.md's daytime rule?) is still unanswered, and I read it the same way the previous pass did: CLAUDE.md is the written rule. AfterFX.exe was running (pid 9580) and was not touched. Nothing in extension/ changed, so the suite would test the same panel code as the last green run (770/770, pass 2 today). Items 1-18 were skipped: each is done, needs the owner, or needs AE, the backend, the GPU or a chat model (see the entry above for the list).
+
+### Changed
+
+- `scripts/run-local-agent.ps1`: right after `Write-Log`, the loop sets `$env:AELL_LOOP_LOG = $logFile`. Every pass inherits it, and so does everything a pass spawns.
+- `scripts/run-ae-selftest.ps1`: new `Write-AellHarnessLine`. It dot-sources `lib/log-append.ps1`, so a reader holding the log cannot block it. When `AELL_LOOP_LOG` is set, it appends `[HH:mm:ss] [harness] <line>`. It is used for:
+  - both `Crash flag:` lines and `Running self-test via`;
+  - one verdict line right before each of the five exits: `SELF-TEST PASSED n/t`, `SELF-TEST FAILED n/t`, `SELF-TEST NOT RUN (exit 2): AfterFX.exe not found`, `(exit 3): no results after Ns; <which of the three causes>`, and `(exit 4): ... blocked on a modal dialog: <probe text>`.
+  - When the variable is unset (a human or interactive run), the output is exactly what it was.
+- `tests/test-harness-loop-tee.js` (new, 19 checks):
+  - Wiring: the export comes after `$logFile` and before the first pass. The harness has exactly exits 0-4, each writes through the tee last, and neither phrase goes through bare Write-Host.
+  - Behaviour: the REAL harness runs with a nonexistent `-AfterFXPath`, which exits 2 before anything AE-related runs. A Node read handle holds the log open during the run. The stamped `[harness]` verdict line lands under the loop's own line. With the variable unset, the log is byte-identical afterwards.
+  - Mutation check: I removed the export and reverted the exit-2 tee to Write-Host. 4 checks failed, then I restored both.
+- Also green: `test-powershell-syntax`, `test-loop-log-append`, `test-selftest-runner`, `test-source-control-chars`. Both `.ps1` files are still pure ASCII.
+
+### Decisions I made unattended
+
+- **An environment variable, not a new `-LoopLog` parameter.** The pass invokes the harness from the brief text, and editing the brief is how §20d's bare `--` broke four nights. An inherited variable needs no brief change.
+- **Only the lines that decide a night go to the loop log**, not the full suite dump (39+ step lines per run). The pass still receives the full output on stdout.
+- **The dot-source path is `Join-Path (Join-Path $PSScriptRoot "lib") "log-append.ps1"`**, not `"lib\..."`, because it now runs before the exit-2 check. With a backslash, a pwsh on Linux would fail there instead of reporting exit 2.
+- **No bump.** Nothing in extension/ changed.
+
+### Needs a human eye / not yet proven
+
+- This has not yet been seen in a real loop night. The first night pass that runs the harness should leave `[harness] Crash flag:`, `[harness] Running self-test via` and `[harness] SELF-TEST PASSED n/t` lines in `logs/local-agent-*.log`. If they are absent, the variable did not survive the WMI detach plus the CLI's own tool shells.
+- NEXT UP 17a is still open.

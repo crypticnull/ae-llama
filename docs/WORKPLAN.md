@@ -107,7 +107,7 @@ every pass and finished work costs the same context as live work.
 | 17 | ~~The panel can quote an ETA LONGER than `comfyTimeoutSec` and then cancel the job at 600 s, having promised a finish. Warn when the estimate passes the timeout, and put the estimate into the timeout message.~~ **DONE 2026-09-16 (daytime pass, stub-verified, NOT bumped - rides with 12a).** P3c (1) and (2). `tools.js generatingLine(elapsed, progress, timeoutSec, warned)`: the first progress line whose `elapsed + etaSec` passes the limit adds "but that is past the generation timeout (600s), so it will be cancelled first. Raise Settings > Generation timeout (s)..."; after that each line gets a short "(past the 10m timeout)" tag, because the sink appends a chat line every 10 s. `comfy.js timeoutProgressNote`: the timeout error now names the step, the percent and the projection it had, then "This is a limit, not a hang". Nothing is added when no step was reported. `tests/test-comfy-progress.js`: 11 new checks, including a real `generate` against the fake socket that times out at 4 s; against the old code they fail. (3), deriving the default from the catalog, stays with the owner. | §18 P3c | nothing | with 12a |
 | 17a | **OWNER, one line: does a loop started in the DAYTIME (`run-local-agent.ps1 -UntilHour 17`, started 10:20 on 2026-09-16) count as "unless he says otherwise"?** The pass brief's step 3 says to run the AE harness, and CLAUDE.md forbids that in the daytime. Two passes today read this differently: the 10:20 pass skipped it and logged a rule break, and the 10:25 pass ran it twice (770/770 both times). All of today's daytime passes kept off the GPU, the backend and the chat model, so 12a, 7b-2 and 7d are still waiting for night. Fix: either give the loop a `-Daytime` flag that removes step 3 from the brief, or write the answer into CLAUDE.md. | CLAUDE.md, §20 | owner | no |
 | 18 | ~~Pin the invariant the whole install plan rests on: refuse a BUNDLED manifest that names a non-core node pack. True today, guaranteed by nothing.~~ **DONE 2026-09-16 (daytime pass, no bump, tests only).** `tests/test-workflow-bundle.js` now refuses, per bundled template: any pack other than `(comfy-core)`, any `optionalNodes`, and any graph `class_type` not listed under `(comfy-core)`. The message names fixtures and §22d as exempt on purpose. All 10 bundled templates pass; the authored H3 i2v fixture copied into the bundle failed all three checks. | §22a | nothing | no |
-| 19 | Tee the harness's stdout into the loop log. `Running self-test via` and `Crash flag:` appear ZERO times across the whole 2026-09-09 night, so a killed pass leaves no record of whether its self-test was green. | §20e | nothing | no |
+| 19 | ~~Tee the harness's stdout into the loop log. `Running self-test via` and `Crash flag:` appear ZERO times across the whole 2026-09-09 night, so a killed pass leaves no record of whether its self-test was green.~~ **DONE 2026-09-16 (daytime pass, no bump, scripts and tests only).** The loop exports `AELL_LOOP_LOG = $logFile`, which every pass inherits. `run-ae-selftest.ps1 Write-AellHarnessLine` appends `[HH:mm:ss] [harness] ...` lines through `lib/log-append.ps1` for `Crash flag:`, `Running self-test via` and one verdict line before every exit (`SELF-TEST PASSED n/t`, `FAILED n/t`, `NOT RUN (exit 2/3/4): <why>`). When the variable is unset (a human run), output is plain Write-Host. `tests/test-harness-loop-tee.js` runs the REAL harness with a missing AfterFX.exe (exit 2, AE never touched) while a reader holds the log open. Not yet seen in a real loop night. | §20e | nothing | no |
 | 20 | A guard test for the pass invocation, so a future brief edit cannot re-inject a bare `--` and silently drop the bypass flag again. | §20d | nothing | no |
 | 21 | §21 leftovers: the watchdog rule keys on the word "recover" and can never match the real dialog; `Test-AellAeRunning` is version-blind; stale `CrashOccurred = 1` still sits on 26.2. | §21 | nothing | no |
 | 22 | The managed backend dies silently within the half hour — measure the cause before fixing it. | §17k | backend | maybe |
@@ -162,10 +162,9 @@ elapsed time, the live pid and the dirty-file count; `Pass committed
 first night at 45:48 and the loop took the next pass 20 seconds later,
 which is the only reason the last two passes ran at all.
 
-What it does NOT tell you is §20e: the harness's own stdout goes to the
-pass, not the loop, so `Running self-test via` and `Crash flag:` appear
-zero times. A pass killed mid-harness leaves no verdict behind. That is
-queue item 3.
+§20e is DONE (2026-09-16): the harness appends its `Crash flag:`,
+`Running self-test via` and verdict lines to the loop log as
+`[harness]` lines, so a pass killed mid-harness still leaves them.
 
 **Gate 0 for every pass that touches settings or downloads:** print
 `Settings.origin()` and refuse when `appdata` is empty. The detached loop
@@ -5675,7 +5674,9 @@ prints `Pass committed <sha>` or `Pass produced no commit`. Until that
 has been seen once, the loop is not known to work end to end and no
 overnight run should be started.
 
-### 20e. The harness's own output never reaches the loop log — takeable, no bump
+### 20e. The harness's own output never reaches the loop log — DONE 2026-09-16
+
+**Done (NEXT UP 19).** `AELL_LOOP_LOG` is exported by the loop, and `Write-AellHarnessLine` in `run-ae-selftest.ps1` writes to it. A loop night now carries a `[harness]` verdict line for every self-test a pass ran, and that line stays in the log even if the pass is killed. It is only a launch line if the kill came mid-suite. Guarded by `tests/test-harness-loop-tee.js`. The original filing follows.
 
 Filed 2026-09-09 (local session) from the first full overnight run.
 

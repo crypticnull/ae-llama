@@ -263,6 +263,12 @@ function Write-Log([string]$msg) {
     [void](Add-AellLogLine -Path $logFile -Value $line)
 }
 
+# WORKPLAN 20e: every pass inherits this, and so does the self-test it
+# runs. run-ae-selftest.ps1 appends its crash-flag, launch and verdict
+# lines here directly, so a pass killed by the timeout still leaves the
+# harness verdict in this log instead of dying with the pass summary.
+$env:AELL_LOOP_LOG = $logFile
+
 # Every exit from here on writes "Loop exit: <why>" as the log's last
 # line -- and an exit nobody named says UNEXPECTED with the last error.
 # The 2026-09-16 01:39 "silent death" was a loop spending 35 iterations
