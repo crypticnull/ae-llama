@@ -1145,6 +1145,71 @@
   }
 
   /**
+   * The length a video renders when the caller named none (WORKPLAN 18
+   * P3a(b)). The authored H3 graph defaulted to 15 s, a >15-minute render
+   * on a 5090, and that is what "make a video of X" handed a buyer. A
+   * template authored longer than AELL.COMFY_DEFAULT_CLIP_SECONDS is
+   * brought down to it; one authored shorter is left alone, and a named
+   * durationSeconds or frames always wins, so this is a default and never
+   * a ceiling. Says so in applied: a silently shorter clip reads exactly
+   * like a broken graph.
+   *
+   * Seconds templates are read through their manifest pointer. Frames
+   * templates through the same frame keys injectParams writes, over the
+   * graph's own `fps`; with no fps the length in seconds is unknowable
+   * and the graph keeps its authored count.
+   */
+  function capDefaultClip(graph, params, manifest, applied) {
+    var cap = global.AELL && global.AELL.COMFY_DEFAULT_CLIP_SECONDS;
+    if (!(cap > 0)) return;
+    if (params.durationSeconds > 0 || params.frames > 0) return;
+    var p = (manifest && manifest.procedural) || {};
+
+    if (p.durationSeconds) {
+      var dn = proceduralNode(graph, p.durationSeconds, "durationSeconds");
+      if (!dn) return;
+      var dk = proceduralKey(dn, p.durationSeconds, "durationSeconds");
+      var secs = Number(dn.inputs[dk]);
+      if (!(secs > cap)) return;
+      writeWidget(dn, dk, cap);
+      applied.push("durationSeconds=" + cap + " -> node " +
+        p.durationSeconds.nodeId + "." + dk + " (no length named: the " +
+        "template is authored at " + secs + " s, the default is capped at " +
+        cap + " s; pass durationSeconds to render longer)");
+      return;
+    }
+
+    var frameKeys = ["length", "frames", "video_frames", "num_frames"];
+    var fNode = null, fKey = null, fps = 0, k, i;
+    for (k in graph) {
+      if (!graph.hasOwnProperty(k)) continue;
+      var n = graph[k];
+      if (!n || !n.inputs) continue;
+      if (!fNode) {
+        for (i = 0; i < frameKeys.length; i++) {
+          if (typeof n.inputs[frameKeys[i]] === "number") {
+            fNode = k; fKey = frameKeys[i]; break;
+          }
+        }
+      }
+      if (!fps && typeof n.inputs.fps === "number") fps = n.inputs.fps;
+    }
+    if (!fNode || !(fps > 0)) return;
+    var authored = graph[fNode].inputs[fKey];
+    if (!(authored / fps > cap)) return;
+    // Step down in eights from the authored count: video latents here sit
+    // on a 4k+1 (Wan) or 8k+1 (LTX) frame grid, and a count congruent to
+    // the authored one mod 8 stays on either.
+    var frames = authored - 8 * Math.ceil((authored - cap * fps) / 8);
+    if (frames < 1) return;
+    graph[fNode].inputs[fKey] = frames;
+    applied.push("frames(" + fKey + ")=" + frames + " -> node " + fNode +
+      " (no length named: the template is authored at " + authored +
+      " frames = " + Math.round(authored / fps * 100) / 100 + " s, the " +
+      "default is capped at " + cap + " s; pass frames to render longer)");
+  }
+
+  /**
    * Graft params onto the graph. Returns a list of what was changed so the
    * LLM (and user) can see how the template was used.
    * params: {prompt, negative, width, height, seed, frames, durationSeconds,
@@ -1233,6 +1298,7 @@
     if (manifest && manifest.procedural) {
       injectProcedural(graph, params, manifest.procedural, applied);
     }
+    capDefaultClip(graph, params, manifest, applied);
     // After everything, because the answer depends on the graph as it is
     // going to be queued.
     noteOutputSize(graph, sizedIds, applied);

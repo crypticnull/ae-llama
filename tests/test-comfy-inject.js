@@ -301,6 +301,95 @@ assert(g["138"].inputs.prompt === "(neutral example)",
   }
 }
 
+// ------------------------------------- the default clip cap (18 P3a(b))
+
+// Everything above ran with no AELL, i.e. no cap: the cap is read from the
+// constant beside the catalog, so load the real one rather than restate 6.
+eval(fs.readFileSync(path.join(REPO, "extension", "js", "version.js"), "utf8"));
+const CAP = window.AELL.COMFY_DEFAULT_CLIP_SECONDS;
+assert(CAP === 6, "the default clip cap is the owner's 6 s (not 5: the " +
+       "shipped templates are authored at 5.04 and 5.17)");
+
+// H3 authored at 15 s, user names no length: the >15-minute render.
+g = h3Graph();
+applied = Comfy.injectParams(g, { prompt: "a kite" }, h3Manifest());
+assert(g["136"].inputs.value === 6,
+       "a 15 s seconds template with no length named renders 6 s");
+assert(/durationSeconds=6 -> node 136\.value .*authored at 15 s/
+         .test(applied.join(" | ")),
+       "and applied says it was capped, naming the authored 15 s");
+
+// Named lengths are honoured: a default, never a ceiling.
+g = h3Graph();
+Comfy.injectParams(g, { prompt: "x", durationSeconds: 12 }, h3Manifest());
+assert(g["136"].inputs.value === 12, "a named 12 s is not capped");
+
+// Authored under the cap: untouched and unmentioned.
+g = h3Graph(); g["136"].inputs.value = 5.17;
+applied = Comfy.injectParams(g, { prompt: "x" }, h3Manifest());
+assert(g["136"].inputs.value === 5.17 &&
+       applied.join(" ").indexOf("capped") === -1,
+       "a template authored at 5.17 s keeps its length, no cap line");
+
+// A string widget stays a string.
+g = h3Graph(); g["136"].inputs.value = "15";
+Comfy.injectParams(g, { prompt: "x" }, h3Manifest());
+assert(g["136"].inputs.value === "6", "a string seconds widget gets \"6\"");
+
+function framesGraph(length, fps) {
+  return {
+    "6": { class_type: "CLIPTextEncode", inputs: { text: "", clip: ["1", 0] } },
+    "55": { class_type: "Wan22ImageToVideoLatent",
+            inputs: { width: 1280, height: 704, length: length,
+                      batch_size: 1, vae: ["39", 0] } },
+    "57": { class_type: "CreateVideo", inputs: { fps: fps, images: ["8", 0] } }
+  };
+}
+
+// Frames template authored at 361 frames / 24 fps = 15.04 s.
+g = framesGraph(361, 24);
+applied = Comfy.injectParams(g, { prompt: "x" }, { procedural: {} });
+const capped = g["55"].inputs.length;
+assert(capped === 137,
+       "361 frames @ 24 fps comes down to 137 (got " + capped + ")");
+assert(capped / 24 <= CAP && (capped + 8) / 24 > CAP,
+       "the largest count on the grid that fits the cap");
+assert(capped % 8 === 361 % 8 && (capped - 1) % 4 === 0,
+       "and it stays on the authored frame grid (4k+1 / 8k+1)");
+assert(/frames\(length\)=137 -> node 55 .*361 frames/.test(applied.join(" | ")),
+       "applied names the cap and the authored frame count");
+
+// The shipped wan22-5b shape, 121 frames = 5.04 s: untouched.
+g = framesGraph(121, 24);
+applied = Comfy.injectParams(g, { prompt: "x" }, null);
+assert(g["55"].inputs.length === 121 &&
+       applied.join(" ").indexOf("capped") === -1,
+       "121 frames (5.04 s, the shipped Wan default) is not clipped");
+
+// Named frames win; no fps means seconds are unknowable, so no cap.
+g = framesGraph(361, 24);
+Comfy.injectParams(g, { prompt: "x", frames: 241 }, null);
+assert(g["55"].inputs.length === 241, "named frames are honoured");
+g = framesGraph(361, 24); delete g["57"];
+Comfy.injectParams(g, { prompt: "x" }, null);
+assert(g["55"].inputs.length === 361,
+       "no fps in the graph: the authored count is left alone");
+
+// The shipped bundle, every template at its authored default: the cap
+// must not bite a single one (their measured blocks were read there).
+const BUNDLE = path.join(REPO, "extension", "comfy-workflows");
+fs.readdirSync(BUNDLE)
+  .filter((f) => /^AE_LLAMA_.*\.json$/.test(f) && !/\.manifest\.json$/.test(f))
+  .forEach((f) => {
+    const raw = fs.readFileSync(path.join(BUNDLE, f), "utf8");
+    const mfp = path.join(BUNDLE, f.replace(/\.json$/, ".manifest.json"));
+    const mf = fs.existsSync(mfp) ? JSON.parse(fs.readFileSync(mfp, "utf8"))
+                                  : null;
+    const out = Comfy.injectParams(JSON.parse(raw), { prompt: "x" }, mf);
+    assert(out.join(" ").indexOf("default is capped") === -1,
+           f + ": the shipped template is not clipped by the default cap");
+  });
+
 // ------------------------------------------------------------ the upload
 
 let receivedHex = null;

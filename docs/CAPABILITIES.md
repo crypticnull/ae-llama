@@ -574,7 +574,11 @@ Queued (see WORKPLAN for owners/order):
   rgthree Any Switch (Krea 2) rather than on a plain `CLIPTextEncode`
   does land; `comfy_generate` also takes `durationSeconds` (templates
   whose length is authored in seconds refuse a `frames` argument instead
-  of mis-writing it) and `image`, which uploads a local file to
+  of mis-writing it); a request that names no length renders at most
+  `COMFY_DEFAULT_CLIP_SECONDS` (6 s) and says so in the applied list,
+  so a template authored at 15 s no longer defaults to a quarter-hour
+  render — a named length is honoured (§18 P3a(b)). It also takes
+  `image`, which uploads a local file to
   ComfyUI's input folder — but with no bundled template declaring
   `procedural.firstFrame` any more, that argument is currently
   refused with a message naming what WOULD accept one (§18 P9a). `width`/`height` are the

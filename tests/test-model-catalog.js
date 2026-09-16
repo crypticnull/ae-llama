@@ -346,6 +346,15 @@ window.AELL.COMFY_CATALOG.forEach((e) => {
           }
         }
         if (authored > 0) {
+          // WORKPLAN 18 P3a(b): comfy_generate caps a no-length request at
+          // COMFY_DEFAULT_CLIP_SECONDS. A cap under an authored length
+          // re-clips that entry, and its measured block then quotes a job
+          // the panel no longer runs — so lowering the cap fails here.
+          assert(authored <= window.AELL.COMFY_DEFAULT_CLIP_SECONDS,
+                 e.name + ": authored " + authored + " s fits under the " +
+                 "default clip cap (" +
+                 window.AELL.COMFY_DEFAULT_CLIP_SECONDS + " s), so the " +
+                 "measured job is the job a no-length request renders");
           assert(e.authoredClipSeconds === authored,
                  e.name + ": authoredClipSeconds is the template's OWN " +
                  "default (" + authored + " s from " + where + "), " +

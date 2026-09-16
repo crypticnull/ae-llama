@@ -65,6 +65,17 @@
       }
     ],
 
+    // The clip length comfy_generate renders when the user names NONE and
+    // the template is authored longer (WORKPLAN 18 P3a(b), owner
+    // 2026-09-09: "a maximum of, like, five seconds"). SIX, not five: the
+    // shipped video templates are authored at 4.04, 5.04 and 5.17 s and
+    // the measured blocks below were read at those lengths, so a 5.00 cap
+    // would clip them and the catalog would quote jobs the panel no longer
+    // runs. A default, not a ceiling: a named durationSeconds or frames is
+    // honoured. tests/test-model-catalog.js pins it above every
+    // authoredClipSeconds, so lowering it fails loudly.
+    COMFY_DEFAULT_CLIP_SECONDS: 6,
+
     // Curated GENERATION models by VRAM tier (docs/COMFY_TIERS_PLAN.md).
     // Same feed override as the chat catalog: update.json's
     // "comfyCatalog" replaces this list without a panel release. Every
