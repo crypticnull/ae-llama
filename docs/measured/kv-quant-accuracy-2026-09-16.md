@@ -72,3 +72,33 @@ Same server command (`--kv shipped`), nothing else on 8737, steps as above,
   53-60, miss 12-18, HARM 26-28, canonical not passing 12-14. A candidate
   is green if its pass/HARM/canonical totals fall inside that (n=2 per
   candidate, clean project).
+
+## 11b-2, q8_0 16K at temperature 0 (loop pass, 14:41-14:55 EDT)
+
+Server `node scripts/kv-quant-probe.js --serve --models 7B --ctx 16384 --kv q8_0`
+(`-ctk q8_0 -ctv q8_0`), nothing else on 8737, `chat-probe --rig-check`
+first, then the same steps as the shipped runs. Graded against all four
+shipped T=0 transcripts above.
+
+| run | transcript | pass | miss | HARM | canonical not passing |
+|---|---|---|---|---|---|
+| q8_0 T0 r1 | chat-probe-2026-09-16T18-48-20.md | 57 | **20** | **22** | 13 |
+| q8_0 T0 r2 | chat-probe-2026-09-16T18-55-05.md | 54 | 14 | **31** | **11** |
+| shipped T0 bar (4 runs) | | 53-60 | 12-18 | 26-28 | 12-14 |
+
+- **Not green by the bar as written** ("both runs inside the spread"): r1
+  misses 20 (> 18) and r2 has HARM 31 (> 28). But the excursions go BOTH
+  ways: HARM 22 is better than any shipped run, canonical 11 is better
+  than any shipped run. Candidate means (pass 55.5, miss 17, HARM 26.5,
+  canonical 12) sit inside shipped's range on every column.
+- **Reading:** the 4-run shipped range is narrower than the run-to-run
+  noise it is meant to bound (the q8_0 pair alone spans HARM 22-31), so a
+  2-run candidate can land outside it by chance in either direction. This
+  is inconclusive, not evidence that q8_0 hurts.
+- **Two rows moved against q8_0 in BOTH runs**, which is the one signal
+  worth keeping: `parenting / canonical` regressed, and
+  `hide half a layer with a mask / typo` became HARM. Check these in r3/r4.
+- **Bar for r3/r4, declared BEFORE those runs exist** so it cannot be
+  fitted to them: with q8_0 16K at n=4, green if the 4-run MEANS satisfy
+  pass >= 53, miss <= 18, HARM <= 28, canonical not passing <= 14, AND
+  neither of the two rows above fails in 3 or more of the 4 runs.

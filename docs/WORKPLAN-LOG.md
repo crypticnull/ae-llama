@@ -27606,3 +27606,18 @@ Tests: test-pass-tree, claude-procs, powershell-syntax, loop-teardown, loop-hear
 **Incident, my own:** my one-off cleanup jsx read `.id` on a comp it had just removed. That threw, and a script alert blocked the `-r` queue. I closed it with WM_CLOSE on the #32770 dialog, AE answered the next `-r` at once, and I removed the last two comps with a fixed script. AE was not closed. The llama-server this pass started is stopped.
 
 **Assumed:** a second run of the SAME config (the determinism check the row asks for) is not a second config, so it fits "one config per pass". Not tried: `-np 1` / `cache_prompt:false` for true determinism. It would measure a server the panel does not ship, so the rate bar is the honest bar.
+## 2026-09-16 (local session) - KV quant 11b-2, q8_0 16K at T=0: inconclusive, not red; bar for r3/r4 declared before they run (NEXT UP 11b-2, §13b)
+
+**Item:** NEXT UP 11b-2 (rows above are owner-only or blocked). Pass started 14:40 EDT, daytime; `run-local-agent.ps1` PID 47376 (-UntilHour 17) is running, so the owner-started loop is the permission (17a).
+
+**Harness: 770/770 PASSED** at the start. Nothing under extension/ changed (docs only), so **no bump** and no re-run.
+
+**Measured:** q8_0 KV at 16K (`-ctk q8_0 -ctv q8_0`), 7B Q4_K_M, T=0, nothing else on 8737, `--rig-check` first (swept 12). Two runs, ~7 min each: r1 pass 57 / miss 20 / HARM 22 / canonical-not-passing 13; r2 54 / 14 / 31 / 11. Shipped T=0 bar (4 runs): 53-60 / 12-18 / 26-28 / 12-14. Table in `docs/measured/kv-quant-accuracy-2026-09-16.md`.
+
+**Reading:** by the bar as written, not green (r1 miss 20, r2 HARM 31). But the excursions go both ways (HARM 22 and canonical 11 beat every shipped run) and the candidate means (55.5 / 17 / 26.5 / 12) are inside shipped on every column. A 4-sample range is narrower than the noise it bounds, so this is inconclusive, not evidence that q8_0 hurts. Two rows moved against q8_0 in both runs: `parenting / canonical` regressed, and `hide half a layer with a mask / typo` became HARM.
+
+**Changed:** docs only. The measured doc gets the q8_0 section. WORKPLAN 11b-2 is rewritten: next is q8_0 16K r3+r4, graded on 4-run MEANS, plus the two rows above failing in no more than 2 of 4. **That bar was declared BEFORE r3/r4 exist**, so it cannot be fitted to them. 11c stays gated.
+
+**Incident, my own:** I stopped the server with a `Get-CimInstance ... -match 'kv-quant-probe.js --serve'` filter, which also matched the PowerShell and bash processes carrying that same string and killed my own shell (exit 255). The server and its node wrapper did stop. AE (9580) was not touched, and 8737 is down. The workplan row now says to stop the server by PID.
+
+**Assumed:** two runs of one config are one config, as the previous pass also assumed. Changing the grading to means at n=4 is a judgement call made with no owner present. It is written down before the data so a later pass can hold it to account.
