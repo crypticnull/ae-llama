@@ -26668,3 +26668,46 @@ The orphaned `tail.exe` processes are not ours and were left alone
 **Lead for NEXT UP 2** (filed on its row): the 01:39 log had a `tail -F`
 on it, so "exited with no log line" may be an exit reason that was
 written and refused. Read the exit paths before adding more logging.
+
+## 2026-09-16 (local session) - the 01:39 loop did not die: a pass deleted its inputs and it spent 35 passes in 13 minutes
+
+SUPERSEDES: 26607,26610 -- "the first loop exited at 01:39 after six passes with no log line and no error". It ran all 40 iterations and ended normally; passes 6-40 each failed in a fraction of a second because pass 5 had deleted the loop's own prompt and settings files.
+
+**Item:** NEXT UP 2 / section 20f - "make the exit path say why, and log a reason on every exit including the unexpected ones".
+
+**Daytime pass (09:39).** This run is the owner-authorised daytime loop (26612), but CLAUDE.md still lists AE, the self-test harness, the full Node suite and GPU reads as ask-first by day, and this item needed none of them. So: **harness NOT run** (nothing under `extension/` changed), no GPU, no backend. The real loop exit path was not run either, because `Stop-AellLoopBackend` reads nvidia-smi and calls `--stop`. Verified with the parser, the loop tests and real PowerShell 5.1 runs of the new lib (below). **No bump.**
+
+### What happened, reconstructed without the log
+
+The 23:23 log is 15 lines (writes refused under `tail -F`, 26618). The evidence came from elsewhere:
+
+- **Pass transcripts** (`~/.claude/projects/...`): five passes, the last ending 01:24:52 (commit 80b7fec). No transcript for a sixth, and **nothing at all** written under `~/.claude` from 01:24:55 to 01:39:20, so no later CLI ever started a session.
+- **git reflog**: after the 01:24:29 commit, `checkout` at 01:25:14, 01:25:36, ... every ~22 s to **01:37:47** (35 entries). That is the loop's per-pass `git checkout $Branch` plus `-PauseSec 20`, for passes 6 to 40. Then 01:39:34 is the hand-restarted loop.
+- **Pass 5's transcript**, at 01:13:10, after its second `-Iterations 0` test run of the loop: `rm -f logs/pass-settings-*.json logs/pass-prompt-*.txt`. The wildcard removed loop PID 2888's `pass-settings-2888.json` and `pass-prompt-2888.txt` too. (Its first cleanup named PID 34580 explicitly; the second used the glob.)
+- **Measured now** (0.13 s, no session): `claude --dangerously-skip-permissions --settings <missing> -p` with empty stdin prints `Error: Settings file not found: ...` and exits 1. That matches neither the usage-limit regex nor the denied-permissions regex, so every iteration went "Pass produced no commit", slept 20 s, and moved on. The loop reached `Loop finished.` around 01:38, and that line was refused as well.
+
+So nothing about the exit path was silent in the sense filed. The real failures were: (1) the loop trusted files a pass can delete; (2) a CLI that cannot start reads as an idle pass; (3) no exit named its reason.
+
+### What changed (scripts only)
+
+- **`scripts/lib/loop-exit.ps1`** (new):
+  - `Register-AellLoopExitReport` registers one `PowerShell.Exiting` handler that writes `Loop exit: <reason> [at: pass N of M]` as the log's last line. When no exit named a reason it writes `UNEXPECTED ... Last error: <$Error[0]> (line N)`. Measured on PS 5.1 `-File`: the handler runs on `exit`, on falling off the end and on an uncaught `throw`. It cannot see `$script:` state, hence the globals. It does NOT run on a hard kill.
+  - `Set-AellLoopExitReason` and `Set-AellLoopExitContext` record the reason and where the loop is.
+  - `Restore-AellPassFile` rewrites a missing pass input.
+  - `Add-AellLoopKillNote` writes the kill line into the newest loop log.
+- **`run-local-agent.ps1`**:
+  - Registers the handler right after `Write-Log` exists.
+  - Every exit after that sets a reason: PreflightOnly, PREFLIGHT FAILED, stop time, unstashable tree, usage limit after 7 h, denied permissions, the new breaker, and "all N iterations used" plus committed/empty counts.
+  - Before each pass it rewrites the prompt and settings files if they are missing, and says so loudly.
+  - **Fast-fail breaker:** a no-commit pass under 60 s logs its CLI exit code and last 3 output lines. Three in a row stop the loop with those words as the reason. It runs after the usage-limit check, so a limit still waits.
+- **`stop-local-agent.ps1`**: after a successful `Stop-Process` on a loop it appends `Loop exit: killed by scripts\stop-local-agent.ps1 (loop PID N), by hand -- not a crash.`
+
+### Verification
+
+- New `tests/test-loop-exit-reason.js`:
+  - Static: every `break` / `exit N` after registration names a reason; restore runs before the pipeline; breaker wiring; no reason expression starts with a bare int, which throws in PS.
+  - Live PS 5.1 runs: a named exit, an uncaught throw (reason carries `boom` and the pass context) and falling off the end each leave their line, with a reader held open on the log. Restore leaves a present file alone and rewrites a deleted one. The kill note lands in the newest log.
+- All green: `test-loop-exit-reason`, `test-loop-teardown`, `test-loop-log-append`, `test-loop-heartbeat`, `test-pass-timeout`, `test-claude-procs`, `test-powershell-syntax`, and every other test that reads a `.ps1`.
+- `test-source-control-chars` is 3 of 4 FAILED **on clean HEAD as well**. It scans gitignored `local/attn-sweep.txt` and `local/ck7a-sweep.txt`, which carry ANSI escapes from the 7a/7c sweeps. That is local-only (CI has no `local/`). Filed as NEXT UP 2a.
+
+**Needs a human eye:** the loop running now (PID 50256, started 09:32) loaded the old script. It gets none of this until it is restarted, same as 26618.

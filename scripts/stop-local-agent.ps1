@@ -46,6 +46,10 @@ $ErrorActionPreference = 'Continue'
 
 . (Join-Path $PSScriptRoot 'lib\claude-procs.ps1')
 . (Join-Path $PSScriptRoot 'lib\comfy-teardown.ps1')
+# A killed loop runs no exit handler, so this script writes its last
+# line for it (NEXT UP 2): a log that just stops reads as a crash.
+. (Join-Path $PSScriptRoot 'lib\log-append.ps1')
+. (Join-Path $PSScriptRoot 'lib\loop-exit.ps1')
 
 function Find-Loop {
     return @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" `
@@ -74,6 +78,10 @@ if ($loops.Count -eq 0) {
         Write-Host ("Stopping loop PID " + $p.ProcessId)
         try {
             Stop-Process -Id $p.ProcessId -Force -ErrorAction Stop
+            [void](Add-AellLoopKillNote `
+                -LogDir (Join-Path (Split-Path -Parent $PSScriptRoot) 'logs') `
+                -Note ('killed by scripts\stop-local-agent.ps1 (loop PID ' +
+                       $p.ProcessId + '), by hand -- not a crash.'))
         } catch {
             Write-Host ("  could not stop it: " + $_.Exception.Message)
         }

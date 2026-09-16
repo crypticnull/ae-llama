@@ -255,6 +255,13 @@ function Write-Log([string]$msg) {
     [void](Add-AellLogLine -Path $logFile -Value $line)
 }
 
+# Every exit from here on writes "Loop exit: <why>" as the log's last
+# line -- and an exit nobody named says UNEXPECTED with the last error.
+# The 2026-09-16 01:39 "silent death" was a loop spending 35 iterations
+# in 13 minutes on a CLI that could not start; see lib\loop-exit.ps1.
+. (Join-Path $PSScriptRoot 'lib\loop-exit.ps1')
+Register-AellLoopExitReport -LogFile $logFile
+
 # --- the per-iteration brief ----------------------------------------
 # Single-quoted here-string: nothing interpolates, so the prompt reaches
 # the CLI exactly as written.
@@ -365,10 +372,12 @@ if ($Model) { $claudeFlags += @('--model', $Model) }
 # mangles embedded double quotes when it builds a native command line,
 # and a silently-corrupted --settings argument is worse than none.
 $styleFile = Join-Path $RepoRoot ('logs\pass-settings-' + $PID + '.json')
+$styleJson = '{"outputStyle":"default"}'
+$styleWritten = $false
 try {
-    Set-Content -Path $styleFile -Encoding ASCII `
-        -Value '{"outputStyle":"default"}'
+    Set-Content -Path $styleFile -Encoding ASCII -Value $styleJson
     $claudeFlags += @('--settings', $styleFile)
+    $styleWritten = $true
 } catch {
     Write-Host ('Could not write the pass settings file (' +
                 $_.Exception.Message + ') -- passes will run with ' +
@@ -590,6 +599,7 @@ if (-not $SkipPreflight) {
                 } catch {}
             }
             Write-Log ('Full log: ' + $logFile)
+            Set-AellLoopExitReason 'PreflightOnly -- environment checked, no passes by design.'
             exit 0
         }
     } else {
@@ -625,6 +635,7 @@ if (-not $SkipPreflight) {
             } catch {}
         }
         Write-Log ('Full log: ' + $logFile)
+        Set-AellLoopExitReason 'PREFLIGHT FAILED -- the CLI could not write a file; no pass started.'
         exit 3
     }
 }
@@ -633,14 +644,28 @@ if (-not $SkipPreflight) {
 # whenever a pass actually lands a commit.
 $limitWaits = 0
 
+# Passes in a row that returned within $fastFailSec having committed
+# nothing. 2026-09-16 01:25-01:38: thirty-five of these, 0.13 s each
+# ("Error: Settings file not found"), read as thirty-five idle passes.
+# A real pass reads the index and the queue before it can decide there
+# is nothing to do, so a minute is far below any honest one.
+$fastFails = 0
+$fastFailSec = 60
+$fastFailLimit = 3
+$passesCommitted = 0
+$passesEmpty = 0
+
 for ($i = 1; $i -le $Iterations; $i++) {
 
     if ($stopAt -and (Get-Date) -ge $stopAt) {
         Write-Log ('Reached stop time ' + $stopAt.ToString('HH:mm') + '. Done.')
+        Set-AellLoopExitReason ('reached the stop time ' +
+            $stopAt.ToString('yyyy-MM-dd HH:mm') + ' before pass ' + $i + '.')
         break
     }
 
     Write-Log ('===== pass ' + $i + ' of ' + $Iterations + ' =====')
+    Set-AellLoopExitContext ('pass ' + $i + ' of ' + $Iterations)
 
     $dirty = & git status --porcelain
     if ($dirty) {
@@ -655,6 +680,8 @@ for ($i = 1; $i -le $Iterations; $i++) {
         $still = & git status --porcelain
         if ($still) {
             Write-Log 'Stash could not clean the tree. Stopping to protect it.'
+            Set-AellLoopExitReason ('the working tree was dirty before pass ' +
+                $i + ' and git stash could not clean it.')
             break
         }
         Write-Log ('Salvaged to stash "loop-salvage-' + $stamp2 +
@@ -807,7 +834,28 @@ for ($i = 1; $i -le $Iterations; $i++) {
         Write-Log ('Pass timeout guard could not start: ' + $_.Exception.Message)
     }
 
+    # The pass inputs live under logs\ with a PID in the name, and a pass
+    # cleaning up after its own test run once deleted them with a
+    # wildcard (2026-09-16 01:13). Rewritten from memory, never trusted.
+    try {
+        if (Restore-AellPassFile -Path $promptFile -Value $prompt) {
+            Write-Log ('Pass prompt file was MISSING and has been rewritten: ' +
+                       $promptFile + '. Something deleted it -- a pass ' +
+                       'cleaning logs\pass-*? Those files belong to this loop.')
+        }
+        if ($styleWritten -and
+            (Restore-AellPassFile -Path $styleFile -Value $styleJson)) {
+            Write-Log ('Pass settings file was MISSING and has been rewritten: ' +
+                       $styleFile + '. Without it every pass exits at once ' +
+                       'with "Settings file not found".')
+        }
+    } catch {
+        Write-Log ('Could not restore the pass input files: ' +
+                   $_.Exception.Message)
+    }
+
     $passLines = New-Object System.Collections.Generic.List[string]
+    $passT0 = Get-Date
     try {
         Get-Content -Raw $promptFile |
             & $ClaudePath @claudeArgs 2>&1 | ForEach-Object {
@@ -819,6 +867,8 @@ for ($i = 1; $i -le $Iterations; $i++) {
     } catch {
         Write-Log ('Session error: ' + $_.Exception.Message)
     }
+    $passSec = [int]((Get-Date) - $passT0).TotalSeconds
+    $passExit = $LASTEXITCODE
 
     # Stop the beat BEFORE the reap, or the last line can claim a cli
     # process that is being killed as it is written.
@@ -864,6 +914,8 @@ for ($i = 1; $i -le $Iterations; $i++) {
             $limitWaits++
             if ($limitWaits -gt 21) {
                 Write-Log 'Usage limit still in force after ~7 hours of waiting. Stopping.'
+                Set-AellLoopExitReason ('usage limit still in force after ' +
+                    '~7 hours of waiting, at pass ' + $i + '.')
                 break
             }
             Write-Log ('Usage limit hit -- waiting 20 minutes, then retrying. ' +
@@ -887,12 +939,42 @@ for ($i = 1; $i -le $Iterations; $i++) {
             Write-Log 'remaining iterations on reports.'
             Write-Log 'See the PREFLIGHT FAILED notes in this script for'
             Write-Log 'what to check.'
+            Set-AellLoopExitReason ('pass ' + $i + ' reported DENIED ' +
+                'PERMISSIONS mid-run and committed nothing.')
             break
         }
         Write-Log 'Pass produced no commit (nothing done, or it stopped early).'
+        $passesEmpty++
+        if ($passSec -lt $fastFailSec) {
+            $fastFails++
+            $tail = @($passLines | Where-Object { $_ -and $_.Trim() } |
+                      Select-Object -Last 3) -join ' | '
+            if (-not $tail) { $tail = '(no output at all)' }
+            Write-Log ('Pass returned in ' + $passSec + 's (CLI exit ' +
+                       $passExit + '), too fast to have worked (' +
+                       $fastFails + ' in a row). Its last output: ' + $tail)
+            if ($fastFails -ge $fastFailLimit) {
+                Write-Log ''
+                Write-Log ('STOPPING: ' + $fastFails + ' passes in a row ' +
+                           'returned in under ' + $fastFailSec + 's with no ' +
+                           'commit. The CLI is failing to start a session, ' +
+                           'and every further iteration would fail the ' +
+                           'same way in seconds. Reproduce it by hand ' +
+                           'with the flags printed at the top of this log.')
+                Set-AellLoopExitReason (([string]$fastFails) + ' passes in a row ' +
+                    'returned in under ' + $fastFailSec + 's with no commit ' +
+                    '(last at pass ' + $i + ', CLI exit ' + $passExit +
+                    '): ' + $tail)
+                break
+            }
+        } else {
+            $fastFails = 0
+        }
     } else {
         Write-Log ('Pass committed ' + $after.Substring(0, 8))
         $limitWaits = 0
+        $fastFails = 0
+        $passesCommitted++
     }
 
     Start-Sleep -Seconds $PauseSec
@@ -900,6 +982,12 @@ for ($i = 1; $i -le $Iterations; $i++) {
 
 # The real exit, and the one that matters: the passes are done and the
 # machine is about to be the owner's again.
+Set-AellLoopExitContext 'teardown after the last pass'
+if (-not $global:AellLoopExitReason) {
+    Set-AellLoopExitReason ('all ' + $Iterations + ' iterations used.')
+}
+$global:AellLoopExitReason = $global:AellLoopExitReason + ' Passes: ' +
+    $passesCommitted + ' committed, ' + $passesEmpty + ' without a commit.'
 Stop-AellLoopBackend -Floor $gpuFloor -RepoRoot $RepoRoot `
     -Log ${function:Write-Log}
 
