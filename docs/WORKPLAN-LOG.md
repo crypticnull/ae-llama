@@ -25584,3 +25584,63 @@ Backend killed by port after each run; card back at 1 564 MiB.
 ### Filed (WORKPLAN)
 
 - 5a-4f struck with the table in 18 P7c step 2g; **5a-4g** added.
+
+## 2026-09-16 (local session) - sdxl's UNet cast to fp8 runs at full speed on an 8 GB card's room, straight out of the checkpoint the buyer already has
+
+**Item:** NEXT UP 5a-4g / WORKPLAN 18 P7c step 2g - fp8 sdxl at 4 937 MiB
+of room.
+
+**Harness: 770/770 PASSED** at the start of the pass. **No bump**:
+nothing under `extension/` is committed (a temporary catalog entry and
+template were used to drive the probe and reverted). Items above: 3
+blocked on the owner, 5a-4e is the owner's, the rest struck.
+
+### Route
+
+Only one core node casts weights on load: `UNETLoader.weight_dtype`. It
+lists `diffusion_models`, but the vendor `comfy/sd.py`
+`load_diffusion_model_state_dict` loads a UNet out of a whole checkpoint
+("Allow loading unets from checkpoint files"). So the 5b wall
+(`CheckpointLoaderSimple` has no dtype) does not apply: node 8
+`UNETLoader{sd_xl_base_1.0.safetensors, fp8_e4m3fn}` feeds KSampler,
+`CheckpointLoaderSimple` still gives CLIP and VAE. No new download.
+For the run the checkpoint was HARDLINKED into the managed
+`models/diffusion_models` (zero disk) and removed afterwards; the source
+in the Comfy-Desktop shared store is untouched. Graph kept at
+`local/AE_LLAMA_SDXL_FP8_T2I_V1.json`, driver `local/fp8-run.sh`, all
+git-ignored. Shipped unpinned boot on 8288, seed 12345.
+
+### Measured (RTX 5090, AE running)
+
+| room MiB | UNet staged | it/s | backend s | png |
+|---|---|---|---|---|
+| whole card | 2 448 MB | 9.96 | 4.57 | 091c71... |
+| 4 937 (8 GB minus AE) | 2 448 MB | 10.43 | 4.62 | identical |
+| 849 (8 GB minus AE minus desktop floor) | 2 448 MB | 1.24 | 18.91 | identical |
+
+fp16 at the same rooms (5a-4c/5a-4f): 4.27, 11.61, 16.9 s. Whole-card
+delta 5 882 MiB. Quality: seed 12345 SSIM 0.77 / PSNR 15.6 dB against
+fp16, seed 777 SSIM 0.87. I LOOKED at both pairs: same scene, light and
+cleanliness, a different car body. A cast shifts the denoise path; it
+is a different sample, not a degraded one. Two seeds is thin but the
+images carry no artifact to chase.
+
+### What I assumed / decided
+
+- **Did not ship.** The entry needs the checkpoint visible to
+  `UNETLoader` without a second 6.6 GB download, which is a change to the
+  managed yaml writer with side effects I have not checked (every
+  checkpoint appearing as a UNet choice, and the panel's own
+  dir-based presence checks). And a new catalog entry with its template
+  is a MINOR bump, which a loop pass does not take. Filed as **5a-4h**
+  with the candidate root fix and the entry values (gate 8,
+  `recommendFromGB 12` so the owner's defaults hold).
+- By 5a-4c's `constrainedFit` rule the gate is 8. At the floor room fp8
+  is SLOWER than fp16 (18.9 vs 16.9 s); the rule prices card-minus-AE,
+  so I did not treat that as disqualifying, but it is written down.
+- After the 849-room run the card read 658 MiB against 1 557 before:
+  the WDDM eviction of 5a-5 again. AE stayed up (pid 40976).
+
+### Filed (WORKPLAN)
+
+- 5a-4g struck with the table in 18 P7c step 2g; **5a-4h** added.
