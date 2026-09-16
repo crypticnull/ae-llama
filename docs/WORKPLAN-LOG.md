@@ -26482,3 +26482,43 @@ bump-version, capability-doc, self-update: all pass. Full suite not run
   so it is probably DynamicVRAM keeping more resident when the card has
   room rather than an attention cost, but that is a guess. The gate (8)
   rests on the 4 936 room run and does not move. Filed as NEXT UP 7d.
+
+## 2026-09-16 (local session) - SageAttention 2 and a matching triton-windows both exist for torch 2.13 / cp313 / cu130; the A/B is filed, not run
+
+**Item:** NEXT UP 7b (is SageAttention worth installing at all). 7c above
+it is done; items 3, 5a-4e, 5a-5b, 5a-5c, 5c are owner-only and 6b is not
+needed. Not attempted before tonight.
+
+**Assumed:** this pass started 07:51 EDT from the detached loop (PID 50396,
+`-UntilHour 8`). Step 1 of 7b is network-only, so I took it. Steps 2+
+(interpreter copy, install, Wan A/B) take ~15 min of GPU and would run
+past the owner's 08:00 stop, so I did NOT start them. That is a time-of-day
+call, not a blocker: filed as NEXT UP 7b-2 for an overnight pass.
+
+**Harness: 770/770 PASSED** at the start. Nothing in extension/ changed, no
+bump, no backend booted, no GPU work. AE left running, untouched.
+
+### Found (PyPI JSON API, GitHub releases API, pytorch repo)
+
+- torch 2.13.0 pins triton **3.7.1** (`.ci/docker/triton_version.txt` at
+  v2.13.0; v2.12.0 pins 3.7.0). The managed torch's METADATA declares no
+  triton dependency on Windows, so nothing picks it automatically.
+- `triton-windows 3.7.1.post27` has a `cp313-cp313-win_amd64` wheel
+  (49 684 257 bytes). PyPI latest is 3.8.0.post28, which is the wrong
+  pairing for our torch. The triton-windows README's torch/triton table
+  stops at 2.10, so do not use it for this.
+- PyPI `sageattention` is 1.0.6, the triton-only v1. SageAttention 2 for
+  Windows is woct0rdho/SageAttention releases: `v2.2.0-windows.post6`
+  (2026-07-17) has `sageattention-2.2.0+cu130torch2.10.0andhigher.post6-cp310-abi3-win_amd64.whl`.
+  It is abi3 (so it should work on cp313) and "andhigher" (so it should
+  work on torch 2.13). Neither is measured. The post6 notes say it fixes
+  an out-of-bounds bug that rendered black/noise output.
+- Managed install already verified in 7: python 3.13.14, torch
+  2.13.0+cu130, no triton/sageattention present.
+
+### Open
+
+- NEXT UP 7b-2: install the two wheels into a COPY of python_embeded,
+  do an import check, then A/B `--use-sage-attention` against the
+  `--use-ck-attention` references (96 s whole card / 102 s at 841 MiB) on
+  wan22-5b-fp8, and look at a frame.
