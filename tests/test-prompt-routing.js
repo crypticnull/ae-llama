@@ -13,6 +13,9 @@
 //   4. The sticky set, and the schema enum staying wide.
 //   5. Both callers (main.js, chat-probe.js) decide through the one
 //      Tools.promptOptsFor, so they cannot drift.
+//   6. Per-round extension (§24c): what a round called or its results
+//      named joins the next round's route, appended so the cached prefix
+//      survives, capped so a tool list in a result cannot undo routing.
 "use strict";
 const fs = require("fs");
 const path = require("path");
@@ -33,6 +36,10 @@ const Tools = win.Tools;
 const DEFS = Tools.TOOL_DEFS;
 const { STEPS } = require("../scripts/chat-probe.js");
 
+// Measured 18,672 on 2026-09-16 (§24c): the worst matrix sentence plus
+// 12 result-named tools with the longest docs and 2 called ones. Still
+// under half of today's whole prompt, and it leaves history at 12K.
+const EXTENDED_WORST_CEILING = 19500;
 const routed = (r, compact) =>
   Tools.buildSystemPrompt("", { compact: compact !== false, route: r });
 
@@ -234,6 +241,99 @@ for (const [label, s] of [["main.js", mainSrc], ["chat-probe.js", probeSrc]]) {
 }
 assert(/argValue\("--route"\)/.test(probeSrc),
        "chat-probe mirrors the setting as --route auto|all");
+
+// ------------------------------------------------------------ 6. per-round extension (§24c)
+
+// The sticky set reads the reply as the model WRITES it. The regex once
+// had `s*` for `\s*`, so it only matched unspaced JSON — the stub above
+// is unspaced, real replies are not.
+const spaced = [{ role: "assistant",
+  content: '{"reply": "ok", "commands": [{"tool": "add_solid", "args": {}}]}' }];
+assert(Tools.routeFor("make them blue instead", spaced).scores.add_solid === 2,
+       "sticky reads a spaced reply (\"tool\": \"add_solid\")");
+
+const S = { ctxSize: 16384, promptRouting: "auto" };
+const po0 = Tools.promptOptsFor(S, "add a blur to the logo", []);
+const r0 = po0.opts.route;
+assert(r0 && r0.matched, "the extension fixture routes");
+const docs = (p, name) => p.indexOf("\n- " + name + " ") !== -1;
+const outside = DEFS.map(d => d.name).filter(n =>
+  r0.tools.indexOf(n) === -1 && Tools.CORE_TOOLS.indexOf(n) === -1);
+const [calledOut, namedOut, laterOut] = outside;
+const p0 = Tools.buildSystemPrompt("{}", po0.opts);
+
+assert(!Tools.extendPromptOpts(po0, [{ tool: r0.tools[0] }], "ok") &&
+       po0.opts.route === r0,
+       "a round that adds nothing already rendered leaves the route alone");
+const offPo = Tools.promptOptsFor({ ctxSize: 16384, promptRouting: "all" },
+                                  "add a blur", []);
+assert(!Tools.extendPromptOpts(offPo, [{ tool: calledOut }], calledOut) &&
+       !offPo.opts.route,
+       "routing off: nothing to extend, the whole prompt stays");
+
+assert(Tools.extendPromptOpts(po0, [{ tool: calledOut }],
+         '[{"ok":false,"error":"To do that: ' + namedOut + '"}]'),
+       "a called tool and a result-named tool grow the route");
+const r1 = po0.opts.route;
+assert(r1 !== r0 && !r0.extended, "extension replaces the route, never mutates it");
+assert(r1.extended.join() === [calledOut, namedOut].join(),
+       "called first, then result-named: " + r1.extended.join());
+assert(po0.routeInfo === r1, "routeInfo follows, so the probe logs the grown set");
+const p1 = Tools.buildSystemPrompt("{}", po0.opts);
+assert(docs(p1, calledOut) && docs(p1, namedOut),
+       "both extension tools render their docs");
+const idx1 = p1.split("\n").find(l => /^Other tools/.test(l)) || "";
+assert(!new RegExp("[ ,]" + calledOut + "(,|$)").test(idx1) &&
+       !new RegExp("[ ,]" + namedOut + "(,|$)").test(idx1),
+       "an extension tool leaves the index line (named exactly once)");
+const cut0 = p0.indexOf("\nOther tools");
+assert(cut0 > 0 && p1.slice(0, cut0) === p0.slice(0, cut0),
+       "round 1 keeps round 0's whole prefix up to the index line (cache)");
+assert(Tools.extendPromptOpts(po0, [{ tool: laterOut }], ""),
+       "a later round extends again");
+const p2 = Tools.buildSystemPrompt("{}", po0.opts);
+const cut1 = p1.indexOf("\nOther tools");
+assert(p2.slice(0, cut1) === p1.slice(0, cut1) &&
+       p2.indexOf("\n- " + namedOut) < p2.indexOf("\n- " + laterOut),
+       "and appends after the earlier extension, prefix intact");
+
+assert(!Tools.extendPromptOpts(po0, [{ tool: "not_a_tool" }], "not_a_tool") &&
+       !Tools.extendPromptOpts(po0, [], "the calledOut layer, apply effectx"),
+       "unknown names and near-misses extend nothing");
+
+// A result that names every tool (a grounded list) cannot bring the
+// whole prompt back: result-named additions stop at the route cap.
+const poCap = Tools.promptOptsFor(S, "add a blur to the logo", []);
+Tools.extendPromptOpts(poCap, [], DEFS.map(d => d.name).join(", "));
+const named = poCap.opts.route.extended.length;
+Tools.extendPromptOpts(poCap, [], DEFS.map(d => d.name).join(", "));
+assert(named === 12 && poCap.opts.route.extended.length === 12,
+       "result-named extension caps at 12 per turn (" + named + ")");
+assert(Tools.extendPromptOpts(poCap, [{ tool: outside[outside.length - 1] }], "") ||
+       poCap.opts.route.extended.indexOf(outside[outside.length - 1]) !== -1,
+       "a CALLED tool still joins past the cap");
+// The ceiling is priced on the WORST matrix sentence extended by the 12
+// result-named tools with the longest docs, plus two called ones.
+const poWorst = Tools.promptOptsFor(S, worstSay, []);
+const longest = DEFS.filter(d => poWorst.opts.route.tools.indexOf(d.name) === -1)
+  .map(d => [Tools.buildSystemPrompt("", { compact: true, route: {
+     tools: poWorst.opts.route.tools, rules: poWorst.opts.route.rules,
+     extended: [d.name] } }).length, d.name])
+  .sort((a, b) => b[0] - a[0]).map(x => x[1]);
+Tools.extendPromptOpts(poWorst, [{ tool: longest[12] }, { tool: longest[13] }],
+                       longest.slice(0, 12).join(" "));
+const capPrompt = Tools.buildSystemPrompt("", poWorst.opts);
+console.log("   worst sentence extended to the cap: " + capPrompt.length +
+            " chars (+" + poWorst.opts.route.extended.length + " tools)");
+assert(capPrompt.length <= EXTENDED_WORST_CEILING,
+       "a turn extended to the cap stays <= " + EXTENDED_WORST_CEILING +
+       " chars (" + capPrompt.length + ")");
+for (const ctx of [16384, 12288]) {
+  const hb = Tools.historyBudget(ctx, capPrompt.length + 6026);
+  assert(hb.chars >= 2000 && !hb.starved,
+         "at " + ctx + " the capped extension + state leaves " + hb.chars +
+         " chars of history (>= 2000)");
+}
 
 if (failures) {
   console.error("\n" + failures + " prompt-routing check(s) FAILED");

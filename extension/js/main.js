@@ -657,16 +657,28 @@
 
     var s = global.Settings.get();
 
+    var po = null, turnState = "";
     fetchProjectState(function (stateJson) {
       // The prompt form follows the window: under 24K tokens the full
       // tool docs leave no room for a conversation (measured 2026-09-01),
       // so those windows get the compact docs. The rules block is the
       // same in both. promptRouting "auto" narrows it to this sentence's
       // tools (§24b); scripts/chat-probe.js makes the same call.
-      var po = global.Tools.promptOptsFor(s, text, history);
+      turnState = stateJson;
+      po = global.Tools.promptOptsFor(s, text, history);
       var system = global.Tools.buildSystemPrompt(stateJson, po.opts);
       runRound(system, 0);
     });
+
+    // Round N+1's route grows by what round N called and what its
+    // results named (§24c); the state stays this turn's. In step with
+    // scripts/chat-probe.js.
+    function nextSystem(system, commands, resultsText) {
+      if (!global.Tools.extendPromptOpts(po, commands, resultsText)) {
+        return system;
+      }
+      return global.Tools.buildSystemPrompt(turnState, po.opts);
+    }
 
     function finish() {
       busy = false;
@@ -841,9 +853,10 @@
               appendMsg(result.ok ? "tool" : "retry", body, head);
             },
             function (results) {
+              var resultsText = compactToolResults(results);
               history.push({
                 role: "user",
-                content: "TOOL RESULTS:\n" + compactToolResults(results)
+                content: "TOOL RESULTS:\n" + resultsText
               });
               if (cancelRequested) { finish(); return; }
               if (round + 1 >= s.maxRounds) {
@@ -852,7 +865,7 @@
                 finish();
                 return;
               }
-              runRound(system, round + 1);
+              runRound(nextSystem(system, commands, resultsText), round + 1);
             });
         });
     }

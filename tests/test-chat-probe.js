@@ -991,6 +991,16 @@ for (const n of Object.keys(PANEL_ONLY)) {
 }
 assert(/forceTinyContext/.test(probeSrc) && /forceTinyContext/.test(mainSrc),
        "and mirrors the reactive hard-trim retry on a context 400");
+// §24c: a prompt built once per turn and reused across rounds is the
+// bug per-round extension fixes. Both round loops must carry the
+// rebuild, fed the SAME compacted results text the model is sent.
+for (const [label, s] of [["main.js", mainSrc], ["chat-probe.js", probeSrc]]) {
+  assert(/Tools\.extendPromptOpts\(po, commands, resultsText\)/.test(s) &&
+         /runRound\(nextSystem\(system, commands, resultsText\), \w+ \+ 1\)/
+           .test(s) &&
+         /TOOL RESULTS:\\n" \+ resultsText/.test(s),
+         label + " rebuilds the routed prompt per round (§24c)");
+}
 
 // The same drift, one level down: tools.js dispatches through panel
 // MODULES, and a module the probe never loaded is not a grounded error,

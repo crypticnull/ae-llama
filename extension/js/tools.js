@@ -1630,7 +1630,7 @@
   // Tool names an assistant turn CALLED: its raw reply is the JSON the
   // schema forces, so "tool": "<name>" is the whole signal.
   function calledTools(content, into) {
-    var re = /"tool"s*:s*"([a-z0-9_]+)"/g, m;
+    var re = /"tool"\s*:\s*"([a-z0-9_]+)"/g, m;
     while ((m = re.exec(String(content || "")))) into[m[1]] = true;
   }
 
@@ -1651,7 +1651,7 @@
    *
    * `matched: false` means nothing scored: the caller renders the whole
    * prompt, byte for byte, so a sentence the router does not understand
-   * costs nothing in accuracy. Per-round extension is §24c, not here.
+   * costs nothing in accuracy. Per-round extension is extendPromptOpts.
    */
   function routeFor(text, history) {
     var sc = scoreTriggers(text);
@@ -1706,6 +1706,76 @@
              picked: picked, scores: scores };
   }
 
+  var EXTEND_CAP = ROUTE_CAP;   // result-NAMED tools one turn may add
+
+  // Known tool names a text mentions as whole words, in TOOL_DEFS order.
+  function toolNamesIn(text) {
+    var lower = " " + String(text || "").replace(/[^A-Za-z0-9_]+/g, " ") + " ";
+    var out = [];
+    for (var i = 0; i < TOOL_DEFS.length; i++) {
+      if (lower.indexOf(" " + TOOL_DEFS[i].name + " ") !== -1) {
+        out.push(TOOL_DEFS[i].name);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Per-round extension (DESIGN §2, §6; WORKPLAN §24c). Round N+1's route
+   * is round N's plus every tool the model CALLED in round N (rendered or
+   * not) plus every tool name round N's TOOL RESULTS mention ("To blur
+   * the picture: apply_effect"). No model call.
+   *
+   * The additions go on `route.extended`, in the order they arrived, and
+   * render AFTER the routed docs: a round only ever appends, so the
+   * prefix the previous round cached survives. They add docs, not rule
+   * bullets — a bullet lands mid-prompt and would re-prefill everything
+   * after it. Called tools always join; result-named ones stop at
+   * EXTEND_CAP per turn, so a result listing many tools cannot bring the
+   * whole prompt back.
+   *
+   * Takes promptOptsFor()'s return and replaces its route (the old route
+   * object is not touched). Returns true when the route grew, i.e. when
+   * the caller must rebuild the prompt; false when routing is off or the
+   * turn fell through to the whole prompt.
+   */
+  function extendPromptOpts(po, commands, resultsText) {
+    var route = po && po.opts && po.opts.route;
+    if (!route) return false;
+    var have = {}, i;
+    for (i = 0; i < CORE_TOOLS.length; i++) have[CORE_TOOLS[i]] = true;
+    for (i = 0; i < (route.tools || []).length; i++) have[route.tools[i]] = true;
+    var extended = (route.extended || []).slice();
+    var named = route.namedCount || 0;
+    for (i = 0; i < extended.length; i++) have[extended[i]] = true;
+    var grew = false;
+    function add(name, fromResults) {
+      if (have[name] || !isKnownTool(name)) return;
+      if (fromResults && named >= EXTEND_CAP) return;
+      have[name] = true;
+      extended.push(name);
+      if (fromResults) named++;
+      grew = true;
+    }
+    for (i = 0; i < (commands || []).length; i++) {
+      if (commands[i] && typeof commands[i].tool === "string") {
+        add(commands[i].tool, false);
+      }
+    }
+    var mentioned = toolNamesIn(resultsText);
+    for (i = 0; i < mentioned.length; i++) add(mentioned[i], true);
+    if (!grew) return false;
+    var next = {};
+    for (var k in route) {
+      if (Object.prototype.hasOwnProperty.call(route, k)) next[k] = route[k];
+    }
+    next.extended = extended;
+    next.namedCount = named;
+    po.opts.route = next;
+    po.routeInfo = next;
+    return true;
+  }
+
   // "Rules:" and each later section header, a blank line between
   // sections — the layout the prompt had as one literal array. `keep`
   // (a rule-id map) renders a subset in the same order: a section header
@@ -1724,6 +1794,11 @@
     }
   }
 
+  function pushToolDoc(lines, t, compact) {
+    lines.push("- " + t.name + " " + t.args);
+    lines.push("    " + (compact ? compactDesc(t.desc) : t.desc));
+  }
+
   function buildSystemPrompt(projectStateJson, opts) {
     var lines = [
       "You are an assistant embedded in Adobe After Effects. You control AE",
@@ -1739,7 +1814,7 @@
     // ONE index line naming every other tool, so "Use ONLY the tools
     // listed below" and the schema's wide enum both stay true.
     var route = opts && opts.route && opts.route !== "all" ? opts.route : null;
-    var keepRules = null, keepTools = null;
+    var keepRules = null, keepTools = null, extendTools = {};
     if (route) {
       keepRules = {};
       keepTools = {};
@@ -1747,6 +1822,7 @@
       for (k = 0; k < (route.rules || []).length; k++) keepRules[route.rules[k]] = true;
       for (k = 0; k < CORE_TOOLS.length; k++) keepTools[CORE_TOOLS[k]] = true;
       for (k = 0; k < (route.tools || []).length; k++) keepTools[route.tools[k]] = true;
+      for (k = 0; k < (route.extended || []).length; k++) extendTools[route.extended[k]] = true;
     }
     renderRules(lines, keepRules);
     lines.push("");
@@ -1755,9 +1831,18 @@
     var others = [];
     for (var i = 0; i < TOOL_DEFS.length; i++) {
       var t = TOOL_DEFS[i];
-      if (keepTools && !keepTools[t.name]) { others.push(t.name); continue; }
-      lines.push("- " + t.name + " " + t.args);
-      lines.push("    " + (compact ? compactDesc(t.desc) : t.desc));
+      if (keepTools && !keepTools[t.name]) {
+        if (!extendTools[t.name]) others.push(t.name);
+        continue;
+      }
+      pushToolDoc(lines, t, compact);
+    }
+    // Per-round extension renders after the routed set, in arrival order,
+    // so the prefix earlier rounds cached is untouched (extendPromptOpts).
+    var ext = route ? route.extended || [] : [];
+    for (var e = 0; e < ext.length; e++) {
+      if (keepTools[ext[e]] || TOOL_INDEX[ext[e]] === undefined) continue;
+      pushToolDoc(lines, TOOL_DEFS[TOOL_INDEX[ext[e]]], compact);
     }
     if (others.length) {
       lines.push("Other tools (call one and the host explains its args): " +
@@ -4669,6 +4754,7 @@
     historyBudget: historyBudget,
     promptModeFor: promptModeFor,
     promptOptsFor: promptOptsFor,
+    extendPromptOpts: extendPromptOpts, // per-round extension (§24c)
     routeFor: routeFor,               // the router (§24b)
     rollupHistory: rollupHistory,
     _summarizeEntry: summarizeEntry,  // exposed for tests

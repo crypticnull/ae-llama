@@ -26845,3 +26845,48 @@ Tests run, all exit 0: prompt-routing, prompt-rules, prompt-triggers, context-bu
 
 - NEXT UP 13 (§24c): rebuild the route per round in both callers. `promptOptsFor` is the seam, so extend it with the round's called tools and result text.
 - Unverified in a live panel: `main.js` now calls `Tools.promptOptsFor`. The stub check proves the call exists; only a panel send proves it runs. The next overnight harness pass should send one chat message with the default setting.
+
+## 2026-09-16 (local session) - per-round route extension in both round loops, and the sticky set never matched a spaced reply (routing step 3)
+
+**Item:** NEXT UP 13 (§24c). This pass started at 10:08 EDT, which is DAYTIME. After Effects was open (PID 9580), which is almost certainly the owner's paid work. Following CLAUDE.md's daytime rule over the loop brief's step 3, as the three earlier passes today did, I did NOT run `scripts/run-ae-selftest.ps1`, the full Node suite, or anything on the GPU. Skipped above 13: 12a (AE plus chat model), 7b/7b-2/7d (backend), 10 (chat model), and the owner rows. 13 was the first row whose needs are "nothing".
+
+**Harness: NOT RUN (daytime).** It could not see this change anyway, because the CLI runner never loads tools.js, main.js or chat-probe.js.
+
+### Changed
+
+- `extension/js/tools.js`
+  - New `extendPromptOpts(po, commands, resultsText)`, exported. Round N+1's route is round N's route plus the tools round N called plus the known tool names that appear as whole words in round N's compacted TOOL RESULTS.
+    - Called tools always join. Result-named tools stop at `EXTEND_CAP` (12) per turn.
+    - The route is replaced with a new object that carries `extended` (in arrival order) and `namedCount`. `po.routeInfo` follows it.
+    - It returns false when routing is off, when the turn fell through, or when nothing new was added.
+  - `buildSystemPrompt` renders `route.extended` after the routed docs and takes those tools off the index line. `pushToolDoc` is factored out.
+  - **Bug fix:** `calledTools` (the sticky set, §24b) used `/"tool"s*:s*"/`, i.e. literal `s` where `\s` was meant. It matched only unspaced JSON such as `"tool":"add_solid"`, which is exactly what the §24b stub used. `{"tool": "add_solid"}` scored nothing. Confirmed with node before the fix.
+- `extension/js/main.js` and `scripts/chat-probe.js`: both keep the turn's `po` and state, and both call `nextSystem(system, commands, resultsText)` on the way to round N+1. The probe prints `route extended: ...`.
+- `tests/test-prompt-routing.js`, new section 6:
+  - spaced sticky
+  - no-op and routing-off cases
+  - called first, then result-named
+  - the old route is not mutated
+  - docs render and the tools leave the index line
+  - round 1 and round 2 each keep the previous round's prefix up to the index line
+  - unknown names and near-misses extend nothing
+  - the cap of 12, with called tools still joining past it
+  - `EXTENDED_WORST_CEILING` and the starve rows for it
+- `tests/test-chat-probe.js`: both call sites must carry the rebuild, fed the same `resultsText` the model is sent.
+
+### Measured (stub, compact, no state)
+
+The worst matrix sentence (the alpha-matte step, 11,549 routed) was extended by the 12 result-named tools with the longest docs plus 2 called tools: **18,672 chars**. The ceiling is set at 19,500. With a 6,026-char state that leaves **15,726 chars of history at 16K and 4,666 at 12K** (today's whole prompt leaves 306 and 0). The fixture sentence ("add a blur to the logo") extended to the cap measured 10,924.
+
+Tests run, all exit 0: prompt-routing, chat-probe, prompt-triggers, prompt-rules, context-budget, history-trim, tool-result-budget, round-rollback, settings-migrate, es3-syntax, capability-doc, source-control-chars. `node --check` passes on main.js, chat-probe.js and tools.js.
+
+### Decisions I made unattended
+
+- **No bump.** The shipped `promptRouting` is "all", which never builds a route, so nothing a user runs changes. It was also never loaded in a panel. The same call was made for 9, 9b and 12.
+- **Extension adds docs, not rule bullets.** Bullets render mid-prompt, so adding one would re-prefill everything after it on every round. The design only says extension tools "append after the routed set" for the prefix's sake. If §24d shows an extended tool misused for want of its bullet, this is the thing to revisit.
+- **Result-named tools are capped at 12 per turn; called tools are not.** A grounded error that lists many tool names would otherwise bring back the whole prompt. The design names no cap. I reused ROUTE_CAP.
+- The text matched is the compacted string the model is SENT, not the raw results.
+
+### Found, filed (NEXT UP 13a)
+
+The hard-trim retry in `main.js` is broken in the panel. `runRound(system, round)` gets `round` as a number, and main.js runs in strict mode, so `round.forceTinyContext = true` throws `Cannot create property 'forceTinyContext' on number '0'` inside the llama callback. A context-400 then neither retries nor calls `finish()`, and the panel stays on "Thinking…". chat-probe.js is immune because its `round` is an object. I confirmed the throw with node and have not seen it in a panel. I did not fix it here (one item per pass). 12a now also asks for a 2+ round "auto" send.

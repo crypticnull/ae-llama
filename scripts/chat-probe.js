@@ -624,12 +624,14 @@ function sendMessage(text, done) {
   // ROLLED BACK result.
   let rollbackBudget = 1;
 
+  let po = null, turnState = "";
   aeEval("if ($.global.AELL_newRequest) $.global.AELL_newRequest();",
     function () {
       Tools.fetchProjectState(function (stateJson) {
         // In step with main.js: the prompt form follows the window, and
         // promptRouting (--route) narrows it the same way.
-        const po = Tools.promptOptsFor(s, text, history);
+        turnState = stateJson;
+        po = Tools.promptOptsFor(s, text, history);
         round.route = po.routeInfo;
         if (po.routeInfo) {
           console.log("   route: " + (po.routeInfo.matched
@@ -641,6 +643,15 @@ function sendMessage(text, done) {
         runRound(system, 0);
       });
     });
+
+  // In step with main.js: round N+1's route grows by what round N called
+  // and what its results named (§24c).
+  function nextSystem(system, commands, resultsText) {
+    if (!Tools.extendPromptOpts(po, commands, resultsText)) return system;
+    round.route = po.routeInfo;
+    console.log("   route extended: " + po.routeInfo.extended.join(","));
+    return Tools.buildSystemPrompt(turnState, po.opts);
+  }
 
   function runRound(system, n) {
     round.rounds = n + 1;
@@ -767,14 +778,15 @@ function sendMessage(text, done) {
             say(result.ok ? "tool" : "error", body, head);
           },
           function (results) {
+            const resultsText = compactToolResults(results);
             history.push({ role: "user",
-              content: "TOOL RESULTS:\n" + compactToolResults(results) });
+              content: "TOOL RESULTS:\n" + resultsText });
             if (n + 1 >= s.maxRounds) {
               say("info", "Stopped after " + s.maxRounds + " tool rounds.");
               done(round);
               return;
             }
-            runRound(system, n + 1);
+            runRound(nextSystem(system, commands, resultsText), n + 1);
           });
       });
   }
