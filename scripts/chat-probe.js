@@ -2657,8 +2657,33 @@ const STEPS = [
         return "Beta has " + b.masks + " mask(s), same as before — " +
                "nothing hides its lower half";
       }
+      // A mask that landed does not excuse what else the turn did to
+      // Beta: measured 2026-09-16 (q8_0 r3), the model moved it to the
+      // comp centre and set scale 0.5 percent, then added a correct mask.
+      if (was) {
+        const moved = (p, q) => p && q &&
+          (Math.abs(p[0] - q[0]) > 1 || Math.abs(p[1] - q[1]) > 1);
+        if (moved(b.scale, was.scale)) {
+          return "Beta was rescaled (" + JSON.stringify(was.scale) + " -> " +
+                 JSON.stringify(b.scale) + ") as well as masked";
+        }
+        if (moved(b.position, was.position)) {
+          return "Beta was moved (" + JSON.stringify(was.position) + " -> " +
+                 JSON.stringify(b.position) + ") as well as masked";
+        }
+      }
       const W = b.layerWidth, H = b.layerHeight;
-      const boxes = (b.maskBoxes || []).slice(had);
+      // Judged CLIPPED to the layer: the part of a mask past the layer's
+      // edge does nothing in AE, so [0,50,100,100] subtract on a 100x100
+      // layer hides exactly the bottom half. Unclipped, its area read as
+      // "covers the whole layer" and a correct mask scored HARM.
+      const clip = bx => {
+        if (!W || !H) return bx;
+        const x0 = Math.max(0, bx[0]), y0 = Math.max(0, bx[1]);
+        const x1 = Math.min(W, bx[0] + bx[2]), y1 = Math.min(H, bx[1] + bx[3]);
+        return [x0, y0, Math.max(0, x1 - x0), Math.max(0, y1 - y0)];
+      };
+      const boxes = (b.maskBoxes || []).slice(had).map(clip);
       const modes = (b.maskModes || []).slice(had);
       const inv = (b.maskInverted || []).slice(had);
       if (W && H && boxes.length) {

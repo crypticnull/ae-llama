@@ -1498,6 +1498,31 @@ function everySquare(state, fn) {
       b.maskModes = ["add"]; b.maskInverted = [true]; });
     assert(s.check(inverted, { before }) === null,
            "or an inverted add mask over the bottom half");
+    // Measured 2026-09-16 (q8_0 r1-r4, all four): the model's
+    // bounds [0,50,100,100] overhang the layer by 50 px. AE ignores the
+    // overhang, so this hides the bottom half and must not read as a
+    // mask "covering the whole layer".
+    const overhang = after(before, c => { const b = find(c, "Beta");
+      b.masks = 1; b.maskBoxes = [[0, 50, 100, 100]];
+      b.maskModes = ["subtract"]; b.maskInverted = [false]; });
+    assert(s.check(overhang, { before }) === null,
+           "a subtract box past the layer's bottom edge still hides the " +
+           "bottom half: " + s.check(overhang, { before }));
+    const shrunk = after(overhang, c => { const b = find(c, "Beta");
+      b.scale = [0.5, 0.5, 100]; });
+    const vs = s.check(shrunk, { before });
+    assert(vs && /rescaled/.test(vs),
+           "a right mask on a layer shrunk to 0.5 percent still fails: " + vs);
+    const shifted = after(overhang, c => {
+      find(c, "Beta").position = [300, 700, 0]; });
+    const vm = s.check(shifted, { before });
+    assert(vm && /moved/.test(vm),
+           "and so does a right mask on a layer dragged across the comp: " + vm);
+    const wide = after(before, c => { const b = find(c, "Beta");
+      b.masks = 1; b.maskBoxes = [[-20, 0, 1920, 50]];
+      b.maskModes = ["add"]; b.maskInverted = [false]; });
+    assert(s.check(wide, { before }) === null,
+           "and a comp-wide add band over the top half is the top half");
     const wrongHalf = after(cut, c => { find(c, "Beta").maskModes = ["add"]; });
     const v = s.check(wrongHalf, { before });
     assert(v && /not a band across the top half/.test(v),

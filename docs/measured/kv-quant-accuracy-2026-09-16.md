@@ -102,3 +102,59 @@ shipped T=0 transcripts above.
   fitted to them: with q8_0 16K at n=4, green if the 4-run MEANS satisfy
   pass >= 53, miss <= 18, HARM <= 28, canonical not passing <= 14, AND
   neither of the two rows above fails in 3 or more of the 4 runs.
+
+## 11b-2, q8_0 16K r3+r4, and a judge bug that moved r1/r2 (loop pass, 15:00-15:30 EDT)
+
+Same server and recipe as r1/r2 (`--rig-check` before each run). The
+`--steps` flag takes a comma list only; `1-11,15-36` silently ran steps 1
+and 15, so that run was thrown away and the literal list used.
+
+**The step-19 judge ("hide half a layer with a mask") was wrong, fixed in
+`scripts/chat-probe.js`.** It scored the mask's bounding box UNCLIPPED. The
+model's usual final answer, `bounds [0,50,100,100]` subtract on the 100x100
+Beta, spans y 50-150; AE ignores the overhang (the tool's own note says so),
+so it hides exactly the bottom half, but its unclipped area read as "covers
+the whole layer" -> HARM. Comp-wide bands (`[0,50,1920,100]`) failed the
+same way. The judge now clips to the layer, and also fails a turn that
+rescales or moves Beta on top of masking it (r3's typo run set scale 0.5
+percent). `tests/test-chat-probe.js` covers both; the new cases fail on
+the old judge.
+
+Re-graded by hand from each transcript's recorded mask state. Only step-19
+rows with a recorded mask can flip; a PASS row carries no state line, so a
+collateral transform on a passing row is not visible after the fact.
+
+| run | transcript | pass | miss | HARM | canonical not passing | step 19 change |
+|---|---|---|---|---|---|---|
+| shipped T0 r1 | 18-06-40 | 55 | 16 | 28 | 14 | none |
+| shipped T0 r2 | 18-13-34 | 60 | 12 | 27 | 14 | none |
+| shipped clean-a | 18-32-45 | **57** | 17 | **25** | 12 | vague HARM->pass |
+| shipped clean-b | 18-39-16 | 53 | 18 | 28 | 14 | none |
+| q8_0 T0 r1 | 18-48-20 | **59** | 20 | **20** | 13 | vague, typo HARM->pass |
+| q8_0 T0 r2 | 18-55-05 | **55** | 14 | **30** | 11 | typo HARM->pass (vague `[0,50,100,0]` stays HARM) |
+| q8_0 T0 r3 | 19-05-55 | 58 | 12 | 29 | 12 | none (vague `[0,0,100,100]` HARM; typo HARM, now for the rescale) |
+| q8_0 T0 r4 | 19-12-46 | **55** | 18 | **26** | 14 | vague, typo HARM->pass |
+
+- Shipped bar, re-graded: pass 53-60, miss 12-18, HARM **25-28**,
+  canonical not passing 12-14.
+- **q8_0 16K 4-run means: pass 56.75, miss 16, HARM 26.25, canonical 12.5.**
+  Inside the declared means bar on every column (>=53, <=18, <=28, <=14).
+  Unregraded they were 55.5 / 16 / 27.5 / 12.5, also inside.
+- `hide half a layer with a mask / typo`: HARM in 4 of 4 under the old
+  judge, **1 of 4** re-graded (r3, the rescale). Clause met.
+- `parenting / canonical`: fails in 3 of 4 q8_0 runs (miss, HARM, pass,
+  HARM). **Shipped fails the same row in 3 of 4** (HARM, HARM, miss,
+  pass). The clause as declared is failed, but its premise ("regressed in
+  both runs" against shipped) was false: those shipped transcripts existed
+  before r3/r4 and show the same rate.
+
+**Verdict: q8_0 16K GREEN**, with the parenting clause read as its intent
+("no worse than shipped"), not its letter. That reading is a judgement made
+after seeing r3/r4. It rests on shipped data that predates them, not on
+r3/r4's values, and it is written here so it can be overturned.
+
+**Bar for q8_0 32K, declared before any 32K run:** 4 runs at
+`--ctx 32768` (server AND probe), graded with the fixed judge against the
+re-graded shipped 16K range. Green if the 4-run means give pass >= 53, miss
+<= 18, HARM <= 28, canonical not passing <= 14, AND no row fails in more
+of the 4 runs than it fails in the 4 shipped runs plus 1.

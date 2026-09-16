@@ -27621,3 +27621,20 @@ Tests: test-pass-tree, claude-procs, powershell-syntax, loop-teardown, loop-hear
 **Incident, my own:** I stopped the server with a `Get-CimInstance ... -match 'kv-quant-probe.js --serve'` filter, which also matched the PowerShell and bash processes carrying that same string and killed my own shell (exit 255). The server and its node wrapper did stop. AE (9580) was not touched, and 8737 is down. The workplan row now says to stop the server by PID.
 
 **Assumed:** two runs of one config are one config, as the previous pass also assumed. Changing the grading to means at n=4 is a judgement call made with no owner present. It is written down before the data so a later pass can hold it to account.
+## 2026-09-16 (local session) - KV quant 11b-2, q8_0 16K r3+r4: GREEN after a probe judge fix; the mask step scored unclipped boxes (NEXT UP 11b-2, §13b)
+
+SUPERSEDES: 27609,27624 -- that entry's q8_0 r1/r2 totals (HARM 22/31, pass 57/54) and its "hide half a layer with a mask / typo became HARM in both runs" signal; both were a chat-probe judge bug. Re-graded r1/r2: pass 59/55, HARM 20/30. The shipped bar's HARM range (27594,27608) moves 26-28 -> 25-28.
+
+**Item:** NEXT UP 11b-2 (rows above it are owner-only or blocked). Pass started 14:56 EDT, daytime; `run-local-agent.ps1` PID 47376 (-UntilHour 17) is running, so the owner-started loop is the permission (17a).
+
+**Harness: 770/770 PASSED** at the start. Nothing under extension/ changed (scripts/chat-probe.js, its test, docs), so **no bump** and no re-run.
+
+**Measured:** q8_0 KV at 16K, 7B Q4_K_M, T=0, nothing else on 8737, `--rig-check` before each run. r3 `logs/chat-probe-2026-09-16T19-05-55.md` (raw 58/12/29/12), r4 `19-12-46.md` (raw 53/18/28/14). Server stopped by PID (llama-server 37328, node parent 37680); only TIME_WAIT sockets were left on 8737.
+
+**Found and fixed, the step-19 judge:** it scored the mask's bounding box unclipped. The model's usual answer `bounds [0,50,100,100]` subtract on the 100x100 Beta spans y 50-150; AE ignores the overhang and it hides exactly the bottom half, but the area test called it "covers the whole layer" -> HARM. Comp-wide bands `[0,50,1920,100]` failed the same way. That was the whole "typo HARM in 4 of 4" signal. The judge now clips to the layer and also fails a turn that rescales or moves Beta on top of masking it (r3's typo set scale 0.5 percent, which the old judge only caught by accident). `tests/test-chat-probe.js`: 4 new asserts, which fail on the old judge and pass on the new one.
+
+**Re-graded (by hand, from each transcript's recorded mask state), table in `docs/measured/kv-quant-accuracy-2026-09-16.md`:** q8_0 means pass 56.75, miss 16, HARM 26.25, canonical not passing 12.5, inside the declared bar on every column. The mask/typo row is 1 of 4. `parenting / canonical` fails 3 of 4, which fails the clause by its letter. But shipped fails the same row 3 of 4, and those shipped transcripts predate r3/r4. **Verdict GREEN**, reading that clause as "no worse than shipped". A PASS row records no state, so a collateral transform on a passing row cannot be re-checked after the fact.
+
+**Filed:** NEXT UP 33, because `chat-probe --steps 1-11,15-36` silently ran steps 1 and 15 only (`parseInt` per comma piece). That cost one ~1 min run, which was thrown away. The 11b-2 row now gives the literal list, and its next step is q8_0 32K, with its bar declared before any 32K run (measured doc, last section). 11c stays gated until 32K is graded.
+
+**Assumed:** reading the parenting clause by its intent is a judgement made after seeing r3/r4. It rests only on shipped data that already existed, and it is written down so the owner or a later pass can overturn it. If it is overturned, q8_0 16K is RED on that one row and 11c should not ship.
