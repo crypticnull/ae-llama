@@ -43,3 +43,32 @@ found); the other three are recorded.
 Either temperature 0 (`chat-probe --temperature 0`, added this pass), so
 one run per config compares decoding and not sampling, or a rate bar over
 N runs per config instead of per-row set differences. Filed as 11b-2.
+
+## 11b-2, shipped 16K at temperature 0 (loop pass, 14:00-14:40 EDT)
+
+Same server command (`--kv shipped`), nothing else on 8737, steps as above,
+`--temperature 0 --variants`, one label per run.
+
+| run | transcript | pass | miss | HARM | canonical not passing |
+|---|---|---|---|---|---|
+| T0 r1 (dirty project) | chat-probe-2026-09-16T18-06-40.md | 55 | 16 | 28 | 14 |
+| T0 r2 (dirty project) | chat-probe-2026-09-16T18-13-34.md | 60 | 12 | 27 | 14 |
+| T0 clean-a | chat-probe-2026-09-16T18-32-45.md | 56 | 17 | 26 | 12 |
+| T0 clean-b | chat-probe-2026-09-16T18-39-16.md | 53 | 18 | 28 | 14 |
+
+- **T=0 is not deterministic run to run.** r1 vs r2: RED (5 new HARM, 1
+  canonical regression). clean-a vs clean-b: RED (6 new HARM, 3 canonical
+  regressions), with the tool sequence itself differing on rows the AE
+  state cannot explain. A two-step sanity pair (steps 1-2) WAS identical.
+- **Part of the drift was the probe's own leak, now fixed:** the sweep
+  kept neither the comps the model makes with `create_comp` nor the rigs'
+  BG / Icon N / Beta solids or add_null's Null N sources. 2 055 unused
+  items sat in the open project and READ_COMP's project listing put the
+  growing count into every prompt. r2's "Squares 3" HARM was a leftover
+  "Squares" comp from r1. Fixing it did not make runs agree (clean pair
+  above), so the rest is the server: 4 slots on one unified KV with
+  prompt caching, whose logits are not batch-invariant.
+- **So 11b-2 uses the rate bar.** Shipped T=0 spread over 4 runs: pass
+  53-60, miss 12-18, HARM 26-28, canonical not passing 12-14. A candidate
+  is green if its pass/HARM/canonical totals fall inside that (n=2 per
+  candidate, clean project).

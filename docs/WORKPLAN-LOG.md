@@ -27590,3 +27590,19 @@ Tests: test-pass-tree, claude-procs, powershell-syntax, loop-teardown, loop-hear
 **No bump (assumed):** extension/ changed and the fix is AE-verified, which would normally mean a patch bump. But NEXT UP 12a is holding the next bump until a real panel proves that `main.js` still sends after 12/13/13a. A bump now would ship that unproven `main.js` too, so this rides with 12a. I added it to 12a's list, the way 7d/7e rode.
 
 **Incident, my own:** my first two repro scripts had a broken regex (a heredoc/python escape) and raised "Unable to execute script ... Unterminated string constant" alerts in AE, which blocked the `-r` queue. I closed both alerts with WM_CLOSE on the #32770 dialog. AE itself was not closed, and the project was not touched beyond the ST F32 scratch items, which the scripts removed.
+
+## 2026-09-16 (local session) - KV quant 11b-2, shipped half: T=0 is not deterministic, so the rate bar; the probe's sweep leaked 2 055 items into the prompt (NEXT UP 11b-2, §13b)
+
+**Item:** NEXT UP 11b-2 (rows above are owner-only or blocked). Pass started 13:58 EDT, daytime; `run-local-agent.ps1` PID 47376 (-UntilHour 17) is running, so the owner-started loop is the permission (17a).
+
+**Harness: 770/770 PASSED** at the start. Nothing under extension/ changed (scripts/chat-probe.js, its test, docs), so **no bump** and no re-run.
+
+**Measured (shipped 16K, 7B Q4_K_M, T=0, nothing else on 8737):** a steps-1,2 sanity pair was identical apart from AE ids, but the full matrix was not. r1 vs r2 RED (5 new HARM). Table and reading in `docs/measured/kv-quant-accuracy-2026-09-16.md`.
+
+**Found and fixed, the probe's own leak:** the open project held 2 107 items: 1 008 "Icon N", 479 "Null N", 400 "Beta", 168 "BG" unused solids and 4 empty "Squares 2 2 ..." comps the model made with `create_comp`. `sweepScript` only knew Red Square / White Ellipse / Rig footage and precompose receipts. READ_COMP's project listing carries the item count, so every run saw a different prompt, and r2's precompose HARM ("came out as Squares 3") was r1's leftover. `rememberPrecomp` now records a successful `create_comp` by id ONLY (a name could be the owner's), and the footage pass also takes unused `Icon N`, `BG`, `Beta`, `Null N` (exact shapes; "BG plate" stays). `tests/test-chat-probe.js` covers both, and passes. `chat-probe --rig-check` then swept 2 055 items, rigs OK.
+
+**After the fix, still not deterministic:** clean pair RED (6 new HARM, 3 canonical regressions, the tool sequence differing on rows AE state cannot explain). What remains is the server (4 slots, one unified KV, prompt caching, logits not batch-invariant). So 11b-2 now grades by the rate bar the row already allowed: shipped T=0 over 4 runs is pass 53-60, miss 12-18, HARM 26-28, canonical not passing 12-14. WORKPLAN 11b-2 is rewritten: q8_0 16K next, two runs.
+
+**Incident, my own:** my one-off cleanup jsx read `.id` on a comp it had just removed. That threw, and a script alert blocked the `-r` queue. I closed it with WM_CLOSE on the #32770 dialog, AE answered the next `-r` at once, and I removed the last two comps with a fixed script. AE was not closed. The llama-server this pass started is stopped.
+
+**Assumed:** a second run of the SAME config (the determinism check the row asks for) is not a second config, so it fits "one config per pass". Not tried: `-np 1` / `cache_prompt:false` for true determinism. It would measure a server the panel does not ship, so the rate bar is the honest bar.

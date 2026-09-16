@@ -1058,8 +1058,21 @@ const READ_COMP = FIND_COMP +
 const precomps = { itemIds: [], names: [] };
 
 function rememberPrecomp(tool, result) {
-  if (tool !== "precompose" || !result || !result.ok || !result.data) return;
+  if (!result || !result.ok || !result.data) return;
   const d = result.data;
+  // A comp the MODEL made with create_comp ("throw the squares into their
+  // own comp" -> create_comp Squares, six times) is the probe's too, and
+  // was never swept: measured 2026-09-16, four empty "Squares 2 2 ..."
+  // comps outlived a run and the next run's precompose came out as
+  // "Squares 3". By id only: the id is this run's own receipt, a name
+  // could be the owner's.
+  if (tool === "create_comp") {
+    if (typeof d.id === "number" && precomps.itemIds.indexOf(d.id) === -1) {
+      precomps.itemIds.push(d.id);
+    }
+    return;
+  }
+  if (tool !== "precompose") return;
   if (typeof d.id === "number" && precomps.itemIds.indexOf(d.id) === -1) {
     precomps.itemIds.push(d.id);
   }
@@ -1078,7 +1091,11 @@ function rememberPrecomp(tool, result) {
  * model's create_comp gets auto-numbered to "Probe Room 2" while the
  * verdicts below still read "Probe Room", so every check silently
  * inspects the previous run's comp. That happened. The precomp pass runs
- * BEFORE the footage pass so the solids are unused by the time it looks. */
+ * BEFORE the footage pass so the solids are unused by the time it looks.
+ * The footage names are every solid the two rigs build (BG, Icon N, Beta)
+ * and the null sources add_null leaves: measured 2026-09-16 the owner's
+ * project held 2 055 of them unused, and READ_COMP's project listing put
+ * that growing count into every prompt, so no two runs saw the same one. */
 function sweepScript(pre) {
   pre = pre || precomps;
   return "var ids = " + JSON.stringify(pre.itemIds) + ";" +
@@ -1110,7 +1127,7 @@ function sweepScript(pre) {
     "for (i = app.project.numItems; i >= 1; i--) {" +
     "  it = app.project.item(i);" +
     "  if (!(it instanceof FootageItem)) continue;" +
-    "  if (!/^(Red Square|White Ellipse|Rig)/.test(it.name)) continue;" +
+    "  if (!/^(Red Square|White Ellipse|Rig|Icon \\d+$|BG$|Beta$|Null \\d+$)/.test(it.name)) continue;" +
     "  try { if (it.usedIn.length === 0) { it.remove(); killed++; } }" +
     "  catch (e) {}" +
     "}" +

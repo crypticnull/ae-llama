@@ -2212,9 +2212,12 @@ function withHello(over) {
   rememberPrecomp("precompose", { ok: true, data: { precomp: "Squares",
     id: 77 } });
   rememberPrecomp("precompose", { ok: false, data: { precomp: "Nope", id: 5 } });
-  rememberPrecomp("create_comp", { ok: true, data: { name: "Other", id: 6 } });
-  assert(precomps.itemIds.join(",") === "77" && precomps.names.join(",") === "Squares",
-         "only a SUCCESSFUL precompose's comp is remembered, once, by id and name");
+  rememberPrecomp("create_comp", { ok: true, data: { name: "Squares", id: 6 } });
+  rememberPrecomp("create_comp", { ok: false, data: { name: "Nope", id: 7 } });
+  assert(precomps.itemIds.join(",") === "77,6" && precomps.names.join(",") === "Squares",
+         "a SUCCESSFUL precompose is remembered by id and name, a model's " +
+         "create_comp by id ONLY (its name could be the owner's)");
+  precomps.itemIds.splice(1);   // the stub project below predates create_comp
   const jsx = sweepScript(precomps);
   assert(/var ids = \[77\]/.test(jsx) && /var names = \["Squares"\]/.test(jsx),
          "the sweep script carries the recorded id and name");
@@ -2249,6 +2252,13 @@ function withHello(over) {
     Object.assign(new FootageItem(), { name: "Owner footage", id: 91,
       usedIn: [], removed: false, remove() { this.removed = true; } })
   ];
+  // The rigs' own solids and add_null's sources, unused: measured
+  // 2026-09-16, 2 055 of these sat in the owner's project and changed
+  // every prompt's project listing. "BG plate" is not a rig name.
+  const leak = ["Icon 3", "BG", "Beta", "Null 12", "BG plate", "Beta 2"].map((n, i) =>
+    Object.assign(new FootageItem(), { name: n, id: 100 + i, usedIn: [],
+      removed: false, remove() { this.removed = true; } }));
+  items.push(...leak);
   // The solid is "used" exactly while the recorded precomp still exists —
   // AE's usedIn, as the footage pass reads it after the precomp pass.
   Object.defineProperty(redSq, "usedIn", { get() {
@@ -2261,7 +2271,8 @@ function withHello(over) {
   const res = new Function("app", "CompItem", "FootageItem", "SolidSource",
     "return (function () {" + jsx + "})();")(fakeApp, CompItem, FootageItem,
                                               SolidSource);
-  const gone = items.filter(x => x.removed).map(x => x.name).sort();
+  const gone = items.filter(x => x.removed && leak.indexOf(x) === -1)
+    .map(x => x.name).sort();
   assert(JSON.stringify(gone) ===
          JSON.stringify(["Probe Room", "Red Square 1", "Squares", "Squares 3"]),
          "the sweep removes the probe comp, the recorded precomp, a " +
@@ -2270,7 +2281,10 @@ function withHello(over) {
   assert(!items[3].removed && !items[4].removed && !items[6].removed,
          "and leaves the owner's own Squares 2 (text inside), an empty " +
          "Squares 4 and unrelated footage alone");
-  assert(res.removed === 4, "and counts what it removed (" + res.removed + ")");
+  assert(leak.map(x => x.removed).join(",") === "true,true,true,true,false,false",
+         "the rig's unused Icon N / BG / Beta solids and Null N sources go, " +
+         "look-alike owner names stay");
+  assert(res.removed === 8, "and counts what it removed (" + res.removed + ")");
   assert(!/SWEEP\b/.test(probeSrc.replace(/\/\*[\s\S]*?\*\//g, "")),
          "no caller reaches for the old SWEEP constant");
   assert(/aeRead\(sweepScript\(precomps\)/.test(probeSrc) &&
