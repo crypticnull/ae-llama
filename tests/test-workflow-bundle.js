@@ -140,6 +140,41 @@ shipped.forEach((t) => {
          t.base + ": catalogEntry names a real catalog entry",
          String(mf.catalogEntry));
 
+  // WORKPLAN §22a: a BUNDLED template is core-only. The buyer's
+  // recommended set is installed with no custom node pack, so a graph
+  // naming one here renders on the owner's machine and on no buyer's.
+  // Pack-dependent graphs belong in the opt-in layer (§22d), and the
+  // owner's authored graphs live in tests/fixtures/ -- fixtures are
+  // EXEMPT on purpose, because this walk only reads the bundle folder.
+  // Do not "fix" a red here by adding the pack; move the template out.
+  const EXEMPT = "(tests/fixtures/ and the §22d opt-in layer are exempt " +
+                 "on purpose; move a pack-dependent graph there)";
+  const nonCore = (mf.customNodes || [])
+    .filter((e) => e.pack !== "(comfy-core)")
+    .map((e) => e.pack);
+  assert(Array.isArray(mf.customNodes) && nonCore.length === 0,
+         t.base + ": every pack it names is (comfy-core) [§22a]",
+         nonCore.length ? "NON-CORE: " + nonCore.join(", ") + " " + EXEMPT
+                        : undefined);
+  const optional = (mf.optionalNodes || []).map((o) => o.class);
+  assert(optional.length === 0,
+         t.base + ": carries no optionalNodes -- a bypassable pack node " +
+         "is still a pack node [§22a]",
+         optional.length ? optional.join(", ") + " " + EXEMPT : undefined);
+  // The attribution is only as honest as its coverage, so check the graph
+  // itself too rather than trusting test-workflow-manifests.js to run.
+  const coreNodes = ((mf.customNodes || [])
+    .filter((e) => e.pack === "(comfy-core)")[0] || {}).nodes || [];
+  const outside = Object.keys(graph)
+    .map((k) => graph[k] && graph[k].class_type)
+    .filter((c) => c && coreNodes.indexOf(c) === -1)
+    .filter((c, i, a) => a.indexOf(c) === i);
+  assert(outside.length === 0,
+         t.base + ": every class_type in the graph is listed under " +
+         "(comfy-core) [§22a]",
+         outside.length ? "NOT CORE-LISTED: " + outside.join(", ") + " " +
+                          EXEMPT : undefined);
+
   assert(mf.models instanceof Array && mf.models.length > 0,
          t.base + ": lists the models it loads");
   if (!(mf.models instanceof Array)) return;

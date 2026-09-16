@@ -26985,3 +26985,36 @@ Also run, all exit 0: every `tests/test-comfy*.js` (including timeout-cancel, wh
 
 - NEXT UP 17a: the daytime-loop reading.
 - P3c (3), deriving the default timeout from the measured catalog, is still the owner's call.
+
+## 2026-09-16 (local session) - bundled templates are now pinned core-only (NEXT UP 18, §22a)
+
+**Item:** NEXT UP 18. Pass 3 of the loop started 10:20 EDT (`-UntilHour 17`). This is a DAYTIME pass, started 10:32.
+
+**Harness: NOT RUN, on purpose.** NEXT UP 17a is still open: the owner has not said whether a loop started in the daytime lifts CLAUDE.md's daytime rule. Pass 1 skipped the harness and pass 2 ran it (770/770). I followed CLAUDE.md, the written rule, because a pass cannot tell whether the owner is working in that AE right now. This pass never touches extension/ and the harness does not load the comfy bundle, so a run would have proved nothing about this change. No AE, no backend, no GPU, no chat model.
+
+Rows above 18 were skipped. Owner: 5, 5a-4e, 5a-5b, 5a-5c, 5c, 6b, 17a. Backend, GPU or chat model: 7b, 7b-2, 7d, 10, 12a, 14. AE: 16.
+
+### Changed
+
+- `tests/test-workflow-bundle.js`: three new checks for each bundled template, all tagged [§22a].
+  - Every `customNodes` pack is `(comfy-core)`.
+  - There are no `optionalNodes`. A node you can bypass still comes from a pack.
+  - Every graph `class_type` is listed under `(comfy-core)`. This reads the graph directly, so it does not depend on `test-workflow-manifests.js` running.
+  - A failure names the offending packs or classes, and says that `tests/fixtures/` and the §22d opt-in layer are exempt on purpose. The test comment says to fix a red by moving the template out, not by adding the pack.
+- Result: 10 of 10 bundled templates pass (30 new ok lines), `ALL TESTS PASSED`. `test-workflow-manifests.js` still passes.
+- Mutation check: I copied `tests/fixtures/authored-h3/AE_LLAMA_H3_I2V_V1` into the bundle as `ZZ_MUT`. All three checks failed (7 non-core packs, 8 optional classes), then I removed the copy.
+- `docs/WORKPLAN.md`: item 18 and §22a are struck through as done.
+
+### Decisions I made unattended
+
+- **No bump.** Nothing in extension/ changed.
+- **`frontendOnly` is allowed.** Note-type UI nodes are not packs. Today's basics carry none.
+- **`optionalNodes` fails the check too, not only non-core packs.** §23's text already says "§22a's pin refuses `optionalNodes` in the bundle too".
+
+### Seen, not filed
+
+- `extension/workflows/` still holds the owner's authored UI exports (KREA2, H3 R2V, H3 I2V), which use packs. The pin does not cover them. §22a scopes it to `extension/comfy-workflows/`, and `loadWorkflow` refuses UI-format graphs anyway. If those files are packaged into the panel, that costs download size, not correctness.
+
+### Needs a human eye
+
+- NEXT UP 17a (daytime-loop reading) is still open, and it is why this pass did not run the harness.
