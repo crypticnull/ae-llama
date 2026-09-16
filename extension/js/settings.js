@@ -56,6 +56,10 @@
       customModels: [],        // absolute paths added via Browse…
       port: 8737,
       ctxSize: 16384,
+      // Prompt routing (WORKPLAN §24b): "auto" renders only the tools a
+      // sentence points at plus the core set; "all" is the whole prompt.
+      // Stays "all" until the §24d measurement flips it.
+      promptRouting: "all",
       gpuLayers: 99,
       temperature: 0.7,
       maxRounds: 6,

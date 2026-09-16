@@ -16,10 +16,9 @@
 //      whole prompt. Recall must be 100%; the fall-through count is
 //      pinned and may only go DOWN as triggers are added.
 //
-// The selection used for recall is DESIGN §2 step 3 as written — top 12
-// by score, the core set, and the `uses` closure of every rule an
-// owner brings in. It lives here until §24b builds `routeFor`; that item
-// should replace `route()` below with the real call.
+// Recall runs through the real router, Tools.routeFor (§24b): top 12 by
+// score, the core set, and the `uses` closure of every rule an owner
+// brings in. Its ceilings live in tests/test-prompt-routing.js.
 "use strict";
 const fs = require("fs");
 const path = require("path");
@@ -103,21 +102,9 @@ assert(Tools.scoreTriggers("it's a mess").rules.indexOf("clean-comp-ask") !==
 const byName = {};
 DEFS.forEach((t, i) => { byName[t.name] = i; });
 function route(text) {
-  const r = Tools.scoreTriggers(text);
-  const picked = Object.keys(r.tools)
-    .sort((a, b) => (r.tools[b] - r.tools[a]) || (byName[a] - byName[b]))
-    .slice(0, 12);
-  const tools = new Set(Tools.CORE_TOOLS.concat(picked));
-  const rules = new Set(r.rules);
-  for (const def of Tools.RULE_DEFS) {
-    if ((def.owners || []).some((o) => picked.indexOf(o) !== -1)) {
-      rules.add(def.id);
-    }
-  }
-  for (const def of Tools.RULE_DEFS) {
-    if (rules.has(def.id)) (def.uses || []).forEach((u) => tools.add(u));
-  }
-  return { matched: r.matched, tools, rules, picked };
+  const r = Tools.routeFor(text);
+  return { matched: r.matched, tools: new Set(r.tools),
+           rules: new Set(r.rules), picked: r.picked };
 }
 
 const sentences = [];

@@ -817,8 +817,10 @@
 
   var TOOL_NAMES = [];
   var MUTATING = {};
+  var TOOL_INDEX = {};         // name -> position, the router's tie-break
   for (var i = 0; i < TOOL_DEFS.length; i++) {
     TOOL_NAMES.push(TOOL_DEFS[i].name);
+    TOOL_INDEX[TOOL_DEFS[i].name] = i;
     if (TOOL_DEFS[i].mutating) MUTATING[TOOL_DEFS[i].name] = true;
   }
 
@@ -1621,12 +1623,98 @@
              matched: matched || rules.length > 0 };
   }
 
+  var ROUTE_CAP = 12;          // scored tools a route may pick (DESIGN §2)
+  var STICKY_TURNS = 3;        // assistant turns the sticky set looks back
+  var STICKY_SCORE = 2;
+
+  // Tool names an assistant turn CALLED: its raw reply is the JSON the
+  // schema forces, so "tool": "<name>" is the whole signal.
+  function calledTools(content, into) {
+    var re = /"tool"s*:s*"([a-z0-9_]+)"/g, m;
+    while ((m = re.exec(String(content || "")))) into[m[1]] = true;
+  }
+
+  /**
+   * The router of DESIGN §2, steps 1-3: which tools and rules this turn's
+   * prompt renders. Pure — no model, no I/O.
+   *
+   *   score     scoreTriggers(text), plus STICKY_SCORE for every tool the
+   *             last STICKY_TURNS assistant turns called ("make them blue
+   *             instead" has no keywords; its referent does)
+   *   select    every scored tool, best ROUTE_CAP by score, ties in
+   *             TOOL_DEFS order
+   *   rules     core bullets, bullets whose own triggers fired, and every
+   *             bullet a PICKED tool owns (a core tool's phrase-list rules
+   *             need that tool picked, like any other's)
+   *   closure   every rendered bullet's `uses` joins the tools, plus the
+   *             core set
+   *
+   * `matched: false` means nothing scored: the caller renders the whole
+   * prompt, byte for byte, so a sentence the router does not understand
+   * costs nothing in accuracy. Per-round extension is §24c, not here.
+   */
+  function routeFor(text, history) {
+    var sc = scoreTriggers(text);
+    var scores = {};
+    var n;
+    for (n in sc.tools) scores[n] = sc.tools[n];
+    var hist = history || [];
+    var seen = 0, sticky = {};
+    for (var h = hist.length - 1; h >= 0 && seen < STICKY_TURNS; h--) {
+      if (!hist[h] || hist[h].role !== "assistant") continue;
+      seen++;
+      calledTools(hist[h].content, sticky);
+    }
+    for (n in sticky) {
+      if (isKnownTool(n)) scores[n] = (scores[n] || 0) + STICKY_SCORE;
+    }
+    var names = [];
+    for (n in scores) names.push(n);
+    var matched = names.length > 0 || sc.rules.length > 0;
+    names.sort(function (a, b) {
+      return (scores[b] - scores[a]) || (TOOL_INDEX[a] - TOOL_INDEX[b]);
+    });
+    var picked = names.slice(0, ROUTE_CAP);
+    var tools = {}, rules = {};
+    var i, j;
+    for (i = 0; i < CORE_TOOLS.length; i++) tools[CORE_TOOLS[i]] = true;
+    for (i = 0; i < picked.length; i++) tools[picked[i]] = true;
+    for (i = 0; i < sc.rules.length; i++) rules[sc.rules[i]] = true;
+    for (i = 0; i < RULE_DEFS.length; i++) {
+      var def = RULE_DEFS[i];
+      var own = def.owners || [];
+      if (def.core) rules[def.id] = true;
+      for (j = 0; j < own.length; j++) {
+        if (scores[own[j]] && picked.indexOf(own[j]) !== -1) {
+          rules[def.id] = true;
+        }
+      }
+    }
+    for (i = 0; i < RULE_DEFS.length; i++) {
+      if (!rules[RULE_DEFS[i].id]) continue;
+      var uses = RULE_DEFS[i].uses || [];
+      for (j = 0; j < uses.length; j++) tools[uses[j]] = true;
+    }
+    var toolList = [], ruleList = [];
+    for (i = 0; i < TOOL_DEFS.length; i++) {
+      if (tools[TOOL_DEFS[i].name]) toolList.push(TOOL_DEFS[i].name);
+    }
+    for (i = 0; i < RULE_DEFS.length; i++) {
+      if (rules[RULE_DEFS[i].id]) ruleList.push(RULE_DEFS[i].id);
+    }
+    return { matched: matched, tools: toolList, rules: ruleList,
+             picked: picked, scores: scores };
+  }
+
   // "Rules:" and each later section header, a blank line between
-  // sections — the layout the prompt had as one literal array.
-  function renderRules(lines) {
+  // sections — the layout the prompt had as one literal array. `keep`
+  // (a rule-id map) renders a subset in the same order: a section header
+  // appears only when the section has a bullet.
+  function renderRules(lines, keep) {
     var section = null;
     for (var i = 0; i < RULE_DEFS.length; i++) {
       var r = RULE_DEFS[i];
+      if (keep && !r.core && !keep[r.id]) continue;
       if (r.section !== section) {
         if (section !== null) lines.push("");
         lines.push(RULE_SECTION_HEADER[r.section]);
@@ -1646,14 +1734,34 @@
       '  {"reply": "<short status for the user>", "commands": [{"tool": "...", "args": {...}}, ...]}',
       ""
     ];
-    renderRules(lines);
+    // opts.route: absent or "all" is today's prompt, byte for byte; a
+    // routeFor() result renders the core set plus what it routed, then
+    // ONE index line naming every other tool, so "Use ONLY the tools
+    // listed below" and the schema's wide enum both stay true.
+    var route = opts && opts.route && opts.route !== "all" ? opts.route : null;
+    var keepRules = null, keepTools = null;
+    if (route) {
+      keepRules = {};
+      keepTools = {};
+      var k;
+      for (k = 0; k < (route.rules || []).length; k++) keepRules[route.rules[k]] = true;
+      for (k = 0; k < CORE_TOOLS.length; k++) keepTools[CORE_TOOLS[k]] = true;
+      for (k = 0; k < (route.tools || []).length; k++) keepTools[route.tools[k]] = true;
+    }
+    renderRules(lines, keepRules);
     lines.push("");
     lines.push("Available tools:");
     var compact = !!(opts && opts.compact);
+    var others = [];
     for (var i = 0; i < TOOL_DEFS.length; i++) {
       var t = TOOL_DEFS[i];
+      if (keepTools && !keepTools[t.name]) { others.push(t.name); continue; }
       lines.push("- " + t.name + " " + t.args);
       lines.push("    " + (compact ? compactDesc(t.desc) : t.desc));
+    }
+    if (others.length) {
+      lines.push("Other tools (call one and the host explains its args): " +
+                 others.join(", "));
     }
     if (opts && opts.ledger) {
       lines.push("");
@@ -1693,9 +1801,30 @@
    * docs are the default there; a window that can hold the full docs AND
    * a conversation gets them.
    */
-  function promptModeFor(ctxSize) {
+  // `routed` is its own axis (settings promptRouting "auto"): a bigger
+  // window buys full descriptions for the ROUTED tools, never 79 tools
+  // back. Default "all" until the §24d measurement flips it.
+  function promptModeFor(ctxSize, promptRouting) {
     var ctx = Number(ctxSize) || 16384;
-    return { compact: ctx < 24576 };
+    return { compact: ctx < 24576, routed: promptRouting === "auto" };
+  }
+
+  /**
+   * The opts buildSystemPrompt gets for one user turn — the ONE place
+   * both callers (main.js sendMessage, scripts/chat-probe.js) decide
+   * routing, so they cannot drift. `routeInfo` is null when routing is
+   * off, else the routeFor() result (matched: false = whole prompt).
+   */
+  function promptOptsFor(settings, text, history) {
+    var s = settings || {};
+    var mode = promptModeFor(s.ctxSize, s.promptRouting);
+    var opts = { compact: mode.compact };
+    var info = null;
+    if (mode.routed) {
+      info = routeFor(text, history);
+      if (info.matched) opts.route = info;
+    }
+    return { opts: opts, routeInfo: info };
   }
 
   /**
@@ -4539,6 +4668,8 @@
     fitHistory: fitHistory,
     historyBudget: historyBudget,
     promptModeFor: promptModeFor,
+    promptOptsFor: promptOptsFor,
+    routeFor: routeFor,               // the router (§24b)
     rollupHistory: rollupHistory,
     _summarizeEntry: summarizeEntry,  // exposed for tests
     _compactDesc: compactDesc,        // exposed for tests

@@ -661,9 +661,10 @@
       // The prompt form follows the window: under 24K tokens the full
       // tool docs leave no room for a conversation (measured 2026-09-01),
       // so those windows get the compact docs. The rules block is the
-      // same in both.
-      var system = global.Tools.buildSystemPrompt(
-        stateJson, global.Tools.promptModeFor(s.ctxSize));
+      // same in both. promptRouting "auto" narrows it to this sentence's
+      // tools (§24b); scripts/chat-probe.js makes the same call.
+      var po = global.Tools.promptOptsFor(s, text, history);
+      var system = global.Tools.buildSystemPrompt(stateJson, po.opts);
       runRound(system, 0);
     });
 

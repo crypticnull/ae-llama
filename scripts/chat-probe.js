@@ -26,6 +26,7 @@
  *   node scripts/chat-probe.js --rig-check      # build the rig, no model
  *   node scripts/chat-probe.js --carry-history  # the old shared history
  *   node scripts/chat-probe.js --variants       # the paraphrase matrix
+ *   node scripts/chat-probe.js --route auto     # routed prompt (§24b)
  *
  * VARIANTS. --variants runs each selected step's canonical sentence AND
  * every paraphrase it declares (casual / vague / typo'd), each as its own
@@ -103,6 +104,7 @@ const OPT = {
   steps: argValue("--steps"),
   model: argValue("--model"),
   ctx: argValue("--ctx"),
+  route: argValue("--route"),
   keep: argv.indexOf("--keep") !== -1,
   afterFX: argValue("--afterfx"),
   reuseServer: argv.indexOf("--reuse-server") !== -1,
@@ -431,6 +433,16 @@ if (OPT.ctx) {
   Settings.get().ctxSize = want;
 }
 
+// --route auto|all: in-memory like --ctx, so a probe never rewrites the
+// owner's panel setting.
+if (OPT.route) {
+  if (OPT.route !== "auto" && OPT.route !== "all") {
+    console.error("--route wants auto or all, got " + OPT.route);
+    process.exit(2);
+  }
+  Settings.get().promptRouting = OPT.route;
+}
+
 /*
  * A step that has to impersonate different hardware (`settings: {...}` on
  * the step) gets it for the length of its own sentence and no longer.
@@ -615,9 +627,17 @@ function sendMessage(text, done) {
   aeEval("if ($.global.AELL_newRequest) $.global.AELL_newRequest();",
     function () {
       Tools.fetchProjectState(function (stateJson) {
-        // In step with main.js: the prompt form follows the window.
-        const system = Tools.buildSystemPrompt(
-          stateJson, Tools.promptModeFor(s.ctxSize));
+        // In step with main.js: the prompt form follows the window, and
+        // promptRouting (--route) narrows it the same way.
+        const po = Tools.promptOptsFor(s, text, history);
+        round.route = po.routeInfo;
+        if (po.routeInfo) {
+          console.log("   route: " + (po.routeInfo.matched
+            ? "matched, picked " + (po.routeInfo.picked.join(",") || "-") +
+              ", rendering " + po.routeInfo.tools.length + " tools"
+            : "no match, whole prompt"));
+        }
+        const system = Tools.buildSystemPrompt(stateJson, po.opts);
         runRound(system, 0);
       });
     });
@@ -676,6 +696,7 @@ function sendMessage(text, done) {
     // product's own payload rather than a rebuilt guess of it.
     if (roundObserver) {
       roundObserver({ system: sys, hb: hb, fitted: fitted,
+                      route: round.route || null,
                       messages: messages, round: n + 1, ctxSize: s.ctxSize });
     }
     const t0 = Date.now();
@@ -3413,7 +3434,8 @@ function startModel(cb) {
   console.log("-- model:   " + modelPath);
   console.log("-- ctx:     " + s.ctxSize + ", maxRounds " + s.maxRounds +
               ", temp " + s.temperature + ", tool docs " +
-              (Tools.promptModeFor(s.ctxSize).compact ? "COMPACT" : "FULL"));
+              (Tools.promptModeFor(s.ctxSize).compact ? "COMPACT" : "FULL") +
+              ", routing " + (s.promptRouting || "all"));
   Llama.on("status", function (state, detail) {
     if (state === "error") console.log("!! llama: " + detail);
   });
@@ -3478,7 +3500,7 @@ function writeTranscript(rows) {
       ", maxRounds " + s.maxRounds,
     "- tool docs: " +
       (Tools.promptModeFor(s.ctxSize).compact ? "COMPACT" : "FULL") +
-      " (Tools.promptModeFor)", ""];
+      " (Tools.promptModeFor), routing " + (s.promptRouting || "all"), ""];
   if (OPT.variants) {
     // Scenario / phrasing / chosen tool / verdict, the table WORKPLAN
     // section 8 asks for, before the transcripts it summarises.

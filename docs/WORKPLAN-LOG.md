@@ -26800,3 +26800,48 @@ That row taught one real lesson. "delet" stems to the same form as "delete", so 
 ### Open
 
 - NEXT UP 12 (§24b) should build `routeFor` on `scoreTriggers` and point the test's `route()` at it.
+
+## 2026-09-16 (local session) - the router behind a default-off promptRouting: worst routed prompt 11,549 chars against today's 39,803 (routing step 2)
+
+**Item:** NEXT UP 12 (§24b). This pass started at 10:02 EDT, which is DAYTIME. After Effects was open (PID 9580, started 09:32), almost certainly for the owner's paid work. Following CLAUDE.md's daytime rule over the loop brief's step 3, as the two earlier passes today did, I did NOT run `scripts/run-ae-selftest.ps1`, the full Node suite, or anything on the GPU. Skipped above 12: 7b-2 and 7d (backend), 10 (chat model), and the owner-decision rows. 12 was the first item with needs "nothing".
+
+**Harness: NOT RUN (daytime).** It could not see this change anyway: the CLI runner loads hostscript.jsx and selftest.js, never tools.js, main.js or chat-probe.js.
+
+### Changed
+
+- `extension/js/tools.js`:
+  - `routeFor(text, history)` is DESIGN §2 step 3 on top of `scoreTriggers`. It adds a +2 sticky score for tools called in the last three assistant turns (read from `"tool": "<name>"` in their raw JSON; unknown names are ignored). It picks the best 12 by score, ties in TOOL_DEFS order. Rules: core, rule-triggered, and every bullet a PICKED tool owns. Tools: core, picked, and the `uses` closure. It returns `{matched, tools, rules, picked, scores}` and is exported.
+  - `buildSystemPrompt` takes `opts.route`. Absent or "all" renders today's prompt, still sha-pinned byte-identical. A routeFor result renders core + routed bullets in original order (a header only when its section has a bullet), then core + routed tool docs, then ONE line: `Other tools (call one and the host explains its args): ...`.
+  - `promptModeFor(ctx, promptRouting)` adds `routed` as its own axis.
+  - New `promptOptsFor(settings, text, history)` is the one place both callers decide routing. A route that matched nothing yields no route, i.e. the whole prompt.
+- `extension/js/settings.js`: `promptRouting: "all"` default.
+- `extension/js/main.js`, `scripts/chat-probe.js`: both build through `promptOptsFor`. The probe takes `--route auto|all` (in memory, like `--ctx`). With routing on it prints the route per sentence, passes it to `roundObserver`, and names the routing mode in its header and log.
+- `tests/test-prompt-triggers.js`: recall now calls the real `Tools.routeFor`. The stand-in `route()` is gone. Recall is still 100 percent, with 1 fall-through.
+- New `tests/test-prompt-routing.js` covers DESIGN §13.1-6, 9 and 10, plus sticky, the cap, and a caller check that refuses either call site building its prompt any other way.
+
+### Measured (stub, compact docs, no state)
+
+| form | chars |
+|---|---|
+| today, all tools | 39,803 |
+| core only | 7,826 (ceiling 8,200; DESIGN estimated 7,959) |
+| routed, median over the matrix | 9,232 |
+| routed, worst (the alpha-matte step) | 11,549 (ceiling 14,000; DESIGN estimated 13,154) |
+| biggest single-tool group (stagger_layers) | 10,962 (ceiling 12,500) |
+
+History left beside the worst routed prompt plus a 6,026-char state: **20,926 chars at 16K, 9,867 at 12K**. Neither is starved.
+
+Tests run, all exit 0: prompt-routing, prompt-rules, prompt-triggers, context-budget, chat-probe, chat-load-gate, history-trim, token-ratios, tool-result-budget, round-rollback, settings-migrate, presets, organize-project, property-access, for-each-layer, solid-color, self-test, es3-ternary, es3-syntax, capability-doc, source-control-chars.
+
+### Decisions I made unattended
+
+- **No bump**, even though extension/ changed. The shipped default is "all", which is byte-identical, so a bump would publish an update that installs no visible change. The code was also never run in a real panel (daytime), so it does not meet the "verified in real AE" bar for a patch. The WORKPLAN row says no bump, and 9 and 9b made the same call.
+- The default is "all" (WORKPLAN §24b), not DESIGN §3's "auto".
+- A sticky score counts as a match. So a follow-up after any tool call never falls through to the whole prompt, which is the point of the sticky set ("make them blue instead").
+- `lastResults` is left for §24c (NEXT UP 13).
+- There is no Settings UI for `promptRouting`. It is noted in §24b for §24d/§24i.
+
+### Open
+
+- NEXT UP 13 (§24c): rebuild the route per round in both callers. `promptOptsFor` is the seam, so extend it with the round's called tools and result text.
+- Unverified in a live panel: `main.js` now calls `Tools.promptOptsFor`. The stub check proves the call exists; only a panel send proves it runs. The next overnight harness pass should send one chat message with the default setting.
