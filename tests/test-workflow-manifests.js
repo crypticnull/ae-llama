@@ -234,6 +234,39 @@ PAIRS.forEach(function ([rel, kind]) {
   }
 });
 
+// ------------------------------------- ltx-small decodes TILED, and it was measured
+
+{
+  /* WORKPLAN 18 P7c step 2d. The LTXV basic's node 8 is VAEDecodeTiled, not
+   * the vendor template's plain VAEDecode, and that single node is worth
+   * 1 338 MiB: measured back to back on one backend, one seed, an RTX 5090
+   * on 2026-09-16 — 13 882 MiB plain against 12 544 MiB tiled, 12s either
+   * way, SSIM 0.9958 between the two clips.
+   *
+   * Why a test and not just a manifest line: the swap looks like a
+   * complication of a graph whose whole stated virtue is being "the
+   * vendor's own template, node for node", so the cheapest thing a future
+   * pass can do to it is put the plain decoder back and call it tidying.
+   * Nothing would fail; the entry would simply cost 1.3 GB more on a card
+   * that is also holding After Effects (WORKPLAN 16b). The four inputs are
+   * pinned too, because they are the NODE'S OWN DEFAULTS — "a basic is the
+   * shape ComfyUI ships, not a tuned one" — and a pass that tunes them is
+   * making a different measurement and owes a new number.
+   */
+  const g = read("extension/comfy-workflows/AE_LLAMA_LTXV_2B_T2V_V1.json");
+  const dec = g["8"] || {};
+  assert(dec.class_type === "VAEDecodeTiled",
+         "ltx-small node 8 decodes tiled (1 338 MiB, measured 2026-09-16)");
+  const inp = dec.inputs || {};
+  assert(inp.tile_size === 512 && inp.overlap === 64 &&
+         inp.temporal_size === 64 && inp.temporal_overlap === 8,
+         "and at VAEDecodeTiled's own defaults (512/64/64/8), untuned");
+  assert(String(inp.samples && inp.samples[0]) === "72" &&
+         String(inp.vae && inp.vae[0]) === "44",
+         "wired to SamplerCustom 72 and the checkpoint's VAE 44, as the " +
+         "plain decoder was");
+}
+
 // ---------------------------------------------- the specific corrections
 
 {

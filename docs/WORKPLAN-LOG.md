@@ -24662,3 +24662,148 @@ asked of any future run for free.
 
 **Nothing is blocked for a human.** Step 2b (the LTXV licence) is still
 the one open owner question in this section and it is unchanged.
+
+## 2026-09-16 (local session) - the tiled decoder pays 1 338 MiB and does not move the gate, and a backend that had been "stopped" was still holding the port
+
+**Item:** NEXT UP 5a-1 / WORKPLAN 18 P7c step 2d - swap `ltx-small`'s
+node 8 to `VAEDecodeTiled` at the node's own defaults and measure the
+curve.
+
+**Harness: 770/770 PASSED** before the work and 770/770 after.
+**Version 0.12.21** (patch) - `extension/comfy-workflows/` changed, so
+this one bumps.
+
+### First, the thing that was in the way, because it is bigger than the item
+
+The pass could not run its first probe. `comfy-install.js --boot` refused
+with "Something is already answering on 127.0.0.1:8288 ... and the panel
+did not start it", and so did the panel's own generate path inside
+`catalog-vram-probe`.
+
+**The previous pass's own transcript
+(`logs/catalog-vram-probe-2026-09-16T06-10-59.md`) ends with `stopped the
+managed backend (pid 44324).`** Pid 44324 was still alive, still
+listening on 8288, out of the managed vendor root, when this pass started
+seventy minutes later. `comfy-managed.pid` had been deleted. The card
+read 4 172 MiB with it up and 3 523 MiB after a hand `taskkill`.
+
+Root cause is one line and it is in `extension/js/comfy.js`:
+`stopManaged()` fires `child_process.execFile("taskkill", ...)` with an
+EMPTY callback, sets `managedProc = null` and calls `forgetPid()` - so
+the kill is never waited for and the only record that could find the
+survivor is destroyed before the kill is known to have happened.
+`scripts/lib/comfy-managed.js` `stop()` then prints "stopped the managed
+backend (pid N)" and returns `true` without checking anything. On Windows
+a non-detached child dies inside the job object when its parent exits,
+which `boot()` in the same file already documents - and a CLI exits
+milliseconds after calling stop.
+
+**It is a RACE, not a constant failure**, which is why three teardown
+items did not catch it: `comfy-install.js --stop` run by hand three
+minutes later DID kill pid 41808 (verified gone, port free). 17q, 17q-b
+and 17q-c each verified the SCRIPTS around the stop - which exit calls
+it, which process it may kill - and none verified that the process died.
+`pidIsComfy()` is checked BEFORE the kill and never after.
+
+**And it does not merely waste VRAM, it bricks generation.** With the pid
+file gone and the process alive, `ensureRunning` correctly refuses a
+listener the panel did not start - except this one is the panel's own
+orphan, and nothing in the product recovers from it. A buyer whose panel
+crashed after booting the backend gets that message and no way out.
+
+Filed as **WORKPLAN 17q-d** and as **NEXT UP item 1c** (bumps: yes), with
+the four-point fix: kill synchronously, forget the pid only after the
+kill is confirmed, make `stop()` verify and say FAILED when it cannot,
+and back-fill the failure vocabulary in `tests/test-loop-teardown.js`.
+Not taken tonight - one item per pass, and 5a-1 was the queue's.
+
+### The item: measured, shipped, gate unmoved
+
+Two runs back to back on ONE backend (booted once by
+`comfy-install.js --boot`, so the two share a process), seed 12345, RTX
+5090, the only difference being node 8:
+
+| | `VAEDecode` | `VAEDecodeTiled` 512/64/64/8 |
+|---|---|---|
+| delta over idle | 13 882 MiB (13.6 GiB) | **12 544 MiB (12.3 GiB)** |
+| absolute peak | 17 836 | 16 716 |
+| wall clock | 12 s | **12 s** |
+| output | 768x512 x 97f | 768x512 x 97f |
+
+**1 338 MiB saved, free** - no download, no extra weight, no second of
+clock. The baseline run is itself the fourth reading of this entry
+(13 658 / 13 696 / 13 882 / 13 921) so the comparison is not resting on a
+stale number.
+
+**The gate does NOT move. 12.3 GiB is still more than a 12 GB card has
+in total**, so `ltx-small` stays at `minVramGB: 16` and 18 P7a's open
+half stays open. Step 2d said "if it lands at 13, say so and stop"; it
+landed at 12.3 and the honest answer is the same one.
+
+**Shipped anyway**, for the reason `wan22-5b-fp8` shipped its 1 873 MiB:
+headroom on a card that is also holding After Effects, which 16b charges
+for explicitly.
+
+**The seam was checked, not assumed.** `ffmpeg [0:v][1:v]ssim` between
+the two clips: **SSIM 0.9958, PSNR 45.6 dB Y** (min frame 38.2). Per-band
+PSNR across the width, 45.9 / 43.1 / 51.7 - the worst band is the one
+holding the subject, not the one holding the spatial seam at x~448-512,
+so the difference is diffuse decode noise and not a tile edge.
+
+### What the curve then explained, and it is the next item
+
+Everything except the decode is identical to the MiB between the two
+runs: sampling plateau 13 324 absolute in both, post-decode rest 13 804
+in both. The spike above the plateau went **4 512 -> 3 392**, i.e. the
+defaults removed a QUARTER of it, not the 95 percent step 2d hoped for.
+
+`nodes.py`'s own `decode()` says why. LTX's VAE reports temporal
+compression 8, so `temporal_size 64` becomes `64 // 8 = 8` LATENT frames
+- against 13 in a 97-frame job, i.e. **two temporal chunks**. Spatial
+compression 32 turns `tile_size 512` into 16 latent against a 24-wide
+latent: **two columns**. At the shipped defaults this job is barely
+tiled, which is also why it cost no time.
+
+**So the lever is still there and it is now sized.** Post-decode rest is
+9 632 MiB over idle and the sampling plateau is 9 152, so a decode
+costing nothing would peak near **9.4 GiB - inside a 12 GB card**.
+Reaching it means tuning `temporal_size`/`tile_size` BELOW their
+defaults, which stops the graph being "the vendor's shape" and needs its
+own measurement, its own seam check and its own manifest sentence. Filed
+as **18 P7c step 2e** and **NEXT UP 5a-2**, with the sweep, the seam
+check and the clock all named as parts of the answer.
+
+### Changed
+
+- `extension/comfy-workflows/AE_LLAMA_LTXV_2B_T2V_V1.json` - node 8 is
+  `VAEDecodeTiled` with all four inputs at the node's defaults.
+- `...manifest.json` - `customNodes` says `VAEDecodeTiled`, and change
+  (5) records the measurement, the SSIM and the fact that the gate did
+  not move.
+- `extension/comfy-workflows/.hash-history.json` - regenerated.
+- `tests/test-workflow-manifests.js` - a new pin. **The bug class it
+  catches is a revert, not a typo**: the swap looks like a complication
+  of a graph whose stated virtue is being the vendor's template node for
+  node, so the cheapest thing a later pass can do is put the plain
+  decoder back and call it tidying. Nothing would fail; the entry would
+  just cost 1.3 GB more. The four input values are pinned too, because
+  they are the node's DEFAULTS and a pass that tunes them owes a new
+  number (that is step 2e).
+
+### Verification
+
+- `node tests/test-workflow-manifests.js` and
+  `tests/test-workflow-hash-history.js` - green.
+- Full stub suite: **91 of 91** `tests/test-*.js`, zero failing.
+- Real AE harness **770/770**, before and after.
+- The measurement is its own verification: two probe runs, one backend,
+  logs `catalog-vram-probe-2026-09-16T06-23-17.md` (plain) and
+  `-06-23-51.md` (tiled), both with a `## curve` section.
+
+### Left for a human
+
+- **17q-d bumps and is item 1c** - the stop bug above. The card is clean
+  as of this pass (3 523 MiB, port 8288 free, verified), but the next
+  pass that stops a backend may leave one again.
+- Step 2b (the LTXV licence) is still the one open owner question in this
+  section and is unchanged.

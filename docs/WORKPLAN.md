@@ -54,12 +54,14 @@ every pass and finished work costs the same context as live work.
 | 1 | ~~**Make the loop verify its OWN teardown; a pass cannot.**~~ **DONE 2026-09-16.** And the reason no log ever carried a `Backend:` line was worse than "the loop was already running": the 2026-09-09 fix was pasted INSIDE the `-PreflightOnly` early exit, the one path on which no pass has run and no backend can exist, so it was unreachable from a real overnight loop for a week. One `Stop-AellLoopBackend` now sits at top level and is called from all three exits, reads the card before and after `--stop`, and writes the verdict itself. Verified by running the real exit path twice (`-Iterations 0`): it killed a live backend (pid 50788, 4304 -> 3606 MiB) and then reported the empty case. Guarded by `tests/test-loop-teardown.js`. See §17q. | §17q | nothing | no |
 | 1a | ~~**`stop-local-agent.ps1` kills the loop and leaves the backend on the card.**~~ **DONE 2026-09-16.** `Stop-AellLoopBackend` is `scripts/lib/comfy-teardown.ps1` now, dot-sourced by BOTH scripts with no copy in either; the hand-stop the detach message recommends tears the backend down after the kills and before both exits, with a `-KeepBackend` opt-out. Runs even when no loop was found, because the 17q morning WAS a backend with no loop left to own it. Verified on the real script (a loop-finder-neutered copy, since the real one would have killed the pass measuring it): a live backend went 3957 -> 3526 MiB, and the empty case and `-KeepBackend` both read right. Found and fixed on the way past: the verdict never recognised `stopped the backend holding port N`, so a stop that WORKED through the port fallback read as "said nothing recognisable". `tests/test-loop-teardown.js` now covers both scripts and the lib. See §17q-b. | §17q-b | nothing | no |
 | 1b | ~~**`--stop` can kill a ComfyUI the panel never booted, and that now happens on a command the OWNER types.**~~ **DONE 2026-09-16.** Fixed by OWNERSHIP (candidate 2), not by a flag: the port holder's command line must run out of `<dataRoot>\vendor\comfy`, so BOTH the loop and the hand-stop are covered and there is only one behaviour to test. `managed.managedRoot(Settings)` is spelled once in `scripts/lib/comfy-managed.js` and passed by all three `managed.stop()` call sites; `stopByPort` returns `killed|none|foreign|failed` now, because a boolean collapsed a refusal into "nothing there" and `stop()` then contradicted its own warning three lines later. Verified on the REAL machine both ways: a ComfyUI-shaped decoy outside the vendor root survived `--stop --port` with a named refusal, and a listener staged UNDER the real vendor root was still killed. `tests/test-comfy-managed-ownership.js` (26 assertions) ties the root to what the shipped `setup.js` really installs, so the guard cannot rot into one that matches nothing. See §17q-c. | §17q-c | nothing | no |
+| 1c | **`stopManaged()` reports a kill it never waited for, and tonight a backend survived one for 70 minutes.** The 06:10:59 probe logged `stopped the managed backend (pid 44324)`, deleted the PID file - and pid 44324 was still listening on 8288, still holding the card, when the 02:19 pass found it and had to `taskkill` it by hand. The panel then REFUSES to generate against it (`Something is already answering on 127.0.0.1:8288 ... and the panel did not start it`), so a stale survivor does not just waste VRAM, it bricks generation until someone kills it. Root cause is one line: `extension/js/comfy.js` `stopManaged()` fires `child_process.execFile("taskkill", ...)` with an empty callback and returns, and `scripts/lib/comfy-managed.js` `stop()` then says "stopped" and returns true **without ever checking**. It is a RACE, not a constant failure - the same path run by hand three minutes later did kill its backend - which is why it has survived §17q, §17q-b and §17q-c, all three of which verify the SCRIPTS and none of which verifies the kill. Fix: kill synchronously (or wait for the exit) and verify the pid is gone before reporting; a stop that cannot confirm must say so. Back-fill in `tests/test-loop-teardown.js`. | §17q-d | nothing | yes |
 | 2 | ~~**Reserve VRAM for the desktop and After Effects before sizing the chat model.**~~ **DONE 2026-09-15 (0.12.18).** The reserve is in `planHandoff` and now gates `Llama.start` too (`Tiers.planChatLoad`), which had no arithmetic at all. The AMOUNT is still provisional and comes from item 3 — two constants, one line each, in `tiers.js`. What it does NOT touch: `recommendChat`/`recommendGen`, i.e. the tier table, which §16f reserves for the owner. See §16g. | §16b | AE, chat model | yes |
 | 3 | **BLOCKED 2026-09-16 on a rule conflict - see §16b BLOCKER, it needs one line from the owner.** ~~Measure the §16b reserve on the owner's four real projects~~ — copies only, originals hashed before and after, close without saving. The exact eight-step procedure is in §16b; follow it to the letter. Paths are in the git-ignored `local/real-projects.json` and must never be committed. Nothing else loaded on the card while measuring. | §16b | AE | no |
 | 4 | ~~**fp8 Wan 2.2 5B as a second entry, then MEASURE it.**~~ **DONE 2026-09-16 (0.12.19).** There is no fp8 FILE of the 5B; shipped as a load-time `weight_dtype` cast instead, zero extra download. 24 314 MiB vs 26 187 at the authored size, 16 834 vs 21 536 at 704x480. **The gate did not move - §18 P7a is still open.** Full table in §18 P7c step 1; follow-ups in step 1a. The §18 P10 pattern: the shipped Wan graph with the diffusion filename swapped and nothing else. Cheapest route to a video option under 32 GB. | §18 P7c step 1 | backend, disk | yes |
 | 5 | ~~**Settle what `ltx-small` is, then measure it.**~~ **DONE 2026-09-16 (0.12.20).** It is real: LTX-Video 2B, `AE_LLAMA_LTXV_2B_T2V_V1`, all-core graph copied from the vendor template the MANAGED backend ships, **measured 13 921 MiB in 12 s**. The catalog's video floor went **32 -> 16** and a 16 GB card has a runnable video graph for the first time; 8 and 12 GB now get an honest no video instead of an entry that could never run. Both of this item's premises were wrong - the backend has 30 core LTX classes, and the "fixture says zero" evidence was a false NO from a 52-class demand harvest (filed as §17l-b). Full table in §18 P7c step 2. **§18 P7a is still open for 8-12 GB**; the cheapest lever left is now §18 P7c step 2a, and step 2c is cheaper still and should go first. | §18 P7c step 2 | backend, disk | yes |
 | 5a | ~~**Does the 13 921 MiB peak even HOLD the text encoder?**~~ **DONE 2026-09-16. It does: one hump, no release before the peak, gate stays 16.** The trace this item said to re-read did not exist - the probe streamed nvidia-smi at 250 ms and threw every sample away, keeping one number. Fixed at the root first: `scripts/lib/vram-curve.js` + a `## curve` section in every transcript, `tests/test-vram-curve.js`. Third run measured 13 658 MiB, within 263 of the other two. **What the curve then showed is item 5a-1 below and it is bigger than this question was.** See §18 P7c step 2c. | §18 P7c step 2c | nothing | no |
-| 5a-1 | **31 percent of ltx-small's peak is a HALF-SECOND VAE decode spike.** It samples at 9 370 MiB over idle for 6.3 s, then spends 0.5 s at 13 658 decoding 97 frames in one shot - and the card is gated on that half second. `VAEDecodeTiled` is CORE (`nodes.py:343`, `temporal_size` for video VAEs), so this is a ONE-NODE swap at the node's own defaults, zero download, and it could put the peak near **9.6 GiB** - the first number in §18 P7a a 12 GB card could hold. Cheaper than step 2a and it should go first. Measure the CURVE, not just the delta. | §18 P7c step 2d | backend | maybe |
+| 5a-1 | ~~**31 percent of ltx-small's peak is a HALF-SECOND VAE decode spike.**~~ **DONE 2026-09-16 (0.12.21). It paid 1 338 MiB and the gate did NOT move.** `VAEDecodeTiled` at the node's own defaults is in the shipped graph: 13 882 -> **12 544 MiB**, 12 s either way, SSIM 0.9958 / PSNR 45.6 dB against the plain decode with no error at the seam. 12.3 GiB is still more than a 12 GB card has, so `ltx-small` stays gated at 16 and P7a's open half stays open. The defaults barely tile - `temporal_size 64` is 8 LATENT frames against 13, `tile_size 512` is 2 columns - which is why only a quarter of the spike went. Pinned by `tests/test-workflow-manifests.js` so a tidy-up cannot put the plain decoder back. See §18 P7c step 2d. | §18 P7c step 2d | backend | done |
+| 5a-2 | **Tune the tile: the DEFAULTS barely tiled, and the rest of the spike is the whole distance to a 12 GB card.** Step 2d left 3 392 MiB of spike above a sampling plateau of 9 152 and a post-decode rest of 9 632 MiB over idle - so a decode that cost nothing would peak near **9.4 GiB**, inside a 12 GB card. Sweep `temporal_size` 64/32/16/8 and `tile_size` 512/256, one run each, reading the CURVE; check the SEAM every time (ssim + per-band psnr, the way 2d did) and watch the clock. A tuned decode stops being 'the vendor's shape', so it needs its own number and its own manifest sentence. | §18 P7c step 2e | backend | maybe |
 | 5b | **The distilled fp8 2B: 4 255 MiB instead of 6 047**, which would put resident weights at 9 173 and the job near 12.1 GB — the first thing that might give a 12 GB card video. NOT a drop-in: distillation retunes steps and cfg, and `CheckpointLoaderSimple` has no `weight_dtype`, so the free cast that made `wan22-5b-fp8` work is unavailable. Look for the vendor's own distilled template among the managed backend's 24 LTX ones before inventing values. | §18 P7c step 2a | backend, disk | yes |
 | 5c | **OWNER, one line: the LTX weights are "LTXV Open Weights License 0.X", not Apache-2.0.** The panel redistributes nothing (the buyer downloads from Lightricks' own repo), so this is about what a commercial product RECOMMENDS. Refusing it means going back to no video under 32 GB, because Wan is the only Apache-2.0 video entry and it gates at 32. | §18 P7c step 2b | owner | no |
 | 5d | **`comfy-node-defs.json` holds 52 defs beside a `class_count` of 3487**, so asking it whether a node exists returns a false NO for ~3 435 classes, by design. That false NO is what gave §18 P7c step 2 a wrong premise and nearly cost the catalog the whole LTX line. Name the count, refuse existence lookups, one stub test. Distinct from §17l (staleness) and both are live. No backend. | §17l-b | nothing | no |
@@ -4160,12 +4162,14 @@ cares most about.** 10 965 MiB of the 13 921 is RESIDENT WEIGHTS, so
 can inject brings it under 12. A 12 GB card is 12 288 MiB in total.
 The levers left are both about the WEIGHTS:
 
-- **§18 P7c step 2d — the cheapest of all of them, and it is NOT about
-  the weights.** Measured 2026-09-16 off the first trace this probe ever
-  KEPT: the entry samples at 9 370 MiB over idle and then spends half a
-  second at 13 658 decoding 97 frames in one shot. 31 percent of the
-  peak is that spike, `VAEDecodeTiled` is core, and flattening it could
-  put the peak near **9.6 GiB**. One node, no download. Filed below.
+- **§18 P7c step 2d — TAKEN 2026-09-16, and it paid 1 338 MiB of the
+  4 288 it was aiming at.** `VAEDecodeTiled` at the node's own defaults
+  ships in the graph now (0.12.21): 13 882 -> **12 544 MiB**, same 12 s,
+  SSIM 0.9958 against the plain decode. **The gate stays 16** - 12.3 GiB
+  is still more than a 12 GB card has. The defaults barely tile (two
+  temporal chunks, two spatial columns), so the other 3 392 MiB of the
+  spike is still there and still the whole distance to a 12 GB card:
+  **§18 P7c step 2e**, a tuning sweep, is that lever and it is filed.
 - **§18 P7c step 2a** — the distilled fp8 2B, `4255 MiB` instead of
   `6047`, which would put resident weights at 9 173 MiB. Filed below.
 - **§18 P7c step 4** — GGUF Q4/Q5, NEXT UP item 6, still unsurveyed.
@@ -4556,6 +4560,86 @@ for memory, and a temporal tile can seam. So:
 4. If the peak lands at or under 12 GiB, a 12 GB card gets video and
    §18 P7a's open half is closed by a one-node change. If it lands at 13,
    say so and stop.
+
+#### MEASURED 2026-09-16 (0.12.21): 1 338 MiB, shipped, and the gate does NOT move
+
+Two runs back to back on ONE backend, one seed, an RTX 5090, the only
+difference being node 8:
+
+| | node 8 = `VAEDecode` | node 8 = `VAEDecodeTiled` (512/64/64/8) |
+|---|---|---|
+| delta over idle | 13 882 MiB (13.6 GiB) | **12 544 MiB (12.3 GiB)** |
+| absolute peak | 17 836 MiB | 16 716 MiB |
+| wall clock | 12 s | **12 s** |
+| output | 768x512 x 97f | 768x512 x 97f |
+
+Saved **1 338 MiB for nothing** - no download, no extra weight, no second
+of wall clock. **It does not reach a 12 GB card** (12 288 MiB is the whole
+card), so the `ltx-small` gate stays 16 and §18 P7a's open half stays
+open. Shipped anyway, for the reason `wan22-5b-fp8` shipped: it is
+headroom on a card that is also holding After Effects, which §16b charges
+for explicitly.
+
+**It is not visibly different from the plain decode, and that was
+checked rather than assumed** - SSIM 0.9958, PSNR 45.6 dB Y between the
+two clips, and the error does NOT concentrate at the tile seam (per-band
+PSNR 45.9 / 43.1 / 51.7 left to right: the worst band is the one holding
+the subject, not the one holding the seam at x≈448-512).
+
+**Why only a quarter of the spike went, and where the rest is.** The two
+curves, absolute MiB:
+
+| phase | plain | tiled |
+|---|---|---|
+| sampling plateau, 6.3 s | 13 324 | 13 324 |
+| decode peak, ~0.5 s | **17 836** | **16 716** |
+| after decode | 13 804 | 13 804 |
+
+Everything except the decode is identical to the MiB. The spike above the
+plateau went 4 512 -> 3 392, i.e. tiling at the node's own defaults
+removed 25 percent of it, not the 95 percent step 2d hoped for. The
+defaults are why, and the arithmetic is in `nodes.py`'s own `decode()`:
+LTX's VAE reports temporal compression 8, so `temporal_size 64` becomes
+`64 // 8 = 8` LATENT frames - against 13 in a 97-frame job, i.e. **two
+temporal chunks**. Spatial compression is 32, so `tile_size 512` becomes
+16 latent against a 24-wide latent - **two columns**. The job is barely
+tiled at the shipped defaults.
+
+**The lever is still there and it is now sized.** The post-decode resting
+level is 13 804 absolute = **9 632 MiB over idle**, and the sampling
+plateau is 9 152. So a decode that cost nothing at all would leave this
+job peaking near **9.4 GiB - inside a 12 GB card**. Reaching it means
+TUNING `temporal_size`/`tile_size` below their defaults, which is a
+different thing from this step: "a basic is the shape ComfyUI ships, not
+a tuned one" is the rule every basic here was built under, so a tuned
+decode needs its own measurement, its own seam check and a stated reason
+the entry stops being the vendor's shape. Filed as **step 2e**.
+
+### Step 2e - tune the tile, because the DEFAULTS barely tiled (filed 2026-09-16)
+
+Step 2d measured the default tiling and got 25 percent of the spike. The
+remaining 3 392 MiB is the whole distance between `ltx-small` and a 12 GB
+card: flatten it and the peak lands near 9.4 GiB, which is the first
+number in §18 P7a a 12 GB card could hold.
+
+1. Sweep `temporal_size` (64 -> 32 -> 16 -> 8; the node's min is 8, and
+   the divide-by-8 means 8 becomes ONE latent frame at a time) and
+   `tile_size` (512 -> 256), a run each, reading the CURVE. The peak,
+   the seconds and the seam are all three the answer; none of them alone
+   is.
+2. Check the SEAM every time, the way step 2d did - `ffmpeg
+   [0:v][1:v]ssim` against the plain-decode clip, plus per-band PSNR.
+   Tighter tiles are exactly where a seam starts to show, and a seam is
+   a visible defect in a buyer's render, not a number.
+3. Watch the clock. Tiled decoding trades time for memory and step 2d
+   bought its 1 338 MiB for free only because two chunks cost nothing. A
+   12 s clip that becomes 40 s is a different product decision and is the
+   owner's.
+4. If a setting lands the peak at or under ~11.5 GiB with no seam and no
+   serious time cost, a 12 GB card gets video and §18 P7a's open half
+   closes. Then the entry is no longer "the vendor's template node for
+   node" and the manifest must say so in those words.
+
 
 **The same question applies to every video entry**, and Wan is where it
 came from: §18 P7 concluded "the floor is resident weights, not the
@@ -6506,6 +6590,76 @@ port N" -- unknown dressed as verified-empty. It is caught downstream
 today (the teardown's own GPU-process check is what asserts presence, not
 this), which is why it is not promoted, but a distinct `"unknown"` return
 with its own sentence would cost about six lines.
+
+## 17q-d. `stopManaged()` reports a kill it never waited for, and a backend survived one for 70 minutes (filed 2026-09-16, local session)
+
+**Measured, not reasoned.** The 06:10:59 `catalog-vram-probe` run of
+2026-09-16 ends with `stopped the managed backend (pid 44324).` and
+deleted `comfy-managed.pid`. At 02:19 the next night's pass found **pid
+44324 still alive, still LISTENING on 127.0.0.1:8288**, out of the
+managed vendor root, ~70 minutes later, and had to `taskkill` it by hand
+before it could work. The card was 4 172 MiB with it up and 3 523 MiB
+with it gone.
+
+**It is worse than wasted VRAM: it BRICKS generation.** With the pid file
+deleted and the process alive, the panel's own generate path refuses:
+
+    Something is already answering on 127.0.0.1:8288, the port this
+    panel's own ComfyUI uses, and the panel did not start it.
+
+That is `ensureRunning`'s correct behaviour on a foreign listener - but
+the listener is not foreign, it is the panel's own orphan, and there is
+no path in the product that recovers from it. A buyer whose panel
+crashed after booting the backend gets that message and no way out. The
+02:19 pass hit exactly this and lost its first probe run to it.
+
+**Root cause, one line.** `extension/js/comfy.js` `stopManaged()`:
+
+    child_process.execFile("taskkill", ["/PID", String(pid), "/T", "/F"],
+                           function () {});
+    managedProc = null;
+    forgetPid();
+
+Fire and forget, with an empty callback, and the PID record is dropped
+immediately afterwards - so the one thing that could find the survivor
+later is destroyed before the kill is known to have happened.
+`scripts/lib/comfy-managed.js` `stop()` then says `stopped the managed
+backend (pid N)` and returns `true` **without checking anything**. A CLI
+exits milliseconds later; on Windows a non-detached child inside the
+job object dies with the parent, which is the same mechanism `boot()`
+already documents (`setManagedDetached`, "the child dies inside the
+Windows job object the moment node exits").
+
+**It is a RACE, not a constant failure, and that is why it survived three
+teardown items.** The same path run by hand three minutes later DID kill
+its backend (pid 41808, verified gone, port free). §17q, §17q-b and
+§17q-c each verified the SCRIPTS around the stop - which exit calls it,
+which process it is allowed to kill - and none of them verified that the
+process actually died. `pidIsComfy()` is checked BEFORE the kill and
+never after.
+
+**The fix:**
+
+1. `stopManaged()` kills synchronously (`execFileSync`, or await the
+   exit) - the panel can afford the ~100 ms on unload, and a CLI cannot
+   afford not to.
+2. `forgetPid()` runs AFTER the kill is confirmed, never before. A PID
+   record outliving a failed kill is the only thing that can find the
+   survivor.
+3. `managed.stop()` verifies: re-read the pid, and if it is still a live
+   ComfyUI say `FAILED to stop` and return false. **A stop that cannot
+   confirm must say so** - this whole family of bugs is stops that
+   reported success.
+4. Back-fill in `tests/test-loop-teardown.js`, which already owns the
+   teardown's verdict vocabulary: a stop whose kill did not take must
+   produce a FAILURE line, not a success line.
+
+Related but distinct: the panel has no recovery for its own orphan (item
+2 of the fix list does not help a user whose panel crashed without ever
+calling stop). Adopting an orphan that runs out of `managedRoot` -
+ownership is already spelled once, §17q-c - would close that, and it is
+the same predicate. Filed here rather than separately because the two
+share the fix site.
 
 ## 17l-b. `comfy-node-defs.json` is a 52-class DEMAND HARVEST that reads like a full snapshot, and asking it "does node X exist" gets a false NO (filed 2026-09-16, local session)
 
