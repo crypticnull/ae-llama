@@ -2141,6 +2141,24 @@
   }
 
   /**
+   * What the job had done when the timeout cancelled it, so the message
+   * reads as a LIMIT the user can raise rather than a hang (§18 P3c).
+   * Empty when no step was ever reported: a guess here would be the
+   * number the user sizes the new timeout on.
+   */
+  function timeoutProgressNote(progress) {
+    if (!progress || !(progress.max > 1)) return "";
+    var pct = Math.round(100 * progress.value / progress.max);
+    return " — it was at step " + progress.value + "/" + progress.max +
+      " (" + pct + "%)" +
+      (progress.etaSec > 0
+        ? ", projected to need about " + progress.etaSec + "s more"
+        : "");
+  }
+  var TIMEOUT_HINT = ". This is a limit, not a hang: raise Settings > " +
+    "Generation timeout (s) to let it finish";
+
+  /**
    * End-to-end generation.
    * opts: {comfyUrl, workflowFile, params, outDir, timeoutSec}
    * onProgress(secondsElapsed, progress) fires periodically while waiting.
@@ -2327,9 +2345,11 @@
             if (cancelling) return;
             cancelling = true;
             var secs = Math.round(elapsed / 1000);
+            var atTimeout = timeoutProgressNote(tracker.read());
             cancelPrompt(base, promptId, function (note) {
               settle(new Error("Generation timed out after " + secs +
-                               "s (prompt " + promptId + ")" + note));
+                               "s (prompt " + promptId + ")" + atTimeout +
+                               note + (atTimeout ? TIMEOUT_HINT : "")));
             });
             return;
           }
@@ -3327,6 +3347,7 @@
     describeWorkflows: describeWorkflows,
     resolveWorkflow: resolveWorkflow,
     _graphCarriesValue: graphCarriesValue,   // exposed for tests
+    _timeoutProgressNote: timeoutProgressNote, // exposed for tests
     loadWorkflow: loadWorkflow,
     injectParams: injectParams,
     outputScaleFrom: outputScaleFrom,

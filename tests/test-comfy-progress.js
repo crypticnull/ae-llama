@@ -340,6 +340,41 @@ function sentenceChecks() {
   assert(/about 1h 5m left$/.test(line(10, { value: 1, max: 900, etaSec: 3900 })),
          "over an hour says so rather than '65m' [" +
          line(10, { value: 1, max: 900, etaSec: 3900 }) + "]");
+
+  // §18 P3c: a finish projected past the timeout is a promise the panel
+  // breaks by cancelling. Warn the first time, with setting and value.
+  const p = { value: 10, max: 40, etaSec: 720 };
+  assert(line(120, { value: 14, max: 40, etaSec: 240 }, 600, false) ===
+         "ComfyUI still generating… 120s — step 14/40, about 4m left",
+         "a finish INSIDE the timeout reads exactly as before [" +
+         line(120, { value: 14, max: 40, etaSec: 240 }, 600, false) + "]");
+  const first = line(120, p, 600, false);
+  assert(/about 12m left — but that is past the generation timeout \(600s\)/.test(first) &&
+         /Settings > Generation timeout \(s\)/.test(first),
+         "a finish PAST the timeout says so, naming the value and the setting [" +
+         first + "]");
+  const later = line(130, p, 600, true);
+  assert(/about 12m left \(past the 10m timeout\)$/.test(later) &&
+         !/Settings/.test(later),
+         "…and once warned, later lines carry a short tag, not the whole " +
+         "warning every ten seconds [" + later + "]");
+  assert(line(120, p) === "ComfyUI still generating… 120s — step 10/40, about 12m left",
+         "no timeout passed -> no warning (old callers unchanged) [" +
+         line(120, p) + "]");
+  assert(!/timeout/.test(line(590, { value: 39, max: 40, etaSec: 0 }, 600, false)),
+         "no estimate -> no timeout claim, since there is no projection to " +
+         "compare [" + line(590, { value: 39, max: 40, etaSec: 0 }, 600, false) + "]");
+
+  const note = Comfy._timeoutProgressNote;
+  assert(note(null) === "" && note({ value: 3, max: 1 }) === "",
+         "timeout message: no step reported -> no invented progress");
+  assert(note({ value: 10, max: 40, etaSec: 720 }) ===
+         " — it was at step 10/40 (25%), projected to need about 720s more",
+         "timeout message carries the fraction and the projection [" +
+         note({ value: 10, max: 40, etaSec: 720 }) + "]");
+  assert(note({ value: 1, max: 40, etaSec: 0 }) === " — it was at step 1/40 (3%)",
+         "…and no projection when the tracker had none [" +
+         note({ value: 1, max: 40, etaSec: 0 }) + "]");
 }
 
 // ====================================================== 5. wiring + leak
@@ -497,6 +532,52 @@ function endToEndCheck(done) {
   });
 }
 
+// ================================= 7. the timeout names what it cut off
+
+/**
+ * §18 P3c through the real generate: a job that reports steps and never
+ * finishes hits a short timeout, and the error says how far it got and
+ * that the limit is a setting. The fake has no /queue, so the cancel note
+ * is the "could not be read" branch; that is not what is under test.
+ */
+function timeoutCheck(done) {
+  fakeComfy({
+    history: () => ({}),
+    onSocket: (socket) => {
+      let step = 0;
+      const tick = setInterval(() => {
+        step += 1;
+        socket.write(serverFrame(0x1, JSON.stringify({
+          type: "progress_state",
+          data: { prompt_id: "p-1",
+                  nodes: { "3": { state: "running", value: step, max: 40 } } }
+        })));
+      }, 700);
+      socket.on("close", () => clearInterval(tick));
+    }
+  }, (srv) => {
+    Comfy.generate({
+      comfyUrl: srv.url,
+      workflowFile: wfFile,
+      outDir: path.join(tmpDir, "out"),
+      timeoutSec: 4,
+      params: { prompt: "a red cup", width: 64, height: 64, seed: 1 }
+    }, () => {}, (err) => {
+      const msg = err ? err.message : "";
+      assert(/timed out after \d+s/.test(msg) &&
+             /it was at step \d+\/40 \(\d+%\)/.test(msg),
+             "a timeout names the step it was cut off at [" + msg + "]");
+      assert(/projected to need about \d+s more/.test(msg),
+             "…and the projection it had [" + msg + "]");
+      assert(/Generation timeout \(s\) to let it finish$/.test(msg),
+             "…and ends on the setting that would have let it finish [" +
+             msg + "]");
+      srv.close();
+      done();
+    });
+  });
+}
+
 // ------------------------------------------------------------------ run
 
 trackerChecks();
@@ -504,13 +585,13 @@ sentenceChecks();
 decoderCheck(() => {
   pongCheck(() => {
     wiringChecks(() => {
-      endToEndCheck(() => {
+      endToEndCheck(() => { timeoutCheck(() => {
         try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {}
         console.log(failures === 0
           ? "\nAll comfy progress checks passed."
           : "\n" + failures + " check(s) FAILED.");
         process.exit(failures === 0 ? 0 : 1);
-      });
+      }); });
     });
   });
 });

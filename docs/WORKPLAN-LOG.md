@@ -26946,3 +26946,42 @@ Also run, all exit 0: every `tests/test-comfy*.js`, every `tests/test-workflow*.
 
 - The daytime harness run noted above.
 - 12a carries the panel check and the bump.
+
+## 2026-09-16 (local session) - the ETA no longer promises a finish the timeout will cancel (NEXT UP 17, §18 P3c 1-2)
+
+**Item:** NEXT UP 17. Pass 2 of the loop started 10:20 EDT (`-UntilHour 17`), DAYTIME.
+
+**Harness: 770/770 PASSED, twice** (at the start, and again after the change). Rows above 17 were skipped: owner (5, 5a-4e, 5a-5b, 5a-5c, 5c, 6b), backend or GPU (7b-2, which is marked overnight-only; 7d), chat model (10, 12a, 14), AE plus the backend (16 is below 17).
+
+**About the harness runs:** I took the owner starting a loop in the daytime, running until 17:00, as the "unless he says otherwise" in CLAUDE.md. That covers a script run in the AE that was already open. It does NOT cover the GPU, so the backend and the chat model stayed off. The 10:20 pass read the same situation the other way. Both readings are now filed for the owner as NEXT UP 17a. The harness does not load comfy.js or the generate path, so these runs only confirm nothing else broke.
+
+### Changed
+
+- `extension/js/tools.js`
+  - `generatingLine(elapsed, progress, timeoutSec, warned)`, with a new `overTimeout` helper. The first line whose `elapsed + etaSec` passes the limit warns once, naming the value and "Settings > Generation timeout (s)".
+  - Later lines get a short "(past the 10m timeout)" tag instead, because main.js's sink appends a chat line every 10 s.
+  - With no timeout argument, or no estimate, the line is exactly what it was before.
+  - The `comfy_generate` caller passes `s.comfyTimeoutSec` (600 when unset, the same as comfy.js does) and keeps a `warnedTimeout` flag for each call.
+- `extension/js/comfy.js`
+  - New `timeoutProgressNote(tracker.read())`: " — it was at step k/N (p%), projected to need about Ms more".
+  - It goes before the cancel note. When there is a note, the error ends with ". This is a limit, not a hang: raise Settings > Generation timeout (s) to let it finish".
+  - When no step was reported, nothing is added. A guessed number would be the one the user sizes the new timeout on.
+  - Exposed as `_timeoutProgressNote`.
+- `tests/test-comfy-progress.js`: 11 new checks.
+  - Sentence checks for inside the limit, the first warning, the short tag, no timeout and no estimate.
+  - Three note checks.
+  - A new section 7 runs a real `Comfy.generate` against the fake websocket with a 4 s timeout. It read: "Generation timed out after 4s (prompt p-1) — it was at step 5/40 (13%), projected to need about 29s more — ComfyUI is no longer running it. This is a limit, not a hang: raise Settings > Generation timeout (s) to let it finish".
+  - Mutation check: with comfy.js and tools.js stashed back to HEAD, the file fails.
+
+Also run, all exit 0: every `tests/test-comfy*.js` (including timeout-cancel, whose regex still matches), test-prompt-routing, test-context-budget, test-tools*, test-vram-arbiter*, test-source-control-chars. `capability-report --check` says the doc is fresh.
+
+### Decisions I made unattended
+
+- **No bump.** 13a and 15 set the same pattern. A bump would ship 12/13/13a's main.js, which has never loaded in a panel. The 12a row now says its bump carries 17 too.
+- **Warn once, then tag each line.** The P3c text said "once, not every ten seconds". But after the warning a bare "about 12m left" would go back to promising a finish, so later lines keep a short tag.
+- **The timeout message uses raw seconds.** comfy.js has no `roughDuration`, and copying it for one message was not worth it.
+
+### Needs a human eye
+
+- NEXT UP 17a: the daytime-loop reading.
+- P3c (3), deriving the default timeout from the measured catalog, is still the owner's call.

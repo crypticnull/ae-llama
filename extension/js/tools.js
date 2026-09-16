@@ -2002,14 +2002,31 @@
    * means no rate yet. A wrong estimate is worse than none here — it is
    * the number the user decides to wait on.
    */
-  function generatingLine(elapsed, progress) {
+  function generatingLine(elapsed, progress, timeoutSec, warned) {
     var line = "ComfyUI still generating… " + elapsed + "s";
     if (!progress || !(progress.max > 1)) return line;
     line += " — step " + progress.value + "/" + progress.max;
     if (progress.etaSec > 0) {
       line += ", about " + roughDuration(progress.etaSec) + " left";
+      // §18 P3c: a finish past the timeout is a promise the panel will
+      // break by cancelling. Say so the first time it becomes true, with
+      // the setting and its value; after that a short tag, because this
+      // line is appended every ten seconds.
+      if (overTimeout(elapsed, progress, timeoutSec)) {
+        line += warned
+          ? " (past the " + roughDuration(timeoutSec) + " timeout)"
+          : " — but that is past the generation timeout (" + timeoutSec +
+            "s), so it will be cancelled first. Raise Settings > " +
+            "Generation timeout (s) to let it finish";
+      }
     }
     return line;
+  }
+
+  /** True when the projected finish lands after the timeout cancels it. */
+  function overTimeout(elapsed, progress, timeoutSec) {
+    return timeoutSec > 0 && !!progress && progress.etaSec > 0 &&
+      elapsed + progress.etaSec > timeoutSec;
   }
 
   // ------------------------------------------------------ VRAM arbiter
@@ -3230,6 +3247,7 @@
         }
         cb(result);
       }
+      var warnedTimeout = false;
       function begin() {
       global.Comfy.generate({
         comfyUrl: global.Comfy.backendUrl(s),
@@ -3248,7 +3266,11 @@
           image: args.image
         }
       }, function (elapsed, progress) {
-        if (progressSink) progressSink(generatingLine(elapsed, progress));
+        var limit = s.comfyTimeoutSec > 0 ? s.comfyTimeoutSec : 600;
+        if (progressSink) {
+          progressSink(generatingLine(elapsed, progress, limit, warnedTimeout));
+        }
+        if (overTimeout(elapsed, progress, limit)) warnedTimeout = true;
       }, function (err, result) {
         if (err) { finish({ ok: false, error: err.message }); return; }
         if (args["import"] === false) {
