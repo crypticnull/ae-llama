@@ -25312,3 +25312,81 @@ so this was a judgement call:
 - **5a-4c** - the gate move itself with its test and tier consequences,
   needs 5a-4b.
 - **5a-5** - added the WDDM eviction evidence.
+
+## 2026-09-16 (local session) - a 16 GB-RAM box does not grind on Wan, it renders a different clip each time, and --disable-pinned-memory makes it identical again
+
+**Item:** NEXT UP 5a-4b / WORKPLAN 18 P7c step 2g - does a 16 GB-RAM
+machine run krea2/Wan on a 12 GB card, or grind?
+
+**Harness: 770/770 PASSED** before the work and again after nine
+backend runs, including five with 46 GB of RAM locked away (AE was paged
+and survived). **No version bump**: nothing under `extension/` changed.
+Items above it: 3 blocked on the owner, 5a-4 done tonight, so 5a-4b was
+the first takeable item.
+
+### How the pinned budget is sized (read, vendor source)
+
+`comfy/model_management.py` ~1581: Windows `MAX_PINNED_MEMORY = ram *
+0.40` from `psutil.virtual_memory().total` - 25 140 MiB here, 6 553 MiB
+on a 16 GB box. `ensure_pin_budget` / `free_pins` release pins as
+`psutil available` falls. It does shrink by itself.
+
+### Method
+
+- `scripts/ram-ballast.py` (NEW, committed): raises its working-set
+  minimum chunk by chunk and VirtualLocks TOTAL - BOX_MB of physical RAM,
+  so AE + desktop + backend share BOX_MB and page what does not fit.
+  Locked, not touched: a touched page is pageable and Windows would page
+  the ballast out first. It reports a short lock instead of hiding it.
+  Locked 46 468 MiB in 6-12 s every time.
+- It cannot fake the TOTAL a process reads, so the backend was booted by
+  hand through a git-ignored shim, `local/boot-small-host.py`, which caps
+  `psutil.virtual_memory().total` then `runpy`s `ComfyUI/main.py` with
+  exactly the args `comfy.js` passes. Backend logged `total RAM 16384 MB`
+  and `Enabled pinned memory 6553.0`. The probe ran WITHOUT `--boot`
+  against it; the driver (`local/ramhost-run.sh`) killed it by port after.
+- VRAM room 9 033 MiB (12 GB card with AE) via `scripts/vram-ballast.py`,
+  sized from what the card held at that moment (1 860-1 930 MiB).
+- NOT faked: the WDDM shared-GPU cap (half of physical RAM at boot).
+
+### Measured (RTX 5090, seed 12345, shipped graphs)
+
+| run | host | pins | prompt s | vs reference |
+|---|---|---|---|---|
+| krea2, control via the shim | 62 GB | on | 13 | identical png (md5 18f456...) |
+| krea2 | 16 GB box | on | 16 | identical png |
+| wan22-5b-fp8 | 16 GB box | on | 141 | DIFFERENT: SSIM 0.87 / PSNR 23 dB, a different plausible car |
+| wan22-5b-fp8 | 62 GB, total faked 16 GB | on (6 553) | 128 | identical frames (ffmpeg md5 ab4fa5...) |
+| wan22-5b-fp8 | 16 GB box, repeat | on | 137 | DIFFERENT AGAIN (a24e69...), speckled and muddy |
+| wan22-5b-fp8 | 16 GB box | `--disable-pinned-memory` | 141 | identical |
+| wan22-5b-fp8 | 62 GB | `--disable-pinned-memory` | 129 | identical |
+
+Transcripts `logs/catalog-vram-probe-2026-09-16T08-01-19.md` to
+`08-17-22`. Host samplers `local/host-*.csv`, backend logs
+`local/backend-*.log`, frames `local/frames/`. Sampling was 5.44-5.67
+s/it in every Wan run, so the extra ~10 s under pressure is load/decode.
+The backend log carried no warning in the bad runs.
+
+### Reading, and what I assumed
+
+- **No grind** on 16 GB for either entry (1.1x on Wan).
+- **The output is not trustworthy under RAM pressure with pinning on**:
+  two pressured runs, two different clips, one visibly degraded. The
+  budget alone does not do it (faked total, no pressure: identical).
+  Pressure without pinning does not do it. I assumed the mechanism is
+  pins released under pressure while a transfer reads them; that is
+  INFERRED, not traced.
+- krea2 was identical once under pressure; one sample does not clear it.
+- I did not ship `--disable-pinned-memory` tonight: one item per pass,
+  and a boot flag that touches every buyer needs clock readings on every
+  entry without pressure first (pinning exists for transfer speed; one
+  Wan run showing 129 s is not a speed verdict).
+
+### Filed (WORKPLAN)
+
+- **5a-4d (new)** - the pinning fix at the root (managed boot args in
+  `extension/js/comfy.js`), with the speed and double-identity
+  measurements it needs. 5a-4c now needs 5a-4d, not 5a-4b.
+- **5a-5** - lead added: the vendor has `--vram-headroom GB`, described
+  as DynamicVRAM headroom counting other apps' VRAM. Unmeasured.
+- §18 P7c step 2g carries the table.
