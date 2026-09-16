@@ -27334,3 +27334,33 @@ No `extension/` change, so **no version bump**.
 - A temp root is deleted at exit, so the seeded-store rows cannot pile up in %TEMP%.
 
 **Needs a later pass:** nothing reads `PROBE_STORE_ROOT` yet. When the memory store ships, chat-probe must hand that variable to the store's `opts.root`, or this seam protects nothing. The note is in §15 item 3. Next daytime pass: the §16f 1-2 row ("Persist `_floorMB`; launch-time `memory.used` read") is next in the always-takeable list. Check whether its launch-time read needs nvidia-smi, which is a daytime-forbidden GPU probe. The Option A deletions and §25 need chat-probe, which is night work.
+
+## 2026-09-16 (local session) - the VRAM floor and the launch baseline are kept on disk now (§16f 1-2)
+
+**Item:** the §16f 1-2 row ("Persist `_floorMB`; launch-time `memory.used` read"). It was the next repo-only row of the "always takeable" list, as the 11:14 pass said. DAYTIME pass, started 11:18 EDT inside the `-UntilHour 17` loop. AE was already open (since 09:32).
+
+**Harness: NOT RUN, on purpose.** Same reading as today's other daytime passes: 17a is unanswered, and CLAUDE.md's daytime rule is the written one. AE was not touched. No backend, no GPU, no network, no full suite. The previous pass asked whether the launch-time read needs nvidia-smi. It does in the panel, but `planChatLoad` already made that read before every first chat load. This pass only KEEPS the number, and nothing ran nvidia-smi to develop it.
+
+**Changed:**
+- `extension/js/tools.js` gains `recordVramReading(kind, usedMB, s)`. It appends one JSON line to `<dataRoot>/vram-readings.jsonl`: `{at, kind, usedMB, cardMB, ctxSize, project}`. `project` is `{saved, items}`, taken from a one-line `evalScript` (`app.project.file`, `numItems`), or null when the host probe fails. The file keeps the newest 200 lines. The function never throws, never delays the caller, and writes nothing when there is no reading.
+  - `planChatLoad` records `launch` when llama-server is not running (the non-panel baseline, §16f #2).
+  - `VramArbiter.ensureFor` records `floor` where the card settled after the pause, before resume nulls `_floorMB` (§16f #1).
+  - `_parseProjectProbe` is exposed for tests.
+- `tests/test-vram-readings.js` (new, 16 checks) covers:
+  - the probe parse;
+  - a launch line with its card, ctx, project and time;
+  - no launch line while chat is resident, and no line without a reading;
+  - the floor line equals `_floorMB`, and a failed host probe still records it with project null;
+  - the 200-line cap;
+  - an unwritable data folder never blocks the gate;
+  - no nested ternary in the host probe.
+
+**Verified (stubs only):** test-vram-readings passes. All 37 test files that load tools.js pass, including test-vram-arbiter and test-chat-load-gate. Those suites have no `Settings.dataRoot`, or only a fake one, and a check afterwards found no stray `vram-readings.jsonl` in the repo or in the owner's `%APPDATA%\AE-Llama`.
+
+**Bump: none, although extension/ changed.** The change has not loaded in a real panel. It rides with NEXT UP 12a, the same as today's other daytime extension changes, and its panel check was added to the 12a row.
+
+**Decisions made unattended:**
+- "Whether a project was open" is recorded as `saved` + `items`. AE always has a project open, so "open" alone says nothing. An untitled empty project reads `{saved:false, items:0}`.
+- A JSONL file under dataRoot, not localStorage. A pass or the owner can read a file off disk, and localStorage is per-host.
+
+**Needs a later pass:** 12a's real-panel check. After that, §16d's AE reserve (the idle 3,255 MB) can be re-derived from real `floor` lines. That derivation is the owner's reading/decision (§16f OWNER), not a loop item. Next daytime row: "Mid-render VRAM reading" (§16f 3) needs AE and the GPU, so it is night work. The Option A deletions and §25 need chat-probe, which is also night work. So the always-takeable list has no daytime row left.

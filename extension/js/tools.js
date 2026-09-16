@@ -2717,6 +2717,80 @@
       "overwritten by the next regeneration.";
   }
 
+  /**
+   * §16f #1-2: the two VRAM readings the panel already takes and used to
+   * throw away, kept on disk. `launch` is memory.used before the first
+   * chat load (nothing of ours resident: the non-panel baseline);
+   * `floor` is where the card settled once the chat model was paused for
+   * a generation (everything but the chat model, on the user's REAL
+   * project). §16d's AE reserve is the idle 3,255 MB until these exist.
+   *
+   * One JSON object per line in <dataRoot>/vram-readings.jsonl, capped at
+   * VRAM_READINGS_KEPT lines so months of launches stay a small file.
+   * Never throws and never delays the caller: the project read is a
+   * one-line evalScript and the record waits for it, not the handoff.
+   */
+  var VRAM_READINGS_KEPT = 200;
+  var VRAM_PROJECT_PROBE =
+    "(function(){try{var p=app.project;" +
+    "return (p.file ? \"1\" : \"0\") + \",\" + p.numItems;}" +
+    "catch(e){return \"\";}})()";
+
+  function vramReadingsPath() {
+    try {
+      var root = global.Settings.dataRoot();
+      if (!root) return null;
+      return global.AEBridge.nodeRequire("path")
+        .join(root, "vram-readings.jsonl");
+    } catch (e) { return null; }
+  }
+
+  function writeVramReading(rec) {
+    var p = vramReadingsPath();
+    if (!p) return;
+    try {
+      var fs = global.AEBridge.nodeRequire("fs");
+      var lines = [];
+      try {
+        lines = String(fs.readFileSync(p, "utf8")).split(/\r?\n/)
+          .filter(function (l) { return l.length > 0; });
+      } catch (eR) {}
+      lines.push(JSON.stringify(rec));
+      if (lines.length > VRAM_READINGS_KEPT) {
+        lines = lines.slice(lines.length - VRAM_READINGS_KEPT);
+      }
+      fs.writeFileSync(p, lines.join("\n") + "\n");
+    } catch (e) {}
+  }
+
+  /** "1,12" -> {saved:true, items:12}; anything else -> null (unknown). */
+  function parseProjectProbe(result) {
+    var m = /^([01]),(\d+)$/.exec(String(result == null ? "" : result));
+    return m ? { saved: m[1] === "1", items: parseInt(m[2], 10) } : null;
+  }
+
+  function recordVramReading(kind, usedMB, s) {
+    if (typeof usedMB !== "number") return;
+    var rec = {
+      at: new Date().toISOString(),
+      kind: kind,
+      usedMB: usedMB,
+      cardMB: cardTotalMBNow(),
+      ctxSize: s && typeof s.ctxSize === "number" ? s.ctxSize : null,
+      project: null
+    };
+    try {
+      if (!global.AEBridge || typeof global.AEBridge.evalScript !== "function") {
+        writeVramReading(rec);
+        return;
+      }
+      global.AEBridge.evalScript(VRAM_PROJECT_PROBE, function (res, isErr) {
+        if (!isErr) rec.project = parseProjectProbe(res);
+        writeVramReading(rec);
+      });
+    } catch (e) { writeVramReading(rec); }
+  }
+
   // How long a VRAM wait is willing to sit there. The release wait is the
   // longer one for a measured reason: on a cancelled round (0.10.14) this
   // backend finished handing the card back at ~10.5 s, so a 10 s limit is
@@ -2813,6 +2887,9 @@
     try {
       global.Setup.queryVramUsedMB(function (err, usedMB) {
         inp.usedMB = err ? null : usedMB;
+        var chatUp = false;
+        try { chatUp = global.Llama.getState() === "running"; } catch (eS) {}
+        if (!chatUp) recordVramReading("launch", inp.usedMB, settings);
         cb(global.Tiers.planChatLoad(inp));
       });
     } catch (e2) {
@@ -2912,6 +2989,8 @@
                         function (settledMB) {
                           VramArbiter._floorMB =
                             typeof settledMB === "number" ? settledMB : null;
+                          recordVramReading("floor",
+                                            VramArbiter._floorMB, s);
                           cb(null);
                         });
       });
@@ -4798,6 +4877,7 @@
     setGpuInfo: setGpuInfo,
     planChatLoad: planChatLoad,               // the gate before Llama.start
     checkVramAfterChatLoad: checkVramAfterChatLoad,
+    _parseProjectProbe: parseProjectProbe,   // exposed for tests (§16f)
     setProgressSink: function (fn) { progressSink = fn; },
     catalogModelStatus: catalogModelStatus,
     removeCatalogWeights: removeCatalogWeights,
