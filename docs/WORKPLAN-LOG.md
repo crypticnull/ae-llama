@@ -27244,3 +27244,15 @@ No `extension/` change, so **no version bump**.
 **Verified.** test-model-catalog green. Negative controls: removing one size key fails "fileSizesMB sizes exactly the files it lists", and krea2 gate 16 fails the allowlist check (and the existing constrained-card assertion). Also green: test-tiers, test-tier-ladder, test-workflow-bundle, test-gen-model-manager, test-chat-probe.
 
 **Bump: none. This is a decision.** extension/ changed, but only by a data field nothing in the panel reads, so it has no behaviour to verify in AE. It rides with 12a's overnight bump, as 25/26/15/17 do, and is added to that row's carry list.
+
+## 2026-09-16 (local session) - NEXT UP 29 was already done on 09-09; stale row struck (§17h)
+
+**Item:** NEXT UP 29. DAYTIME pass, started 11:03 EDT, inside the `-UntilHour 17` daytime loop. It was the only row left whose "needs" is "nothing"; every row above it needs AE, a backend, the chat model or the owner.
+
+**Harness: NOT RUN, on purpose**, same reading as the earlier daytime passes (17a is unanswered and CLAUDE.md's daytime rule is the written one). AE was not touched. No backend, no GPU, no network, no full suite.
+
+**Finding: the row was stale.** §17h is struck DONE 2026-09-09: `scripts/weight-availability-probe.js` resolves `Comfy.backendUrl(settings)` through `scripts/lib/comfy-managed.js` (the managed port in managed mode), `--url` stays an override, and its verdict-4 "unreachable" fixture uses the shared patch. `tests/test-probe-backend-url.js` already covers this probe by name; ran it, ALL CHECKS PASSED. The probe itself was not run (a backend probe, daytime).
+
+**Changed:** `docs/WORKPLAN.md` row 29 struck with the evidence. No code, nothing in extension/, so **no bump**.
+
+**Decisions made unattended:** closed the row on code + guard test rather than a live probe run, because 09-09 already verified it live and the daytime rule forbids repeating that. Nothing repo-only remains in the NEXT UP table; the next daytime pass should take the "always takeable" list under it (§19a `Setup.scanForModelRoots()` first, after checking it is not already done).
