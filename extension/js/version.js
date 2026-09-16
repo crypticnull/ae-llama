@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.12.24",
+    VERSION: "0.12.25",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -263,15 +263,37 @@
         // 68x faster per clip than Wan, incidentally: 12 s against 127.
         //
         // The graph has since shed its decode spike (18 P7c steps 2d/2e:
-        // VAEDecodeTiled, tile_size tuned to 256) and the SHIPPED graph now
-        // measures 10 176-10 272 MiB in 12 s. measuredVramMB below is left
-        // at the plain-decode reading on purpose: the gate is still 16,
-        // because 10.0 GiB plus After Effects' own resident footprint is
-        // more than a 12 GB card holds, and whether ComfyUI's offload makes
-        // it RUN there (rather than grind) is step 2f's measurement, not
-        // arithmetic. Lower the number when the gate moves, not before.
-        kind: "video", sizeMB: 10965, minVramGB: 16, measured: true,
-        measuredVramMB: 13921, measuredSeconds: 14,
+        // VAEDecodeTiled, tile_size tuned to 256) and the SHIPPED graph
+        // measures 10 176-10 394 MiB in 12 s on a card with room. That is
+        // the figure below now; 13 921 was the plain-decode graph, which no
+        // longer ships.
+        //
+        // GATE 16 -> 12, MEASURED 2026-09-16 (18 P7c step 2f), not
+        // arithmetic. On paper 10.2 GiB plus After Effects is more than a
+        // 12 GB card holds, but a card with room never shows what ComfyUI
+        // does WITHOUT room. So the 5090 was made into a smaller card with
+        // scripts/vram-ballast.py (real allocations, not --reserve-vram,
+        // which only changes what ComfyUI believes), keeping AE and the
+        // desktop's real footprint, and the shipped graph was run again:
+        //
+        //   room left for the backend   delta MiB   prompt s   clip
+        //   whole card (baseline)          10 394      12.28   identical
+        //   12 GB card, 8 756 left          7 401      12.46   identical
+        //   8 GB card,  4 966 left          3 621      12.69   identical
+        //
+        // The managed backend's DynamicVRAM streams weights from pinned
+        // host RAM instead of holding them resident, so the job SHRINKS to
+        // fit rather than grinding, and the clips are byte-identical to the
+        // unconstrained one. 4 966 left is also exactly what a 12 GB card
+        // has after AE and the tiers.js DESKTOP_FREE_MB floor, and that ran
+        // in 12.69 s. Nothing was bought with time.
+        //
+        // NOT 8, yet: an 8 GB card with AE and that desktop floor leaves
+        // under 1 GB, which was not run, and the pinned staging costs
+        // ~9.7 GB of SYSTEM RAM that no run here constrained (62 GB box).
+        // Both are WORKPLAN 18 P7c step 2g.
+        kind: "video", sizeMB: 10965, minVramGB: 12, measured: true,
+        measuredVramMB: 10394, measuredSeconds: 14,
         measuredAt: "768x512 x 97 frames = 4.04 s at the template's 24 fps " +
                     "(the authored latent), seed 12345",
         measuredOn: "NVIDIA GeForce RTX 5090, managed ComfyUI backend " +

@@ -116,9 +116,12 @@ const T = window.Tiers;
   // weights, no graph. 18 P7c step 2 pinned it to a real LTX-Video 2B
   // build and MEASURED it at 13 921 MiB, so its gate is 16 and a 6 GB
   // card is not offered it. The offer it lost could never have run.
+  // Its gate moved again the same day, 16 -> 12 (18 P7c step 2f): a
+  // ballasted 5090 left the backend what a 12 GB card has and the job
+  // shrank to fit in the same 12 s. Still not 6.
   assert(t2.video === null,
-         "6 GB gets no video: LTX-Video 2B measured 13 921 MiB, so even " +
-         "the smallest video entry needs 16 GB (got " +
+         "6 GB gets no video: the smallest video entry, LTX-Video 2B, is " +
+         "gated at 12 GB (got " +
          (t2.video && t2.video.name) + ")");
 
   const t3 = rec(8, 8.9);
@@ -149,9 +152,17 @@ const T = window.Tiers;
   // AT ALL -- 18 P7c step 2a (the distilled fp8 2B, 4255 MiB) and step 4
   // (GGUF) are the two levers left. Pinned so neither the floor dropping
   // nor a silent re-offer can happen unnoticed.
+  //
+  // 2026-09-16, later (18 P7c step 2f): ltx-small RAN with 4 966 MiB left
+  // for the backend, in 12.69 s, identical clip. That is NOT an 8 GB card
+  // with After Effects and the DESKTOP_FREE_MB floor (under 1 GB left),
+  // and the ~9.7 GB of pinned host RAM it staged into was never
+  // constrained. So this row still asserts null, until step 2g measures
+  // exactly that.
   assert(t3.video === null,
          "8 GB gets no video at all — Wan 2.2 5B measured 26 187 MiB and " +
-         "LTX-Video 2B measured 13 921, and 8 GB holds neither (got " +
+         "LTX-Video 2B is gated at 12 until an 8 GB card with AE is " +
+         "measured (got " +
          (t3.video && t3.video.name) + ")");
 
   // THE POSITIVE HALF of the same 2026-09-16 measurement, and the reason
@@ -162,11 +173,27 @@ const T = window.Tiers;
   // has actually rendered: 13 921 MiB, 768x512 x 97 frames in 12 s on the
   // managed backend. A 16 GB card having any runnable video graph at all
   // is new, and this row is what says so.
+  //
+  // And the floor moved again (18 P7c step 2f): 12 GB. The number is not
+  // arithmetic -- 10.2 GiB plus AE is over 12 GB on paper -- it is a run
+  // on a 5090 ballasted down to a 12 GB card's room with AE's real
+  // footprint left in place: 7 401 MiB delta, 12.46 s against 12.28
+  // unconstrained, byte-identical clip. DynamicVRAM streams the weights
+  // instead of holding them, so it shrank rather than ground. This is the
+  // row CLAUDE.md's "reach is a feature" is about: a 12 GB card is the
+  // common case on aescripts, and it has video now.
+  const t12 = rec(12, 8.9);
+  assert(t12.video && t12.video.name === "ltx-small" &&
+         t12.video.measured === true && t12.video.minVramGB === 12,
+         "12 GB gets video: LTX-Video 2B, run on a ballasted card with a " +
+         "12 GB card's room in 12.46 s, gate 12 (got " +
+         JSON.stringify(t12.video && { n: t12.video.name,
+           g: t12.video.minVramGB }) + ")");
   const t16 = rec(16, 8.9);
   assert(t16.video && t16.video.name === "ltx-small" &&
-         t16.video.measured === true && t16.video.minVramGB === 16,
-         "16 GB gets video for the first time: LTX-Video 2B, MEASURED at " +
-         "13 921 MiB, gate 16 (got " + JSON.stringify(t16.video &&
+         t16.video.measured === true && t16.video.minVramGB === 12,
+         "16 GB gets video: LTX-Video 2B, MEASURED, gate 12 (got " +
+         JSON.stringify(t16.video &&
          { n: t16.video.name, m: t16.video.measured,
            g: t16.video.minVramGB }) + ")");
   const t24 = rec(24, 8.9);

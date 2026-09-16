@@ -63,7 +63,9 @@ every pass and finished work costs the same context as live work.
 | 5a | ~~**Does the 13 921 MiB peak even HOLD the text encoder?**~~ **DONE 2026-09-16. It does: one hump, no release before the peak, gate stays 16.** The trace this item said to re-read did not exist - the probe streamed nvidia-smi at 250 ms and threw every sample away, keeping one number. Fixed at the root first: `scripts/lib/vram-curve.js` + a `## curve` section in every transcript, `tests/test-vram-curve.js`. Third run measured 13 658 MiB, within 263 of the other two. **What the curve then showed is item 5a-1 below and it is bigger than this question was.** See §18 P7c step 2c. | §18 P7c step 2c | nothing | no |
 | 5a-1 | ~~**31 percent of ltx-small's peak is a HALF-SECOND VAE decode spike.**~~ **DONE 2026-09-16 (0.12.21). It paid 1 338 MiB and the gate did NOT move.** `VAEDecodeTiled` at the node's own defaults is in the shipped graph: 13 882 -> **12 544 MiB**, 12 s either way, SSIM 0.9958 / PSNR 45.6 dB against the plain decode with no error at the seam. 12.3 GiB is still more than a 12 GB card has, so `ltx-small` stays gated at 16 and P7a's open half stays open. The defaults barely tile - `temporal_size 64` is 8 LATENT frames against 13, `tile_size 512` is 2 columns - which is why only a quarter of the spike went. Pinned by `tests/test-workflow-manifests.js` so a tidy-up cannot put the plain decoder back. See §18 P7c step 2d. | §18 P7c step 2d | backend | done |
 | 5a-2 | ~~**Tune the tile: the DEFAULTS barely tiled.**~~ **DONE 2026-09-16 (0.12.24). `tile_size 256` ships: 12 576 -> 10 272 MiB, 12 s, no seam - and the gate STILL does not move, for a new reason.** `temporal_size` 32/16/8 measured smaller (10 784 / 10 048 / 10 048 - 16 and 8 are one job, `nodes.py` floors the chunk at 2 latent frames) and was REJECTED: every temporal chunk boundary is a periodic per-frame PSNR dip and a frame-to-frame luma jump against the plain decode. Spatial-only 256 adds no dip (min 36.7 dB at frame 58, same as the default), SSIM 0.9951, x10 diff image shows no tile grid. The peak is now within ~550 MiB of the post-decode REST, so decode tuning is spent. Why the gate holds: 10 272 over idle + `AE_RESIDENT_MB` 3 255 = 13 527 > 12 288 on paper - but the 5090 never had to offload, so paper is not the answer. That is item 5a-3. See §18 P7c step 2e. | §18 P7c step 2e | backend | done |
-| 5a-3 | **Can a 12 GB card RUN ltx-small, or does it grind?** The shipped graph needs 10.0 GiB over idle on a card with room; on a card WITHOUT room ComfyUI's model management should evict the 4 918 MiB T5 encoder before sampling (it never did on the 5090 because it never had to), which could put it inside 12 GB with After Effects open - or could turn a 12 s clip into minutes per frame, which CLAUDE.md forbids shipping silently. Constrain the managed backend to what a 12 GB card has left after AE (`--reserve-vram`, or a ballast allocation - pick one and say why), run the shipped graph, read the CURVE and the CLOCK. Completes in under ~2x the 12 s: gate 16 -> 12 with the number. Grinds or OOMs: the gate stays 16 and the manifest says so. | §18 P7c step 2f | backend | maybe |
+| 5a-3 | ~~**Can a 12 GB card RUN ltx-small, or does it grind?**~~ **DONE 2026-09-16 (0.12.25). It RUNS, and the gate went 16 -> 12.** Ballast, not `--reserve-vram` (which only changes what ComfyUI believes; real allocations still land on 32 GB): `scripts/vram-ballast.py` holds real VRAM so the backend gets a small card's room with AE and the desktop left in place. Baseline 10 394 MiB / 12.28 s; 12 GB room (8 756 left) 7 401 MiB / **12.46 s**; 4 966 left (a 12 GB card minus AE minus DESKTOP_FREE_MB, or an 8 GB card with AE) 3 621 MiB / 12.69 s. All three clips BYTE-IDENTICAL. The backend's DynamicVRAM streams weights from pinned host RAM, so the job shrinks instead of grinding. Found on the way: under pressure it fills the card to ~800 MiB free and `--reserve-vram 4` does NOT stop it (measured) - item 5a-5. See §18 P7c step 2f. | §18 P7c step 2f | backend | done |
+| 5a-4 | **Does the 0.10.14 "it grinds" measurement still hold on THIS backend?** It set sdxl's gate at 12, krea2's at 24 and both Wan entries' at 32, and it predates the managed backend's DynamicVRAM (`comfy-aimdo`, log line `DynamicVRAM support detected and enabled`), which tonight made ltx-small shrink to 3.6 GiB with no time cost. Re-run each with `scripts/vram-ballast.py` at the next card DOWN (sdxl 8, krea2 16, wan22-5b-fp8 24 then 16), read clock + curve + clip identity. A gate moves only on a clock under ~2x. This is the biggest reach lever in the queue if it holds. | §18 P7c step 2g | backend | maybe |
+| 5a-5 | **OWNER EYE: under memory pressure the backend fills the card to ~800 MiB free, and `--reserve-vram` does not stop it.** Measured 2026-09-16: ltx-small on a ballasted card peaked at 826 MiB free WITH `--reserve-vram 4`, 914 without. Your display went black at 3 803 MiB free on 09-15 (tiers.js DESKTOP_FREE_MB). This is not new to the 12 GB gate - a 16 GB card running it unconstrained peaks near 2.8 GB free - but lower gates make pressure the common case. Find what DOES bound DynamicVRAM (aimdo's own budget, a flag that disables dynamic loading, or a ballast the panel holds itself), measure it on ltx-small under ballast, and do NOT ship a flag whose effect was not seen on the curve. Also measure pinned HOST RAM: staging took ~9.7 GB of system RAM on a 62 GB box; a 16 GB-RAM buyer is unmeasured. | §18 P7c step 2g | backend | maybe |
 | 5b | **The distilled fp8 2B: 4 255 MiB instead of 6 047**, which would put resident weights at 9 173 and the job near 12.1 GB — the first thing that might give a 12 GB card video. NOT a drop-in: distillation retunes steps and cfg, and `CheckpointLoaderSimple` has no `weight_dtype`, so the free cast that made `wan22-5b-fp8` work is unavailable. Look for the vendor's own distilled template among the managed backend's 24 LTX ones before inventing values. | §18 P7c step 2a | backend, disk | yes |
 | 5c | **OWNER, one line: the LTX weights are "LTXV Open Weights License 0.X", not Apache-2.0.** The panel redistributes nothing (the buyer downloads from Lightricks' own repo), so this is about what a commercial product RECOMMENDS. Refusing it means going back to no video under 32 GB, because Wan is the only Apache-2.0 video entry and it gates at 32. | §18 P7c step 2b | owner | no |
 | 5d | **`comfy-node-defs.json` holds 52 defs beside a `class_count` of 3487**, so asking it whether a node exists returns a false NO for ~3 435 classes, by design. That false NO is what gave §18 P7c step 2 a wrong premise and nearly cost the catalog the whole LTX line. Name the count, refuse existence lookups, one stub test. Distinct from §17l (staleness) and both are live. No backend. | §17l-b | nothing | no |
@@ -4140,7 +4142,7 @@ half of `COMFY_CATALOG` gates at:
 
 | entry | minVramGB | template |
 |---|---|---|
-| `ltx-small` | **16** (was 6, never measured) | `AE_LLAMA_LTXV_2B_T2V_V1` (§18 P7c step 2, measured 2026-09-16) |
+| `ltx-small` | **12** (was 6, never measured; 16 on 09-16, 12 after step 2f) | `AE_LLAMA_LTXV_2B_T2V_V1` (§18 P7c step 2, measured 2026-09-16) |
 | `wan22-5b` | **32** (was 8) | `AE_LLAMA_WAN22_5B_T2V_V1` |
 | `wan22-5b-fp8` | **32** (2026-09-16) | `AE_LLAMA_WAN22_5B_FP8_T2V_V1` |
 | `minimax-h3` | 32 | `AE_LLAMA_H3_T2V_V1` (was the authored `AE_LLAMA_H3_I2V_V1`; §18 P9) |
@@ -4178,6 +4180,10 @@ The levers left are both about the WEIGHTS:
   within ~550 MiB of the post-decode rest). **The gate stays 16** until
   **§18 P7c step 2f** measures a CONSTRAINED card - on paper 10.0 GiB +
   AE's 3.2 GiB is over 12, but offload is exactly what paper cannot see.
+- **§18 P7c step 2f — TAKEN 2026-09-16 (0.12.25). A 12 GB card HAS VIDEO.**
+  Ballasted to a 12 GB card's room with AE on it, the shipped graph ran
+  in 12.46 s (12.28 unconstrained), byte-identical clip; gate 16 -> 12.
+  It even ran with 4 966 MiB left. 8 GB is step 2g, not done.
 - **§18 P7c step 2a** — the distilled fp8 2B, `4255 MiB` instead of
   `6047`, which would put resident weights at 9 173 MiB. Filed below.
 - **§18 P7c step 4** — GGUF Q4/Q5, NEXT UP item 6, still unsurveyed.
@@ -4712,6 +4718,55 @@ frame" from Wan at 704x480 costing 21 536 against 26 187. That is true of
 Wan's dominant term and it is too strong as a general rule - for
 ltx-small the frame-dependent term is 31 percent of the peak. No Wan run
 has had its curve read, because none was kept.
+
+#### MEASURED 2026-09-16 (0.12.25): it RUNS, the gate is 12
+
+**Method, and why not `--reserve-vram`.** That flag only changes what
+ComfyUI's model management BELIEVES is free; every allocation still lands
+on the 32 GB card, so a job that would spill past a small card cannot
+spill and the grind this step exists to catch cannot be seen.
+`scripts/vram-ballast.py` (run with the managed backend's own python)
+holds REAL VRAM on top of whatever is already in use, so the desktop and
+the running After Effects keep their real footprint and the backend gets
+exactly what a small card with the same desktop would leave it. It exits
+on a stop file or after `--max-sec`, so a dead pass cannot leave 20 GB on
+the owner's card. A per-second `GPU Adapter Memory` sampler watched
+dedicated AND shared usage, so a ballast demoted to system RAM by WDDM
+would have shown (it was not: dedicated never fell below the ballast).
+
+| backend's room | idle MiB | peak MiB | delta MiB | prompt s | clip vs baseline |
+|---|---|---|---|---|---|
+| whole card (baseline) | 3 657 | 14 051 | **10 394** | 12.28 | reference |
+| 12 GB card with AE: 8 756 left | 24 282 | 31 683 | 7 401 | **12.46** | byte-identical |
+| 4 966 left (12 GB - AE - DESKTOP_FREE_MB; = 8 GB with AE) | 28 072 | 31 693 | 3 621 | 12.69 | byte-identical |
+| 12 GB card, backend booted with `--reserve-vram 4` | 23 632 | 31 781 | 8 149 | 12.36 | not compared |
+
+Transcripts: `logs/catalog-vram-probe-2026-09-16T07-26-11.md` (12 GB),
+`07-27-25` (baseline), `07-28-15` (4 966), `07-30-08` (reserve).
+
+**Why it fits.** The managed backend logs `DynamicVRAM support detected
+and enabled` and `Enabled pinned memory 25140.0`; each model is "prepared
+for dynamic VRAM loading ... Staged". Weights live in pinned host RAM and
+stream onto the card as needed, so the delta scales down with the room
+instead of the job grinding. Shared GPU usage rose to ~9.7 GB in EVERY run
+including the baseline, i.e. it is the pinned staging, not spill.
+
+**Decisions.** Gate 16 -> 12, `measuredVramMB` 13 921 -> 10 394 (the
+shipped tiled graph, unconstrained). NOT 8: an 8 GB card with AE and the
+desktop floor leaves under 1 GB, which was not run, and host RAM was
+never constrained. Pinned in `tests/test-tiers.js` (new 12 GB row).
+
+**Two findings that imply work, filed as NEXT UP 5a-4 and 5a-5 (step 2g).**
+(1) The 0.10.14 "it does not OOM, it GRINDS" measurement that set the
+sdxl, krea2 and Wan gates predates DynamicVRAM and may no longer be true.
+(2) Under pressure the backend fills the card to ~800-900 MiB free, the
+`--reserve-vram 4` run proves that flag does not bound it, and the owner's
+display went black at 3 803 MiB free on 09-15.
+
+### Step 2g - what DynamicVRAM changes for every other gate, and what bounds it (filed 2026-09-16)
+
+See NEXT UP 5a-4 and 5a-5. Same tool (`scripts/vram-ballast.py`), same
+probe, same three readings: clock, curve, clip identity.
 
 ### Step 2 - the original text, kept because both of its wrong premises are the point
 

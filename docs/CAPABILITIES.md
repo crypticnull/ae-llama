@@ -508,10 +508,14 @@ Queued (see WORKPLAN for owners/order):
   graph. Pinned and measured, it is **the only video entry a card under
   32 GB can run**: 13 921 MiB at 768x512 × 97 frames in 12 s, against
   Wan 2.2 5B's 26 187 in 127. That moved the catalog's video floor from
-  32 GB to 16. It does NOT reach 8-12 GB — 10 965 MiB of the 13 921 is
-  resident weights, so no frame size the panel can inject gets there,
-  and those cards are now told plainly that video will not run rather
-  than handed an entry that could never have worked. The last two are the
+  32 GB to 16, and the same day to **12**: a tiled decoder brought the
+  shipped graph to 10 394 MiB, and a 5090 ballasted down to a 12 GB
+  card's room (After Effects still on it) ran it in 12.46 s with a
+  byte-identical clip, because the managed backend streams weights from
+  pinned system RAM instead of holding them resident. 8 GB cards are
+  still told plainly that video will not run — that case is unmeasured
+  (WORKPLAN 18 P7c step 2g) — rather than handed an entry that might
+  not. The last two are the
   same MiniMax H3 graph with the text encoder swapped — nvfp4 for
   Blackwell cards, int8 for everything else — and measuring both
   showed the 10.9 GB the encoders differ by is a DOWNLOAD difference

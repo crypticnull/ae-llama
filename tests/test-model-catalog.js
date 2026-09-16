@@ -116,8 +116,8 @@ assert(combo.tier.id === "T3" && combo.chat &&
        combo.gen.image && combo.gen.image.name === "sd15" &&
        combo.gen.video === null,
        "recommendSetup(8GB): T3, 7B chat, sd15 images, and NO video at " +
-       "all -- Wan 2.2 5B measured 26 187 MiB and LTX-Video 2B measured " +
-       "13 921, and 8 GB holds neither (got " +
+       "all -- Wan 2.2 5B measured 26 187 MiB and LTX-Video 2B is gated " +
+       "at 12 (18 P7c step 2f), and 8 GB is not measured (got " +
        JSON.stringify({ t: combo.tier.id,
                         c: combo.chat && combo.chat.name,
                         i: combo.gen.image && combo.gen.image.name,

@@ -25143,3 +25143,91 @@ with a repo-local (git-ignored) path.
 - `node tests/test-workflow-manifests.js`, `test-workflow-hash-history.js`,
   `test-model-catalog.js` green; full stub suite zero failing.
 - Real AE harness 770/770 before and after.
+
+## 2026-09-16 (local session) - a 12 GB card runs ltx-small in 12.46 s, the gate is 12, and the backend no longer grinds the way 0.10.14 measured
+
+SUPERSEDES: 25073,25146 - that entry held ltx-small's gate at 16 on the arithmetic "10 272 + AE 3 255 > 12 288". Measured on a constrained card the job fits in the same 12 s, so the gate is 12 and `measuredVramMB` is 10 394, not 13 921.
+
+**Item:** NEXT UP 5a-3 / WORKPLAN 18 P7c step 2f - can a 12 GB card RUN
+ltx-small, or does it grind?
+
+**Harness: 770/770 PASSED** before the work and after. **Version 0.12.25**
+(patch) - `extension/js/version.js`, the LTXV manifest and hash history
+changed. Full stub suite: zero failing files.
+
+### Method, and the choice the item asked me to state
+
+**Ballast, not `--reserve-vram`.** The flag only changes what ComfyUI's
+model management BELIEVES is free; real allocations still land on the
+32 GB card, so a job that would overflow a 12 GB card cannot overflow
+and the grind could never be seen. New `scripts/vram-ballast.py`, run
+with the managed backend's own python, holds REAL VRAM (torch.zeros in
+256 MiB chunks, read back through nvidia-smi) on top of whatever is in
+use when it starts, so AE (running, harness project open) and the
+desktop keep their real footprint. It exits on a stop file or after
+`--max-sec`, so a dead pass cannot leave 20 GB on the owner's card.
+
+First attempt had an arithmetic bug (it counted AE's existing 3.5 GB as
+part of the ballast, leaving 12 288 free instead of 8 756); caught from
+its own "ready" line before any measurement ran, fixed, restarted.
+
+A per-second `GPU Adapter Memory` Dedicated/Shared sampler ran beside
+every probe, to catch WDDM demoting the ballast to system RAM (it did
+not: dedicated never fell below the ballast level).
+
+### Measured (RTX 5090, managed backend, seed 12345, shipped graph)
+
+| backend's room | idle | peak | delta MiB | prompt s | clip |
+|---|---|---|---|---|---|
+| whole card | 3 657 | 14 051 | 10 394 | 12.28 | reference (= 0.12.24's clip too) |
+| 12 GB card with AE, 8 756 left | 24 282 | 31 683 | 7 401 | **12.46** | byte-identical |
+| 4 966 left | 28 072 | 31 693 | 3 621 | 12.69 | byte-identical |
+| 12 GB room + backend `--reserve-vram 4` | 23 632 | 31 781 | 8 149 | 12.36 | - |
+
+Transcripts `logs/catalog-vram-probe-2026-09-16T07-26-11.md`, `07-27-25`,
+`07-28-15`, `07-30-08`; samplers in `local/shared-usage-*.csv`.
+
+Why: the managed backend logs `DynamicVRAM support detected and enabled`
+and `Enabled pinned memory 25140.0`; every model is "prepared for dynamic
+VRAM loading ... Staged". Weights sit in pinned host RAM and stream onto
+the card, so the delta shrinks with the room. Shared GPU usage reached
+~9.7 GB in every run INCLUDING the unconstrained one - pinned staging,
+not overflow.
+
+### Decisions, and what I assumed
+
+- **Gate 16 -> 12** (the item's own bar: under ~2x the 12 s). 4 966 left
+  is exactly a 12 GB card minus AE minus `DESKTOP_FREE_MB`, and that ran
+  too, so the gate does not depend on eating the desktop floor.
+- **Not 8.** An 8 GB card with AE and the desktop floor leaves under
+  1 GB; not run. Host RAM was never constrained (62 GB box) and staging
+  pins ~9.7 GB of it. Both filed.
+- **`--reserve-vram 4` was tried as a way to honour DESKTOP_FREE_MB and
+  REVERTED, unshipped:** the curve still peaked at 826 MiB free. Under
+  DynamicVRAM it does not bound the job.
+- I did not watch the screen. The card was at ~800-900 MiB free three
+  times tonight; the System event log shows nothing display-related, but
+  the 09-15 blackout logged no driver event either, so that proves little.
+
+### Filed (WORKPLAN NEXT UP)
+
+- **5a-4 / step 2g:** the 0.10.14 "it GRINDS" measurement behind sdxl 12,
+  krea2 24 and Wan 32 predates DynamicVRAM. Re-run each one card down
+  under the ballast. Biggest reach lever in the queue if it holds.
+- **5a-5 / step 2g, OWNER EYE:** under pressure the backend fills the card
+  to ~800 MiB free and `--reserve-vram` does not stop it, while the
+  owner's display went black at 3 803 free. Find what bounds it; also
+  measure host RAM on a low-RAM configuration.
+
+### Changed
+
+- `extension/js/version.js` - ltx-small `minVramGB` 16 -> 12,
+  `measuredVramMB` 13 921 -> 10 394, comment carries the table.
+- `extension/comfy-workflows/AE_LLAMA_LTXV_2B_T2V_V1.manifest.json` -
+  change (6) records the gate move; `.hash-history.json` regenerated.
+- `scripts/vram-ballast.py` - new.
+- `tests/test-tiers.js` - new 12 GB row asserting ltx-small at gate 12;
+  6/8 GB rows still null with the reason; `test-model-catalog.js`
+  message text.
+- `docs/WORKPLAN.md` (5a-3 done, 5a-4, 5a-5, step 2f MEASURED, step 2g,
+  P7a), `docs/CAPABILITIES.md` video-floor paragraph.
