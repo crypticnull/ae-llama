@@ -171,7 +171,14 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
   roots, per-kind mappings), and a VRAM arbiter (tiers.js): one
   detection → one T0–T7 tier → chat AND generation recommendations
   derive from it, and each generation is decided by arithmetic over
-  the models REALLY loaded — concurrent, exclusive handoff (verified
+  the models REALLY loaded, against the card MINUS an always-on
+  reserve for After Effects and the Windows desktop (the panel lives
+  inside AE, so a model that starves its host has broken the product
+  even when the model runs). Starting the chat model is gated the same
+  way: one that cannot fit the free VRAM is refused with the numbers,
+  one that fits but leaves the desktop short loads and says so, and
+  the card is read again once the model is resident — concurrent,
+  exclusive handoff (verified
   release both directions: nvidia-smi polling + ComfyUI /free), or a
   grounded refusal under pause="never". One pause covers a whole
   round. Before any of that churn, the chosen template is checked

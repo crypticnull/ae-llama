@@ -52,7 +52,7 @@ every pass and finished work costs the same context as live work.
 | # | item | where | needs | bumps |
 |---|---|---|---|---|
 | 1 | **Confirm the backend did not outlive the loop.** The teardown added 2026-09-09 calls `comfy-install.js --stop` at loop exit. Check this morning's log for a `Backend:` line and that the card was released. If it is missing or the card is still held, that is the item. | §17q | nothing | no |
-| 2 | **Reserve VRAM for the desktop and After Effects before sizing the chat model.** Field incident 2026-09-15: AE plus the 32B model held 28,804 of 32,607 MiB and the owner's display went black with no driver reset logged; stopping the model freed it. A 12 GB buyer hits this sooner. Spec and numbers in §16b. | §16b | AE, chat model | yes |
+| 2 | ~~**Reserve VRAM for the desktop and After Effects before sizing the chat model.**~~ **DONE 2026-09-15 (0.12.18).** The reserve is in `planHandoff` and now gates `Llama.start` too (`Tiers.planChatLoad`), which had no arithmetic at all. The AMOUNT is still provisional and comes from item 3 — two constants, one line each, in `tiers.js`. What it does NOT touch: `recommendChat`/`recommendGen`, i.e. the tier table, which §16f reserves for the owner. See §16g. | §16b | AE, chat model | yes |
 | 3 | **Measure the §16b reserve on the owner's four real projects** — copies only, originals hashed before and after, close without saving. The exact eight-step procedure is in §16b; follow it to the letter. Paths are in the git-ignored `local/real-projects.json` and must never be committed. Nothing else loaded on the card while measuring. | §16b | AE | no |
 | 4 | **fp8 Wan 2.2 5B as a second entry, then MEASURE it.** The §18 P10 pattern: the shipped Wan graph with the diffusion filename swapped and nothing else. Cheapest route to a video option under 32 GB. | §18 P7c step 1 | backend, disk | yes |
 | 5 | **Settle what `ltx-small` is, then measure it.** The vendor's LTX is 2.3-**22B** — larger than Wan, not smaller. Ask a RUNNING backend's `/object_info` whether LTXV 2B nodes exist; the repo fixture says zero and is wrong (§17l). | §18 P7c step 2 | backend, disk | yes |
@@ -3480,6 +3480,34 @@ router is an opt on `buildSystemPrompt` mirrored as a `chat-probe` flag,
 or the instrument cannot see it.
 
 **Gate:** inherits §15's.
+
+### 16g. What the reserve does NOT cover yet (filed 2026-09-15, local session)
+
+Landed with the reserve in 0.12.18, as the two things it deliberately
+did not decide:
+
+1. **The generation bill is weights-on-disk, not peak allocation.**
+   `genNeedMBFor` sums the manifest's weight files, and that is the
+   number the reserve is subtracted from. Measured on the dev 5090
+   (LOG:7422-7436) the Krea round's weights came to 18,110 MB while the
+   card PEAKED at 29,064 MB with the 6,002 MB chat model resident — so
+   real allocation ran ~1.7 GB above the sum, and that round leaves
+   3,543 MB free, BELOW the 4,096 MB floor this reserve exists to keep.
+   With the reserve in, that same round still passes as `concurrent`, by
+   ~120 MB against the card's real 32,607. It is pinned as the known
+   edge in `tests/test-tiers.js`, not tuned away: the honest fix is a
+   per-template MEASURED peak (§18 already measures one per entry — the
+   figures exist, nothing feeds them to the arbiter), not a fudge factor
+   on the weight sum. Work: carry the measured peak into `genNeedMBFor`
+   when the chosen template has one, and fall back to the weight sum
+   when it does not.
+2. **The recommendation half is untouched, on purpose.** `recommendChat`
+   and `recommendGen` still size against the card's whole sticker, so a
+   T3 card is still recommended a 7B that §16d's arithmetic says leaves
+   it 1,065 MB short once After Effects is counted. Applying the reserve
+   there IS the tier-table rewrite — copy, boundaries and the honest 8
+   GB chat floor — which §16f/§16d hold for one owner decision after
+   §16f AND §13a step 4. Do not take it as a loop item.
 
 ### 16f. The measurements — split by who can take them
 

@@ -1195,20 +1195,30 @@
 
   function setGpuInfo(g) { gpuCache = g; }
 
+  // Weights plus KV cache and runtime overhead — llama-server's
+  // footprint runs roughly file size + 1-2 GB at 16k context. One
+  // constant, because the model about to load and the model already
+  // loaded must be priced the same way or the two gates disagree.
+  var CHAT_OVERHEAD_MB = 1536;
+
+  /** What a .gguf on disk would hold if it loaded. null = unprovable. */
+  function chatModelMBFor(modelPath) {
+    if (!modelPath) return null;
+    try {
+      var bytes = global.AEBridge.nodeRequire("fs").statSync(modelPath).size;
+      return Math.round(bytes / 1048576) + CHAT_OVERHEAD_MB;
+    } catch (e) { return null; }
+  }
+
   /** What the running chat model really holds, from its file on disk. */
   function chatLoadedMBNow() {
     var running = false;
     try { running = global.Llama.getState() === "running"; } catch (e) {}
     if (!running) return { running: false, mb: null };
-    try {
-      var p = global.Llama.getCurrentModel();
-      var bytes = global.AEBridge.nodeRequire("fs").statSync(p).size;
-      // Weights plus KV cache and runtime overhead — llama-server's
-      // footprint runs roughly file size + 1-2 GB at 16k context.
-      return { running: true, mb: Math.round(bytes / 1048576) + 1536 };
-    } catch (e2) {
-      return { running: true, mb: null };   // unprovable, not "zero"
-    }
+    var mb = null;
+    try { mb = chatModelMBFor(global.Llama.getCurrentModel()); }
+    catch (e2) { mb = null; }
+    return { running: true, mb: mb };      // null = unprovable, not "zero"
   }
 
   /**
@@ -1857,6 +1867,55 @@
   function cardTotalMBNow() {
     return gpuCache && typeof gpuCache.vramGB === "number" &&
            gpuCache.vramGB > 0 ? gpuCache.vramGB * 1024 : null;
+  }
+
+  /**
+   * The gate in front of the FIRST `Llama.start` — the load that had no
+   * arithmetic at all until 2026-09-15 (§16b). Assembles the three real
+   * numbers (the card, what it is already holding, what this .gguf
+   * costs) and hands them to the pure decision in tiers.js.
+   *
+   * The card's total comes from `cardTotalMBNow`, never from
+   * `vramOverrideGB`: this pairs with a measured `memory.used`, and a
+   * fictional total beside a physical reading is arithmetic about no
+   * machine at all (see cardTotalMBNow). cb(plan) — always called, and
+   * the plan is `unknown` rather than a guess when a number is missing.
+   */
+  function planChatLoad(s, cb) {
+    var settings = s;
+    if (!settings) {
+      try { settings = global.Settings.get(); } catch (e) { settings = {}; }
+    }
+    var inp = {
+      cardTotalMB: cardTotalMBNow(),
+      usedMB: null,
+      chatNeedMB: chatModelMBFor(settings.modelPath),
+      gpuLayers: settings.gpuLayers
+    };
+    try {
+      global.Setup.queryVramUsedMB(function (err, usedMB) {
+        inp.usedMB = err ? null : usedMB;
+        cb(global.Tiers.planChatLoad(inp));
+      });
+    } catch (e2) {
+      cb(global.Tiers.planChatLoad(inp));
+    }
+  }
+
+  /**
+   * The same floor asked again once the model is really resident — a
+   * reading rather than a prediction, because the prediction prices a
+   * model by file size plus a flat constant and the field incident
+   * landed under the floor while that estimate said it was clear.
+   * cb(sentence|null).
+   */
+  function checkVramAfterChatLoad(cb) {
+    var total = cardTotalMBNow();
+    try {
+      global.Setup.queryVramUsedMB(function (err, usedMB) {
+        cb(global.Tiers.freeFloorWarning(total, err ? null : usedMB));
+      });
+    } catch (e) { cb(null); }
   }
 
   var VramArbiter = {
@@ -3805,6 +3864,8 @@
     callHostBatch: callHostBatch,
     executeCommands: executeCommands,
     setGpuInfo: setGpuInfo,
+    planChatLoad: planChatLoad,               // the gate before Llama.start
+    checkVramAfterChatLoad: checkVramAfterChatLoad,
     setProgressSink: function (fn) { progressSink = fn; },
     catalogModelStatus: catalogModelStatus,
     removeCatalogWeights: removeCatalogWeights,

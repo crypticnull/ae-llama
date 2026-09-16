@@ -23620,3 +23620,93 @@ get an item After Effects will never render. Added to the always-takeable
 (repo-only) table in NEXT UP, not to the main queue.
 
 AE was left running with its project untouched, as the brief requires.
+
+## 2026-09-15 (local session) — the reserve is in the arithmetic now, and the chat model's own load finally has some
+
+NEXT UP item 2 (§16b). Harness was GREEN at pass start (770/770), so this
+is a queue item, not a repair.
+
+**What the field incident actually exposed.** The owner's display went
+black on 2026-09-15 with AE plus a 32B chat model holding 28,804 MiB of
+32,607. The reason the panel did nothing to prevent it is narrower than
+"nothing reserves VRAM": `planHandoff` only ever runs when a GENERATION
+is asked for. The chat model's own `Llama.start` — in `main.js`
+`startServer` and in `scripts/chat-probe.js` — did no sum of any kind.
+The one decision that put 23 GB onto a working card was the unguarded one.
+
+**Two constants, because one number cannot serve both sums** (`tiers.js`):
+
+- `AE_RESIDENT_MB = 3255` — what AE + the desktop already HOLD, measured
+  on this card with AE open and nothing loaded (LOG:7428).
+- `DESKTOP_FREE_MB = 4096` — what must stay UNALLOCATED. Field lower
+  bound: 3,803 MB free was NOT enough on 09-15, so the floor sits above
+  the reading that failed; 4,096 is the smallest round figure above it.
+
+`hostReserveMB() = 7351` is for arithmetic that sizes against the card's
+TOTAL (`planHandoff`), where nothing else accounts for After Effects.
+`desktopFreeMB() = 4096` is for arithmetic that starts from a MEASURED
+`memory.used`, where AE is already inside the reading — charging for it
+twice there would refuse loads that fit. Both are PROVISIONAL and live on
+one line each; §16b step 4 (NEXT UP item 3) replaces the first without
+touching a call site.
+
+**`planHandoff`** now spends `vramMB - reserve`, and NAMES the reserve in
+every sentence it decided ("…of the card's 24 GB, with ~7.2 GB held back
+for After Effects and the desktop"). A user told "8.7 GB does not fit on
+a 24 GB card" with no mention of the hold-back reads the panel as broken
+at arithmetic and files that bug instead of the real one. The tier's own
+`headroomGB: 1` is untouched — rewriting the tier table is owner-gated.
+
+**`Tiers.planChatLoad`** is the new gate, pure and testable, wired into
+`main.js` `startServer` via `Tools.planChatLoad` (which supplies the real
+card, a live `nvidia-smi` reading and the .gguf's own size). Three
+outcomes, and only one stops anything:
+
+- `refuse` — the model does not fit the FREE VRAM at all. Physical, so it
+  is safe to refuse; the message names the numbers and the three ways out
+  (close what else holds the card, smaller model, GPU layers 0).
+- `tight` — it fits but leaves the desktop under the floor. Loads, after
+  saying so. Refusing here would decide the honest 8 GB chat floor by
+  arithmetic, and §16d reserves that for the owner.
+- `unknown` — no card yet, no nvidia-smi, or an unstattable model. Loads
+  silently. A gate that guesses is worse than no gate.
+
+**And then it LOOKS.** `Tiers.freeFloorWarning` re-reads the card once
+the model is resident. This is not belt-and-braces: the prediction prices
+a model at file size + 1,536 MB, and at the incident the real footprint
+landed ~800 MB under the floor while that estimate said it was clear. A
+reading cannot be fooled that way. Under 4,096 MB free it says so and
+names the one action that fixes it without closing After Effects.
+
+`scripts/chat-probe.js` mirrors both calls — it starts models on a card
+AE is working on, which is the incident's exact shape, and
+`tests/test-chat-probe.js`'s drift guard is what caught the omission.
+
+**What I deliberately did NOT do**, filed as §16g: (1) the resume wait
+does not take the reserve — `card - used >= need + 7351` would add a
+30-second stall to every round on a 12 GB card, which is the card the
+reserve exists to protect, and the resume is restoring a model that was
+already resident; (2) `recommendChat`/`recommendGen` still size against
+the whole sticker, because applying the reserve there IS the tier-table
+rewrite §16f holds for the owner; (3) the generation bill is still
+weights-on-disk, and the measured Krea round peaked 1.7 GB above its
+weight sum — so that round still passes as `concurrent` by ~120 MB while
+really leaving 3,543 MB free, under the floor. Pinned as the known edge
+in `tests/test-tiers.js` rather than tuned away; the honest fix is to
+carry §18's already-measured per-template peaks into `genNeedMBFor`.
+
+**Tests.** New `tests/test-chat-load-gate.js` (25 checks) drives the
+incident's own numbers through both halves, plus the three unprovable
+machines, the override rule (a fiction beside a real reading is
+arithmetic about no machine — the gate uses the physical total), and a
+call-site read of `startServer` proving the gate runs BEFORE `Llama.start`
+and that both outcomes are acted on. `tests/test-tiers.js` updated: two
+assertions FLIPPED and that is the change, not a loosened test — 24 GB
+with 10.5 chat + 8 gen read `concurrent` before and reads `handoff` now.
+The "even when it would fit" rows were re-based onto a case that really
+fits, or the reserve would have been answering them.
+
+**Result: real-AE harness 770/770 PASSED. Stubbed suite 88/88 files
+green.** Bumped 0.12.17 → **0.12.18** (`extension/` changed).
+
+AE left running, project untouched.

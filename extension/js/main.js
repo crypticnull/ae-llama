@@ -531,22 +531,48 @@
 
   // ---------------------------------------------------------- server ctrl
 
+  /*
+   * Starting the chat model is a VRAM decision, and until 2026-09-15 it
+   * was the only one the panel made without arithmetic: `planHandoff`
+   * runs when a GENERATION is asked for, so a model loaded onto a card
+   * After Effects was already working on was never priced at all. That
+   * is the field incident in §16b — AE plus a 32B model at 28,804 MB of
+   * 32,607, and a display that went black with no driver event logged.
+   *
+   * Three outcomes, and only one of them stops anything: a model that
+   * cannot physically fit in the free VRAM is refused with the numbers;
+   * a model that fits but leaves the desktop under its floor loads, and
+   * says so first; anything unmeasured loads silently, because a gate
+   * that guesses is worse than no gate. Then the card is READ again once
+   * the model is resident — the estimate is file size plus a constant,
+   * and the incident landed under the floor while that estimate said it
+   * was clear.
+   */
   function startServer() {
     var s = global.Settings.get();
     if (!s.modelPath) {
       appendMsg("error", "Pick a model first (dropdown above, or Browse…).");
       return;
     }
-    global.Llama.start({
-      serverPath: s.serverPath,
-      modelPath: s.modelPath,
-      port: s.port,
-      ctxSize: s.ctxSize,
-      gpuLayers: s.gpuLayers
-    }, function (err) {
-      if (!err) {
-        appendMsg("info", basename(s.modelPath) + " ready on port " + s.port);
+    global.Tools.planChatLoad(s, function (plan) {
+      if (plan && plan.mode === "refuse") {
+        appendMsg("error", plan.reason);
+        return;
       }
+      if (plan && plan.mode === "tight") appendMsg("info", plan.reason);
+      global.Llama.start({
+        serverPath: s.serverPath,
+        modelPath: s.modelPath,
+        port: s.port,
+        ctxSize: s.ctxSize,
+        gpuLayers: s.gpuLayers
+      }, function (err) {
+        if (err) return;
+        appendMsg("info", basename(s.modelPath) + " ready on port " + s.port);
+        global.Tools.checkVramAfterChatLoad(function (warn) {
+          if (warn) appendMsg("info", warn);
+        });
+      });
     });
   }
 

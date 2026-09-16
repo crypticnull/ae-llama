@@ -75,6 +75,49 @@
             "stack; per-job arithmetic decides what runs together." }
   ];
 
+  /*
+   * ------------------------------------------------ the host reserve
+   *
+   * VRAM this panel will not spend, because After Effects and the
+   * Windows desktop are already spending it. DECIDED by the owner
+   * 2026-09-15 as UNCONDITIONAL — not a setting, not a tier option:
+   * "we do need to reserve a small amount of VRAM for After Effects
+   * always". The panel lives INSIDE After Effects, so a model that
+   * starves its host has broken the product even when the model runs.
+   *
+   * Two numbers, because the arithmetic comes in two shapes and mixing
+   * them double-counts (or under-counts) After Effects:
+   *
+   *   AE_RESIDENT_MB — what After Effects plus the desktop already HOLD.
+   *     Measured 3,255 MB on the dev 5090 with AE open, no project and
+   *     nothing else loaded (WORKPLAN-LOG 7428). Used by arithmetic that
+   *     sizes against the card's TOTAL, where nothing else accounts for
+   *     AE at all (planHandoff).
+   *
+   *   DESKTOP_FREE_MB — what must stay UNALLOCATED on top of that, for
+   *     the compositor to keep drawing. Field-measured lower bound,
+   *     2026-09-15: the owner's display went black, with no driver event
+   *     logged, at 28,804 MB used of 32,607 — i.e. 3,803 MB free was NOT
+   *     enough. 4,096 is the smallest round figure above the reading that
+   *     failed. Used by arithmetic that starts from a MEASURED free
+   *     figure, where AE is already inside `memory.used` (planChatLoad).
+   *
+   * Both are PROVISIONAL and deliberately live on one line each: §16b
+   * step 4 measures AE's real working footprint on four real projects,
+   * and that measurement replaces AE_RESIDENT_MB without touching a
+   * single call site. Neither figure is exposed as a setting.
+   */
+  var AE_RESIDENT_MB = 3255;
+  var DESKTOP_FREE_MB = 4096;
+
+  /** The reserve for TOTAL-based arithmetic: AE's footprint + the floor. */
+  function hostReserveMB() { return AE_RESIDENT_MB + DESKTOP_FREE_MB; }
+
+  /** The reserve for MEASURED-FREE arithmetic: the floor alone. */
+  function desktopFreeMB() { return DESKTOP_FREE_MB; }
+
+  function gb(mb) { return Math.round(mb / 1024 * 10) / 10; }
+
   /**
    * The VRAM figure every decision uses. `vramOverrideGB` (settings)
    * wins over the measured number so any card can impersonate any
@@ -277,11 +320,20 @@
       ? inp.vramGB * 1024 : null;
     var headMB = (typeof inp.headroomGB === "number"
       ? inp.headroomGB : 1) * 1024;
+    // The host reserve is in this sum because nothing ELSE in it is
+    // After Effects: `vramMB` is the card's whole sticker, and both
+    // other terms are models the panel loaded. Without it the arbiter
+    // was free to spend the card down to the last gigabyte while the
+    // application it lives inside was still drawing — which is what it
+    // did on 2026-09-15. The tier's own `headroomGB` stays as it was:
+    // it is the per-job slop the tier table owns, and rewriting that
+    // table is a separate, owner-gated decision (§16f).
+    var reserveMB = hostReserveMB();
     var known = vramMB !== null &&
       typeof inp.chatLoadedMB === "number" && inp.chatLoadedMB > 0 &&
       typeof inp.genNeedMB === "number" && inp.genNeedMB > 0;
     var fits = known &&
-      inp.chatLoadedMB + inp.genNeedMB + headMB <= vramMB;
+      inp.chatLoadedMB + inp.genNeedMB + headMB + reserveMB <= vramMB;
     // The chat model's figure is MEASURED off the model that is really
     // loaded; the card's can be a fiction (`vramOverrideGB` impersonates
     // any card on any card). Unlabelled, the two together produce
@@ -289,12 +341,16 @@
     // 2026-08-30 with a 32B model and an 8 GB override: "the chat model
     // holds ~20 GB of the card's 8 GB". Both numbers are true; only the
     // budget's provenance was missing.
+    // The reserve is NAMED in every sentence it decided. A user told
+    // "8.7 GB does not fit on a 24 GB card" with no mention of the 7.2
+    // GB held back for After Effects reads the panel as broken at
+    // arithmetic, and files that bug instead of the real one.
     function numbers() {
-      return "the generation needs ~" +
-        Math.round(inp.genNeedMB / 1024 * 10) / 10 + " GB and the chat " +
-        "model holds ~" + Math.round(inp.chatLoadedMB / 1024 * 10) / 10 +
+      return "the generation needs ~" + gb(inp.genNeedMB) +
+        " GB and the chat model holds ~" + gb(inp.chatLoadedMB) +
         " GB of the card's " + inp.vramGB + " GB" +
-        (inp.overridden ? " (VRAM override)" : "");
+        (inp.overridden ? " (VRAM override)" : "") + ", with ~" +
+        gb(reserveMB) + " GB held back for After Effects and the desktop";
     }
     if (pause === "never") {
       if (fits && !inp.mandatory) {
@@ -322,6 +378,104 @@
     return { mode: "handoff", reason: known
       ? "it does not fit beside the chat model (" + numbers() + ")"
       : "the fit cannot be verified — pausing chat is the safe default" };
+  }
+
+  /**
+   * The OTHER load, and until 2026-09-15 the unguarded one: starting the
+   * chat model itself. `planHandoff` only ever ran when a GENERATION was
+   * asked for, so the panel could put a 23 GB model onto a card that
+   * After Effects was already working on and never do a sum — which is
+   * exactly the field incident (§16b): AE at 14:01, the 32B at 14:08,
+   * 28,804 MB of 32,607 held, display black at 14:28.
+   *
+   * This half starts from a MEASURED `usedMB`, so After Effects is
+   * already counted and only DESKTOP_FREE_MB is held back — adding
+   * AE_RESIDENT_MB here would charge for AE twice.
+   *
+   * input: {cardTotalMB|null, usedMB|null, chatNeedMB|null, gpuLayers}
+   * out:   {mode:'ok'|'tight'|'refuse'|'unknown', reason, freeAfterMB|null,
+   *         reserveMB}
+   *
+   * Only 'refuse' stops a load, and only for a shortfall that is
+   * PHYSICAL — the model does not fit in the free VRAM at all. A model
+   * that fits but eats into the desktop's floor is 'tight': it is told,
+   * loudly, and then it loads. Refusing there would decide the honest
+   * chat floor for 8 GB cards by arithmetic, and that is the owner's
+   * call (§16d), not this function's.
+   */
+  function planChatLoad(inp) {
+    inp = inp || {};
+    var reserve = DESKTOP_FREE_MB;
+    var out = { mode: "unknown", reason: "", freeAfterMB: null,
+                reserveMB: reserve };
+    if (Number(inp.gpuLayers) === 0) {
+      out.reason = "GPU layers is 0, so this model loads into system " +
+                   "RAM — nothing is asked of the card.";
+      return out;
+    }
+    var total = typeof inp.cardTotalMB === "number" && inp.cardTotalMB > 0
+      ? inp.cardTotalMB : null;
+    var used = typeof inp.usedMB === "number" && inp.usedMB >= 0
+      ? inp.usedMB : null;
+    var need = typeof inp.chatNeedMB === "number" && inp.chatNeedMB > 0
+      ? inp.chatNeedMB : null;
+    if (total === null || used === null || need === null) {
+      out.reason = "The panel could not measure " +
+        (total === null ? "the card" :
+         used === null ? "what the card is already holding"
+                       : "this model's size") +
+        ", so it did not check whether this model leaves room for " +
+        "After Effects.";
+      return out;
+    }
+    var free = total - used;
+    var freeAfter = free - need;
+    out.freeAfterMB = freeAfter;
+    var where = "~" + gb(need) + " GB and the card has ~" + gb(free) +
+      " GB free of " + gb(total) + " GB";
+    if (freeAfter < 0) {
+      out.mode = "refuse";
+      out.reason = "This model needs " + where + " — it will not fit, " +
+        "so nothing was started. Close what else is using the card, " +
+        "pick a smaller model, or set GPU layers to 0 to run it on the " +
+        "CPU.";
+      return out;
+    }
+    if (freeAfter < reserve) {
+      out.mode = "tight";
+      out.reason = "Heads up: this model needs " + where + ", which " +
+        "leaves about " + gb(freeAfter) + " GB for After Effects and " +
+        "the Windows desktop. Under ~" + gb(reserve) + " GB the display " +
+        "can freeze with no error (measured 2026-09-15). A smaller " +
+        "model leaves more.";
+      return out;
+    }
+    out.mode = "ok";
+    out.reason = "This model needs " + where + ", leaving ~" +
+      gb(freeAfter) + " GB for After Effects and the desktop.";
+    return out;
+  }
+
+  /**
+   * The same floor, asked of the card AFTER something loaded — a
+   * reading, not a prediction. The prediction above prices a model by
+   * its file size plus a flat constant; the field incident landed 800 MB
+   * under the floor while that estimate said it was clear, so the only
+   * honest check is to look again once the memory is really allocated.
+   * Returns the sentence to show, or null when there is nothing to say.
+   */
+  function freeFloorWarning(totalMB, usedMB) {
+    if (typeof totalMB !== "number" || !(totalMB > 0) ||
+        typeof usedMB !== "number" || !(usedMB >= 0)) {
+      return null;                       // unmeasured: claim nothing
+    }
+    var free = totalMB - usedMB;
+    if (free >= DESKTOP_FREE_MB) return null;
+    return "The card now holds " + usedMB + " MB of " + totalMB +
+      " MB — only ~" + gb(free) + " GB is free, and Windows needs some " +
+      "of it to draw the screen. If the display freezes, stop the chat " +
+      "model (Stop, above) — that releases it without closing After " +
+      "Effects.";
   }
 
   /**
@@ -363,7 +517,11 @@
     entryFits: entryFits,
     recommendChat: recommendChat,
     recommendGen: recommendGen,
+    hostReserveMB: hostReserveMB,
+    desktopFreeMB: desktopFreeMB,
     planHandoff: planHandoff,
+    planChatLoad: planChatLoad,
+    freeFloorWarning: freeFloorWarning,
     describeSetup: describeSetup
   };
 

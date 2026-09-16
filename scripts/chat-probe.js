@@ -3396,15 +3396,36 @@ function startModel(cb) {
       cb(null);
     }
   });
-  Llama.start({
-    serverPath: s.serverPath, modelPath: modelPath, port: s.port,
-    ctxSize: s.ctxSize, gpuLayers: s.gpuLayers
-  }, function (err) {
-    if (err && !settled) {
+  // The same gate main.js puts in front of its own Llama.start (16b).
+  // The probe loads models onto a card After Effects is already working
+  // on -- that is the field incident's exact shape -- so the instrument
+  // has to ask the question the panel asks, or it cannot see the answer.
+  // Only a PHYSICAL shortfall stops it; everything else is printed.
+  Tools.planChatLoad(Object.assign({}, s, { modelPath: modelPath }),
+                     function (plan) {
+    if (plan && plan.reason) console.log("-- vram:    " + plan.reason);
+    if (plan && plan.mode === "refuse") {
       settled = true;
       clearTimeout(giveUp);
-      cb(err);
+      cb(new Error(plan.reason));
+      return;
     }
+    Llama.start({
+      serverPath: s.serverPath, modelPath: modelPath, port: s.port,
+      ctxSize: s.ctxSize, gpuLayers: s.gpuLayers
+    }, function (err) {
+      if (err && !settled) {
+        settled = true;
+        clearTimeout(giveUp);
+        cb(err);
+        return;
+      }
+      if (!err) {
+        Tools.checkVramAfterChatLoad(function (warn) {
+          if (warn) console.log("-- vram:    " + warn);
+        });
+      }
+    });
   });
 }
 

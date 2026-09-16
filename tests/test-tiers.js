@@ -182,15 +182,44 @@ const T = window.Tiers;
                  pauseMode: "auto", mandatory: false };
   const c = (patch) => P(Object.assign({}, base, patch));
 
-  assert(c({}).mode === "concurrent",
-         "24 GB, 10.5 chat + 8 gen + 1 headroom fits -> concurrent");
+  // THE RESERVE IS IN THIS SUM (§16b, owner-decided 2026-09-15). Until
+  // then the budget was the card's whole sticker, so the arbiter could
+  // spend it to the last gigabyte while After Effects — the application
+  // this panel lives inside — was still drawing. It did exactly that on
+  // 2026-09-15: 28,804 MB of 32,607 held, display black, no driver event
+  // logged. These two rows are the same arithmetic they always were,
+  // plus `Tiers.hostReserveMB()`; the first one's ANSWER changed, which
+  // is the point of the change and not a loosened assertion.
+  assert(T.hostReserveMB() === 3255 + 4096,
+         "the reserve is AE's measured footprint plus the desktop's floor");
+  assert(c({}).mode === "handoff",
+         "24 GB, 10.5 chat + 8 gen + 1 headroom + 7.2 reserve does NOT " +
+         "fit -> handoff (it read 'concurrent' before the reserve)");
+  assert(/held back for After Effects/.test(c({}).reason),
+         "…and the sentence names the reserve that decided it");
+  assert(c({ vramGB: 32, chatLoadedMB: 6002, genNeedMB: 8000 })
+           .mode === "concurrent",
+         "32 GB, 6 chat + 8 gen still clears the reserve -> concurrent");
+  // The dev 5090's measured Krea round (LOG:7422-7436) still clears —
+  // by 281 MB here, ~120 MB against the card's real 32,607. Pinned as
+  // the KNOWN EDGE rather than tuned away: that round's peak was 29,064
+  // MB, ~1.7 GB above the weight sum this arithmetic prices it at, so
+  // the reserve survives it only because the estimate is low. Filed as
+  // §16g — the bill is weights on disk, not peak allocation.
+  assert(c({ vramGB: 32, chatLoadedMB: 6002, genNeedMB: 18110 })
+           .mode === "concurrent",
+         "…a 32 GB card's 18.1 GB Krea round still clears the reserve, " +
+         "by 281 MB — the known edge, not a comfortable pass");
   assert(c({ genNeedMB: 14000 }).mode === "handoff",
          "…14 GB of gen does not fit beside it -> handoff");
   assert(c({ chatRunning: false, chatLoadedMB: null }).mode === "concurrent",
          "chat not loaded -> nothing to pause");
-  assert(c({ pauseMode: "always" }).mode === "handoff",
+  // "even when it would fit" has to be asked of a case that REALLY
+  // fits, or the reserve answers these two and the flag is never tested.
+  const fits = { vramGB: 32, chatLoadedMB: 6002, genNeedMB: 8000 };
+  assert(c(Object.assign({ pauseMode: "always" }, fits)).mode === "handoff",
          "pauseMode always -> handoff even when it would fit");
-  assert(c({ mandatory: true }).mode === "handoff",
+  assert(c(Object.assign({ mandatory: true }, fits)).mode === "handoff",
          "a mandatory-exclusive tier hands off even when arithmetic fits");
 
   // Principle 2: the user who overrode chat UPWARD flips themselves to
@@ -208,7 +237,7 @@ const T = window.Tiers;
 
   // pauseMode never: fit -> concurrent; no fit -> REFUSE with numbers,
   // before any churn.
-  assert(c({ pauseMode: "never" }).mode === "concurrent",
+  assert(c(Object.assign({ pauseMode: "never" }, fits)).mode === "concurrent",
          "never + fits -> concurrent");
   const ref = c({ pauseMode: "never", genNeedMB: 14000 });
   assert(ref.mode === "refuse" && /13\.7 GB/.test(ref.reason) &&
