@@ -10947,6 +10947,22 @@ AELL_TOOLS.snapshot_frame = function (args) {
     }
   } catch (eRf) { priorFactor = null; }
 
+  // saveFrameToPng RETURNS BEFORE THE FILE IS WRITTEN. Measured AE 2026,
+  // 40 rounds: a new path did not exist yet at return 38 times, and an
+  // overwrite still showed the OLD file at return 39 of 39 times, and
+  // later had NO file at all for over a second (2 of 190). So polling a
+  // path that already holds a PNG reads the old header back and reports
+  // the old size as this snapshot's (a Half snapshot once came back
+  // 240x180). Removing it first makes the poll below wait for the new
+  // frame. {overwrite: true} already agreed to lose it.
+  if (file.exists && !file.remove()) {
+    if (priorFactor) {
+      try { comp.resolutionFactor = priorFactor; } catch (eBk) {}
+    }
+    return AELL_err("Could not replace " + file.fsName + " - it is open " +
+      "or locked by another program. Close it or pick another 'path'.");
+  }
+
   var thrown = null;
   try {
     // A String path THROWS ("is not a File or Folder object"), so this
@@ -10963,16 +10979,22 @@ AELL_TOOLS.snapshot_frame = function (args) {
       (thrown.message || thrown));
   }
 
-  // AE hides a file it has just written for ~300 ms, so one look would
-  // report a good snapshot as a failure (the same fact render_comp
-  // polls for).
-  var bytes = AELL_rqSettle(file, 10);
+  // The write lands after the call returns (above), so poll until the
+  // file exists AND its header reads. A present file with no readable
+  // header yet is a write in progress, not a finished frame. 5 s is a
+  // ceiling only: a normal frame is back well inside the first second.
+  var bytes = -1, info = null, tries;
+  for (tries = 0; tries < 50; tries++) {
+    bytes = AELL_rqSettle(file, 1);               // sleeps 100 ms on a miss
+    if (bytes < 0) continue;
+    info = AELL_pngInfo(file);
+    if (info) break;
+    $.sleep(100);
+  }
   if (bytes < 0) {
     return AELL_err("After Effects reported no error but no file appeared " +
       "at " + file.fsName + ". Check that the folder is writable.");
   }
-
-  var info = AELL_pngInfo(file);
   var out = {
     comp: comp.name,
     path: file.fsName,

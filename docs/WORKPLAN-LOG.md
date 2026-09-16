@@ -27558,3 +27558,35 @@ Tests: test-pass-tree, claude-procs, powershell-syntax, loop-teardown, loop-hear
 **Needs a human eye / not verified:** the loop's own new code path (the guard job's snapshot loop and the post-pipeline reap) has not run inside a real loop, because **the running loop (PID 47376) parsed the old script at 10:20 and keeps it until restarted**. The first loop started after this commit is the real test. Its log should show no `Pass leftover reap failed` line, and after a timed-out pass it should show `Reaped pass leftover` lines. I added that caveat to 11b-2, the item most likely to hit the bound.
 
 **Assumed:** the managed ComfyUI backend is left alone even when a pass booted it, because it is detached on purpose for the next pass and the loop teardown stops it (17q). `stop-local-agent.ps1` kills passes by hand without this tree reap. I did not change it (scope); a hand stop is rare and the owner is present when it happens.
+
+## 2026-09-16 (local session) - snapshot_frame read the OLD png back on an overwrite: saveFrameToPng returns before the write (NEXT UP 32)
+
+**Item:** NEXT UP 32. The rows above it are owner-only or blocked (6, 5a-4e, 5a-5b, 5a-5c, 5c, 6b). Pass 27 started ~13:30 EDT, in the daytime. `run-local-agent.ps1` (PID 47376, -UntilHour 17) is running, so the owner-started loop gives permission (17a).
+
+**Harness:** 770/770 at the start, and **770/770** after the fix.
+
+**Counted first, as the item said.** One AE session, fresh 240x180 comp per round:
+- The suite's frame sequence (Half, then a Full snapshot at t=1, get_comp_details, then a `resolution: 'comp'` snapshot at t=1), 25 rounds: 0 wrong sizes.
+- The same sequence with the suite's earlier Full snapshots added, 40 + 150 rounds: 0 wrong sizes, but **2 of 190 overwrite snapshots failed with "no file appeared"**, which is a second flake of the same step family.
+- Direct measurement, 40 rounds (`saveFrameToPng` bare):
+  - A NEW path did not exist at return 38 of 40 times.
+  - An OVERWRITE still showed the OLD file (old header) at return **39 of 39** times.
+  - A resolutionFactor change made right after the call returns did NOT affect the frame (0 of 40), so the restore and the cache were not the cause.
+
+**Cause:** `saveFrameToPng` returns before the write lands. On an overwrite, `AELL_rqSettle` saw the old file at once, and `AELL_pngInfo` read the OLD header, so the tool reported the previous file's size and bytes as this snapshot's. When AE's delete-then-write gap outlasted the 1 s settle, the tool reported "no file appeared" instead. The 240x180 that pass 26 saw is this mechanism reading a stale or mid-replace file. Which earlier file held 240x180 is inferred, not captured.
+
+**Changed:**
+- `extension/jsx/hostscript.jsx snapshot_frame`:
+  - Removes an existing target BEFORE the save (`overwrite: true` already agreed to lose it). If the remove fails, it gives a grounded "open or locked" error and restores the resolution factor.
+  - Polls up to 5 s (a ceiling) until the file exists AND its PNG header reads. `render_comp` is untouched, because `render()` is synchronous.
+- `tests/test-frame-roundtrip.js` (110 checks):
+  - The stub's FACT 8 now models the overwrite race: the old file answers the first look, then the new write lands hidden.
+  - A fidelity check for that, plus a regression: a `comp` snapshot OVER a 320x240 file must report 160x120 and warn.
+  - Verified it FAILS on the old host code (reports 320x240) and passes on the fix.
+- Hostscript-loading Node tests plus es3-ternary: all pass.
+
+**Verified in real AE:** the 150-round suite sequence through the fixed tool gave 0 wrong sizes, 0 "no file appeared" and 0 missing warnings; the slowest `comp` snapshot took 430 ms. Each snapshot now waits for the real write (~0.2-0.4 s), where before it returned early on a stale read.
+
+**No bump (assumed):** extension/ changed and the fix is AE-verified, which would normally mean a patch bump. But NEXT UP 12a is holding the next bump until a real panel proves that `main.js` still sends after 12/13/13a. A bump now would ship that unproven `main.js` too, so this rides with 12a. I added it to 12a's list, the way 7d/7e rode.
+
+**Incident, my own:** my first two repro scripts had a broken regex (a heredoc/python escape) and raised "Unable to execute script ... Unterminated string constant" alerts in AE, which blocked the `-r` queue. I closed both alerts with WM_CLOSE on the #32770 dialog. AE itself was not closed, and the project was not touched beyond the ST F32 scratch items, which the scripts removed.

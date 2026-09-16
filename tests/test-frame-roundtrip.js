@@ -25,6 +25,11 @@
 //     a render, which raises a modal that wedges AE).
 //  8. A file AE has just written reports exists === false for ~300 ms,
 //     so its own output has to be polled rather than glanced at.
+//     saveFrameToPng RETURNS BEFORE THE WRITE: measured 2026-09-16, 40
+//     rounds, an OVERWRITE still showed the OLD file at return 39 of 39
+//     times, then no file, then the new one. Polling a path that held a
+//     PNG reads the old header back (NEXT UP 32: a Half snapshot came
+//     back 240x180).
 //  9. Guide layers are NOT rendered into the frame.
 // 10. `importFile` on a path already in the project makes a SECOND item
 //     and says nothing (one path, two ids).
@@ -98,8 +103,13 @@ function File(p) {
 }
 Object.defineProperty(File.prototype, "exists", {
   get() {
-    const rec = FILES[this._p.toLowerCase()];
+    let rec = FILES[this._p.toLowerCase()];
     if (!rec) return false;
+    if (rec.pending) {                                       // FACT 8
+      // The OLD file answers the first look; AE's write lands after it.
+      if (rec.stale > 0) { rec.stale--; return true; }
+      rec = FILES[this._p.toLowerCase()] = rec.pending;
+    }
     if (rec.hidden > 0) { rec.hidden--; return false; }      // FACT 8
     return true;
   }
@@ -257,7 +267,15 @@ Comp.prototype.saveFrameToPng = function (t, file) {
   // FACT 4: out of range does not complain, it writes a blank frame.
   const blank = t < 0 || t > this.duration;
   // FACTS 6 + 7: PNG bytes, whatever the name, over whatever was there.
+  const key = norm(file.fsName).toLowerCase();
+  const old = FILES[key];
   writePng(file.fsName, w, h, blank ? 378 : 644, HIDE_TICKS);
+  if (old && !old.pending) {
+    // FACT 8: the write lands AFTER the call returns, so the old file
+    // answers the first look.
+    FILES[key] = { bytes: old.bytes, hidden: 0, png: old.png,
+                   stale: 1, pending: FILES[key] };
+  }
 };
 
 function makeComp(name, w, h, par, duration, fps) {
@@ -401,6 +419,19 @@ assert(typeof AELL_TOOLS.import_file === "function",
   const f = new File("C:/frames/far.png");
   assert(f.exists === false && f.exists === false && f.exists === true,
          "STUB FIDELITY: a just-written file is invisible at first (FACT 8)");
+
+  // FACT 8, overwrite half: the OLD file answers the first look.
+  writePng("C:/frames/over.png", 320, 240, 644);
+  shot.resolutionFactor = [2, 2];
+  shot.saveFrameToPng(1, new File("C:/frames/over.png"));
+  shot.resolutionFactor = [1, 1];
+  const o = new File("C:/frames/over.png");
+  assert(o.exists === true && AELL_pngInfo(o).width === 320,
+         "STUB FIDELITY: an overwrite shows the OLD file at return (FACT 8)");
+  let polls = 0;
+  while (!(o.exists && AELL_pngInfo(o).width === 160) && polls < 10) polls++;
+  assert(polls < 10, "STUB FIDELITY: and the new frame does land (FACT 8)");
+  delete FILES["c:\frames\over.png"];
 
   delete FILES["c:\\frames\\far.png"];
   delete FILES["c:\\frames\\half.png"];
@@ -578,6 +609,26 @@ assert(typeof AELL_TOOLS.import_file === "function",
          (keep.data.warning || ""));
   assert(shot.resolutionFactor[0] === 2,
          "and the comp is left alone in that mode");
+
+  // NEXT UP 32: the self-test's own sequence. A Full snapshot, then a
+  // 'comp' snapshot OVER a file holding a full-size frame. Reading the
+  // path back before AE's write lands reported the old 320x240.
+  const first = call("snapshot_frame", { comp: "Shot", time: 1,
+                                        path: "C:/frames/downs.png",
+                                        resolution: "comp",
+                                        overwrite: true });
+  writePng("C:/frames/downs.png", 320, 240, 644);
+  const again = call("snapshot_frame", { comp: "Shot", time: 1,
+                                         resolution: "comp",
+                                         path: "C:/frames/downs.png",
+                                         overwrite: true });
+  assert(first.ok && again.ok && again.data.width === 160 &&
+         again.data.height === 120,
+         "an OVERWRITE reports the new frame, not the file it replaced: " +
+         (again.ok ? again.data.width + "x" + again.data.height
+                   : again.error));
+  assert(/not the comp's 320x240/.test(again.data.warning || ""),
+         "and the downsample warning reads the NEW header too");
 
   const bad = call("snapshot_frame", { comp: "Shot", resolution: "half",
                                        path: "C:/frames/badres.png" });
