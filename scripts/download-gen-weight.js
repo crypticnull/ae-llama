@@ -69,6 +69,10 @@ loadPanelFile("settings.js");
 loadPanelFile("tiers.js");
 loadPanelFile("comfy.js");
 loadPanelFile("setup.js");
+// Not optional: without Tools, "is this weight already on disk" falls
+// back to the ONE download dest and re-fetches a file another root holds
+// (WORKPLAN §18 P7b: a 25 GB duplicate was one --entry away).
+loadPanelFile("tools.js");
 
 const Settings = window.Settings;
 const Setup = window.Setup;
@@ -147,8 +151,10 @@ urls.forEach(function (u) {
             plan.err);
     blocked = true;
   } else {
-    const have = fs.existsSync(plan.dest);
-    say("info", (have ? "present " : "MISSING ") + plan.dest);
+    const found = Setup._existingGenWeight(u);
+    if (found) say("info", "present " + found.path);
+    else if (fs.existsSync(plan.dest)) say("info", "present " + plan.dest);
+    else say("info", "MISSING " + plan.dest);
   }
 });
 if (blocked || OPT.check) {
@@ -167,9 +173,14 @@ if (blocked || OPT.check) {
     let missing = 0;
     urls.forEach(function (u) {
       const plan = Setup._genWeightDest(u);
-      if (plan.err || !fs.existsSync(plan.dest)) { missing++; return; }
-      const mb = Math.round(fs.statSync(plan.dest).size / 1048576);
-      verdict(true, path.basename(plan.dest) + " is on disk", mb + " MB");
+      if (plan.err) { missing++; return; }
+      const found = Setup._existingGenWeight(u);
+      const where = found ? found.path
+                          : (fs.existsSync(plan.dest) ? plan.dest : null);
+      if (!where) { missing++; return; }
+      const mb = Math.round(fs.statSync(where).size / 1048576);
+      verdict(true, path.basename(plan.dest) + " is on disk",
+              mb + " MB, " + where);
     });
     if (missing) {
       verdict(false, "every file the entry names is on disk",

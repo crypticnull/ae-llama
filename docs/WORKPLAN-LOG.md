@@ -27136,3 +27136,40 @@ No `extension/` change, so **no version bump**.
 - `tests/test-loop-heartbeat.js`: executes the real function over 13 synthetic spans (late beats, 59.5, 3599.5, 6000.9, -3) and asserts the clock is monotone. Green, plus test-powershell-syntax and test-source-control-chars.
 
 **Decision made unattended:** none beyond the harness skip.
+
+## 2026-09-16 (local session) - download-gen-weight no longer re-downloads a weight another root holds (NEXT UP 25, §18 P7b)
+
+**Item:** NEXT UP 25. DAYTIME pass, started 10:48 EDT, inside the `-UntilHour 17` daytime loop.
+
+**Harness: NOT RUN, on purpose**, same reading as the earlier daytime passes: 17a is unanswered and CLAUDE.md's daytime rule is the written one. AE was not touched. No backend, no GPU, no network.
+
+**Skipped NEXT UP 24, and why.** Its row said "needs nothing", but §23f #2 closes §18 P9a as a side effect and says "do not also take P9a separately", and every step of it needs a running backend (the §23e placeholder measurement, then one measured sibling per pass). The row now says `backend, disk` and points at §23e/§23f.
+
+### Changed
+
+- **`extension/js/setup.js`:** new `existingGenWeight(u)` asks `Tools.findWeightFile(basename, dir, settings)` about every root the panel searches. `downloadGenWeight` calls it BEFORE it creates the dest folder. On a hit it says where the copy is, answers with that path, and opens no controller. Exposed as `_existingGenWeight`.
+- **`extension/js/tools.js`:** exports `findWeightFile` (one line). This is the same resolution the settings rows use, including per-kind `kind=path` roots, which meets P7b's trap (a) by reuse.
+- **`scripts/download-gen-weight.js`:** loads tools.js. `--check` and the final "is it on disk" verdict both use the same answer.
+- **Scope, found while reading:** the settings Download button was never affected. main.js already filtered `urls[]` through `catalogModelStatus` before calling the downloader. The bug hit the CLI (the path §18 passes use) and any direct caller.
+
+### Verified
+
+- `tests/test-gen-model-manager.js`, 58 ok. The new part:
+  - (1) A file held only in the user's extra root, and one held only in the Comfy-Desktop shared store, are each answered with THAT path. No controller opens, nothing is created under the managed dest, and the status line names the path.
+  - (2) PARITY over the real catalog. 21 pinned files are rotated across managed / user / shared / absent, and the downloader and `catalogModelStatus` must name the same path for every one.
+- **Negative control:** with the lookup forced to null, 9 FAIL, and parity lists every present file as `downloader=null`. Restored and green again.
+- Also green: test-model-catalog, test-workflow-bundle, test-comfy-backend, test-chat-probe, test-engine-assets, test-tier-ladder, test-workflow-seeding, test-comfy-image-landed, test-capability-doc, test-source-control-chars.
+- **CLI on this machine** (disk read only, plan mode):
+  - `--entry minimax-h3-int8 --check` now reports all four files `present` in `%LOCALAPPDATA%Comfy-DesktopComfyUI-Sharedmodels`. That is exactly the 2026-09-09 case where it said four MISSING and would have fetched 51 427 MiB.
+  - `--entry wan22-5b --check` finds `umt5_xxl_fp8_e4m3fn_scaled` in `DocumentsComfyUImodels`.
+
+**No bump**, following the 13a/15/17 daytime precedent: never loaded in a real panel. It rides with 12a, and that row now names it.
+
+### Filed
+
+- **NEXT UP 30 (backend):** `comfyModelRoots` also searches `comfyDir/models` and the two ComfyUI config-file roots. `applyExtraModelPaths` writes none of those into the managed yaml. If the managed backend cannot load from them, a weight there is counted present (now by the downloader too) and cannot be loaded. This comes from reading the code and has not been measured. It is pre-existing for the settings rows and pricing. This pass extended it to the downloader on purpose, because the owner-visible alternative is a silent 26 GB duplicate.
+
+### Decisions made unattended
+
+- Took 25 over 24 (reason above).
+- Reused `findWeightFile` instead of `catalog-probe.js`'s `onDisk`, which is a hand-mirrored root list. The panel's own rule is the one the product acts on.

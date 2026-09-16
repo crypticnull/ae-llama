@@ -106,6 +106,7 @@ function load(rel) {
 }
 // Same order the panel loads them (setup.js needs nothing of tools at
 // load time; tools.js reaches Setup/Comfy only at call time).
+load("extension/js/version.js");   // AELL.COMFY_CATALOG, for the parity walk
 load("extension/js/comfy.js");
 load("extension/js/setup.js");
 load("extension/js/tools.js");
@@ -271,6 +272,64 @@ assert(dlDone && !dlDone.err &&
        dlDone.dest === path.join(MANAGED, "vae", "vae.safetensors"),
        "a file already on disk is answered instantly, no download");
 eq(ctrl2, null, "and no controller is opened for it");
+
+// WORKPLAN §18 P7b: the file is in ANOTHER root the panel searches (the
+// user's extra root, the Comfy-Desktop shared store), not at the dest.
+// Measured 2026-09-09 this re-downloaded 6.4 GB, and the CLI planned a
+// 25 GB duplicate. The answer must be the foreign copy, instantly, with
+// nothing created at the dest — not even its kind folder.
+const foreign = [
+  { u: { url: "https://host/repo/only-user.safetensors", dir: "clip_vision" },
+    root: USER },
+  { u: { url: "https://host/repo/only-shared.safetensors?x=1", dir: "upscale_models" },
+    root: SHARED }
+];
+for (const f of foreign) {
+  const base = String(f.u.url).split("?")[0].split("/").pop();
+  const held = put(f.root, f.u.dir, base);
+  const destDir = path.join(MANAGED, f.u.dir);
+  let done = null, said = "";
+  const c = Setup.downloadGenWeight(f.u, { status: (t) => { said = t; } },
+    (err, dest) => { done = { err: err, dest: dest }; });
+  assert(done && !done.err && done.dest === held,
+         base + ": a copy in another root is answered with THAT path, " +
+         "no download");
+  eq(c, null, base + ": no controller opened");
+  assert(!fs.existsSync(destDir),
+         base + ": nothing created under the managed dest");
+  assert(said.indexOf(held) !== -1 && said.indexOf("not downloading") !== -1,
+         base + ": the status line says where the copy is");
+}
+
+// The two answers to "is it on disk" must agree for EVERY real catalog
+// file, on a disk holding one copy per root kind. This is the rule that
+// keeps holding after the bug is gone: the downloader and the settings
+// rows cannot disagree about existence again.
+const realCatalog = Setup.comfyCatalog(null) || [];
+let pinned = 0, disagreements = [];
+realCatalog.forEach(function (entry, ei) {
+  (entry.urls || []).forEach(function (u, ui) {
+    const base = String(u.url).split("?")[0].split("#")[0].split("/").pop();
+    // Rotate the copy across managed / user / shared / absent.
+    const where = [MANAGED, USER, SHARED, null][(ei + ui) % 4];
+    if (where) put(where, u.dir || "checkpoints", base);
+    pinned++;
+  });
+  const st2 = Tools.catalogModelStatus(entry, SETTINGS);
+  (entry.urls || []).forEach(function (u) {
+    const base = String(u.url).split("?")[0].split("#")[0].split("/").pop();
+    const row = st2.files.filter((x) => x.file === base)[0];
+    const hit = Setup._existingGenWeight(u);
+    const a = row && row.path ? row.path : null;
+    const b = hit ? hit.path : null;
+    if (a !== b) disagreements.push(entry.name + "/" + base + ": row=" + a +
+                                    " downloader=" + b);
+  });
+});
+assert(pinned >= 5, "the parity check walked the real catalog's pinned files [" +
+       pinned + "]");
+eq(disagreements.join("; "), "",
+   "downloader and settings rows agree on where every catalog weight is");
 
 // ------------------------------- the yaml the hidden backend reads
 

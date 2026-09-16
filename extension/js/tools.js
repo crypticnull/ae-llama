@@ -4801,6 +4801,7 @@
     setProgressSink: function (fn) { progressSink = fn; },
     catalogModelStatus: catalogModelStatus,
     removeCatalogWeights: removeCatalogWeights,
+    findWeightFile: findWeightFile,   // Setup.downloadGenWeight asks it first
     workflowRows: workflowRows,       // Settings > ComfyUI > Workflows
     _verifyMogrtResult: verifyMogrtResult, // exposed for tests
     _vramArbiter: VramArbiter,        // exposed for tests and probes

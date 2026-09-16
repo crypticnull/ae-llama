@@ -695,6 +695,25 @@
   }
 
   /**
+   * Where a generation weight ALREADY is, across every root the panel
+   * searches, or null. "Do I have it" must be answered against the same
+   * roots as "can the backend load it": asking only about the one
+   * download dest re-fetched a 6.4 GB encoder the backend was already
+   * listing from another root (WORKPLAN §18 P7b, measured 2026-09-09).
+   * One rule, Tools.findWeightFile, the same one the settings rows read.
+   */
+  function existingGenWeight(u) {
+    var plan = genWeightDest(u);
+    if (plan.err) return null;
+    try {
+      return global.Tools && global.Tools.findWeightFile
+        ? global.Tools.findWeightFile(path.basename(plan.dest),
+                                      u.dir || null, currentSettings())
+        : null;
+    } catch (e) { return null; }
+  }
+
+  /**
    * Download ONE generation weight (an entry of a catalog model's
    * urls[]) into the panel-managed models tree.
    * ui: {status(text)?, progress(receivedBytes, totalBytes)?}
@@ -707,6 +726,15 @@
     var plan = genWeightDest(u);
     if (plan.err) { cb(new Error(plan.err)); return null; }
     var dest = plan.dest;
+    var found = existingGenWeight(u);
+    if (found) {
+      if (ui.status) {
+        ui.status(path.basename(dest) + " is already on disk at " +
+                  found.path + " — not downloading it again.");
+      }
+      cb(null, found.path);
+      return null;
+    }
     try {
       var destDir = path.dirname(dest);
       if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
@@ -1117,6 +1145,7 @@
     downloadModel: downloadModel,
     downloadGenWeight: downloadGenWeight,
     _genWeightDest: genWeightDest,    // exposed for tests
+    _existingGenWeight: existingGenWeight, // exposed for tests and the CLI
     modelCatalog: modelCatalog,
     comfyCatalog: comfyCatalog,
     recommendModel: recommendModel,
