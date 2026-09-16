@@ -2993,10 +2993,60 @@
    * A wrong picture with no error is worse than a slow one, so it is
    * unconditional. Only OUR backend gets it; a user's own ComfyUI is left alone.
    */
-  function managedBootArgs(install, base) {
-    return ["-s", install.mainPy, "--windows-standalone-build",
-            "--port", String(base.port), "--listen", "127.0.0.1",
-            "--disable-auto-launch", "--disable-pinned-memory"];
+  function managedBootArgs(install, base, ckAttention) {
+    var a = ["-s", install.mainPy, "--windows-standalone-build",
+             "--port", String(base.port), "--listen", "127.0.0.1",
+             "--disable-auto-launch", "--disable-pinned-memory"];
+    if (ckAttention) a.push("--use-ck-attention");
+    return a;
+  }
+
+  /*
+   * Can this machine run ComfyUI's core INT8 attention kernel
+   * (`--use-ck-attention`)? Measured 2026-09-16 (WORKPLAN 13a, NEXT UP
+   * 7/7a) on the managed ComfyUI 0.34.0: Wan 2.2 5B renders ~23 % faster
+   * with no VRAM change and an equal-quality sample, and nothing is
+   * installed -- comfy_kitchen is a core dependency.
+   *
+   * It is ASKED, never assumed, because the flag is FATAL where the
+   * kernel is missing: attention.py logs "Comfy Kitchen attention is
+   * unavailable" and calls exit(-1) before the server starts. Measured
+   * the same night with CUDA hidden: the backend died at boot with the
+   * flag and served without it. The kernel needs compute capability 7.5
+   * (no GTX 10-series) or an AMD part with matrix cores -- the low-end
+   * reach this product sells -- so a blanket flag would turn a slower
+   * backend into no backend on exactly those cards.
+   *
+   * The answer is the vendor's own int8_attention_is_available(), asked
+   * in the install's own python (~2 s, cached per python for the panel's
+   * life). Any failure -- spawn error, timeout, output we do not
+   * recognise -- answers NO, which is the boot that shipped before.
+   */
+  var ckAttentionAnswers = {};
+  function probeCkAttention(install, cb) {
+    var key = String(install.python || "");
+    if (Object.prototype.hasOwnProperty.call(ckAttentionAnswers, key)) {
+      cb(ckAttentionAnswers[key]);
+      return;
+    }
+    var done = false;
+    function answer(yes) {
+      if (done) return;
+      done = true;
+      ckAttentionAnswers[key] = yes;
+      cb(yes);
+    }
+    try {
+      child_process.execFile(install.python,
+        ["-s", "-c", "import comfy_kitchen as ck; print('AELL_CK_INT8=' + " +
+                     "str(bool(ck.int8_attention_is_available())))"],
+        { cwd: install.root, windowsHide: true, timeout: 60000 },
+        function (err, stdout) {
+          answer(!err && /AELL_CK_INT8=True/.test(String(stdout || "")));
+        });
+    } catch (e) {
+      answer(false);
+    }
   }
 
   /** Spawn the vendor install on `base`'s port and health-poll it up. */
@@ -3014,101 +3064,104 @@
     startWaiters = [cb];
     applyExtraModelPaths(install);
     say("Starting the hidden ComfyUI backend…");
-    var errTail = "";
-    // Detached: a file the child owns for its whole life (see
-    // managedLogPath). Piped: the panel is alive to read the pipes.
-    var logPath = managedDetached ? managedLogPath() : null;
-    var logFd = logPath === null ? null : openManagedLog(logPath);
-    function bootTail() {
-      return logFd === null ? errTail : managedLogTail(logPath, 600);
-    }
-    var proc;
-    try {
-      proc = child_process.spawn(install.python, managedBootArgs(install, base),
-        { cwd: install.root, windowsHide: true,
-          detached: managedDetached,
-          stdio: logFd === null
-            ? ["ignore", "pipe", "pipe"]
-            : ["ignore", logFd, logFd] });
-    } catch (eS) {
-      if (logFd !== null) { try { fs.closeSync(logFd); } catch (eC) {} }
-      var early = startWaiters;
-      startWaiters = null;
-      for (var w = 0; w < early.length; w++) early[w](eS);
-      return;
-    }
-    managedProc = proc;
-    rememberPid(proc.pid);
-    // Our own copy of the fd; the child inherited its own handle at
-    // spawn, so this one is dead weight the moment spawn returns.
-    if (logFd !== null) { try { fs.closeSync(logFd); } catch (eC2) {} }
-    function tail(d) {
-      errTail = (errTail + d.toString()).slice(-600);
-    }
-    if (proc.stdout) proc.stdout.on("data", tail);
-    if (proc.stderr) proc.stderr.on("data", tail);
-    // A spawned child with piped stdio holds THREE references on Node's
-    // event loop — the process handle and both pipes — and a data
-    // listener keeps the pipes active, so the parent cannot exit while
-    // the backend runs. In the panel that is invisible (the host process
-    // outlives everything). In a CLI it is fatal: measured 2026-09-08,
-    // `scripts/comfy-install.js --boot` printed ALL CHECKS PASSED and
-    // then sat at 100% of its work done for 11 minutes until it was
-    // killed by hand — an unattended pass taking NEXT UP item 1 would
-    // have spent the whole night there. unref() drops the three
-    // references without detaching the child, so the poll timers below
-    // still hold the loop open for as long as the boot actually needs.
-    try {
-      proc.unref();
-      if (proc.stdout) proc.stdout.unref();
-      if (proc.stderr) proc.stderr.unref();
-    } catch (eU) {}
-    var settledBoot = false;
-    function finishBoot(err) {
-      if (settledBoot) return;
-      settledBoot = true;
-      var ws = startWaiters || [];
-      startWaiters = null;
-      for (var i = 0; i < ws.length; i++) {
-        ws[i](err, err ? null : { started: true });
+    probeCkAttention(install, function (ckAttention) {
+      var errTail = "";
+      // Detached: a file the child owns for its whole life (see
+      // managedLogPath). Piped: the panel is alive to read the pipes.
+      var logPath = managedDetached ? managedLogPath() : null;
+      var logFd = logPath === null ? null : openManagedLog(logPath);
+      function bootTail() {
+        return logFd === null ? errTail : managedLogTail(logPath, 600);
       }
-    }
-    proc.on("error", function (e) {
-      managedProc = null;
-      forgetPid();
-      finishBoot(new Error("Backend failed to start: " + e.message));
-    });
-    proc.on("exit", function (code) {
-      managedProc = null;
-      forgetPid();
-      var t = bootTail();
-      finishBoot(new Error("Backend exited during startup (code " +
-        code + ")" + (t ? " — " + t : "") +
-        (logPath ? " [log: " + logPath + "]" : "")));
-    });
-    // First boot can take a while (model scans, torch warm-up).
-    var deadline = new Date().getTime() + 240000;
-    (function poll() {
-      if (settledBoot) return;
-      isUp(base, function (nowUp) {
+      var proc;
+      try {
+        proc = child_process.spawn(install.python,
+          managedBootArgs(install, base, ckAttention),
+          { cwd: install.root, windowsHide: true,
+            detached: managedDetached,
+            stdio: logFd === null
+              ? ["ignore", "pipe", "pipe"]
+              : ["ignore", logFd, logFd] });
+      } catch (eS) {
+        if (logFd !== null) { try { fs.closeSync(logFd); } catch (eC) {} }
+        var early = startWaiters;
+        startWaiters = null;
+        for (var w = 0; w < early.length; w++) early[w](eS);
+        return;
+      }
+      managedProc = proc;
+      rememberPid(proc.pid);
+      // Our own copy of the fd; the child inherited its own handle at
+      // spawn, so this one is dead weight the moment spawn returns.
+      if (logFd !== null) { try { fs.closeSync(logFd); } catch (eC2) {} }
+      function tail(d) {
+        errTail = (errTail + d.toString()).slice(-600);
+      }
+      if (proc.stdout) proc.stdout.on("data", tail);
+      if (proc.stderr) proc.stderr.on("data", tail);
+      // A spawned child with piped stdio holds THREE references on Node's
+      // event loop — the process handle and both pipes — and a data
+      // listener keeps the pipes active, so the parent cannot exit while
+      // the backend runs. In the panel that is invisible (the host process
+      // outlives everything). In a CLI it is fatal: measured 2026-09-08,
+      // `scripts/comfy-install.js --boot` printed ALL CHECKS PASSED and
+      // then sat at 100% of its work done for 11 minutes until it was
+      // killed by hand — an unattended pass taking NEXT UP item 1 would
+      // have spent the whole night there. unref() drops the three
+      // references without detaching the child, so the poll timers below
+      // still hold the loop open for as long as the boot actually needs.
+      try {
+        proc.unref();
+        if (proc.stdout) proc.stdout.unref();
+        if (proc.stderr) proc.stderr.unref();
+      } catch (eU) {}
+      var settledBoot = false;
+      function finishBoot(err) {
         if (settledBoot) return;
-        if (nowUp) {
-          say("Hidden ComfyUI backend is up." +
-              (logPath ? " Log: " + logPath : ""));
-          finishBoot(null);
-          return;
+        settledBoot = true;
+        var ws = startWaiters || [];
+        startWaiters = null;
+        for (var i = 0; i < ws.length; i++) {
+          ws[i](err, err ? null : { started: true });
         }
-        if (new Date().getTime() > deadline) {
-          var t2 = bootTail();
-          finishBoot(new Error("Backend did not come up within 4 " +
-            "minutes" + (t2 ? " — " + t2 : "") +
-            (logPath ? " [log: " + logPath + "]" : "")));
-          try { proc.kill(); } catch (eK) {}
-          return;
-        }
-        global.setTimeout(poll, 2500);
+      }
+      proc.on("error", function (e) {
+        managedProc = null;
+        forgetPid();
+        finishBoot(new Error("Backend failed to start: " + e.message));
       });
-    })();
+      proc.on("exit", function (code) {
+        managedProc = null;
+        forgetPid();
+        var t = bootTail();
+        finishBoot(new Error("Backend exited during startup (code " +
+          code + ")" + (t ? " — " + t : "") +
+          (logPath ? " [log: " + logPath + "]" : "")));
+      });
+      // First boot can take a while (model scans, torch warm-up).
+      var deadline = new Date().getTime() + 240000;
+      (function poll() {
+        if (settledBoot) return;
+        isUp(base, function (nowUp) {
+          if (settledBoot) return;
+          if (nowUp) {
+            say("Hidden ComfyUI backend is up." +
+                (logPath ? " Log: " + logPath : ""));
+            finishBoot(null);
+            return;
+          }
+          if (new Date().getTime() > deadline) {
+            var t2 = bootTail();
+            finishBoot(new Error("Backend did not come up within 4 " +
+              "minutes" + (t2 ? " — " + t2 : "") +
+              (logPath ? " [log: " + logPath + "]" : "")));
+            try { proc.kill(); } catch (eK) {}
+            return;
+          }
+          global.setTimeout(poll, 2500);
+        });
+      })();
+    });
   }
 
   /*

@@ -26272,3 +26272,81 @@ same picture, small detail differences, not degraded.
   not the owner's, but did not ship it in this pass: it changes every
   Wan output and the shipped md5 references, which is its own item.
 - Speed on anything other than sm120 is unmeasured.
+
+## 2026-09-16 (local session) - --use-ck-attention ships, but only where the kernel exists: the flag kills the backend everywhere else
+
+SUPERSEDES: 26213,26275 -- that entry (and WORKPLAN 7a as filed) said that with the kernel unavailable the backend "logs an error and keeps pytorch attention"; it calls exit(-1), so the flag had to be gated, not added.
+
+**Item:** NEXT UP 7a. Items above it (3, 5a-4e, 5a-5b, 5a-5c, 5c) are
+owner-only, 6b marked not needed, 7 done. Not attempted before tonight.
+
+**Harness: 770/770 PASSED** before and after. AE left running, untouched.
+
+### The fallback, measured first (7a precondition 2)
+
+`attention.py` in the managed ComfyUI 0.34.0:
+`if comfy_kitchen_attention_enabled(): if AVAILABLE: use it; else:
+logging.error(...); exit(-1)`. Booted with `CUDA_VISIBLE_DEVICES=-1
+--cpu` plus the shipped args: WITH the flag it printed the error and
+exited before `Starting server`; WITHOUT it, it served on 8299 (killed by
+timeout). `int8_attention_is_available()` is False there, True on the
+5090. The kernel's floor is compute capability 7.5, so an unconditional
+flag would have turned GTX 10-series / pre-Turing / non-matrix AMD cards
+from "slower" into "no backend" - the 8 GB reach this product is for.
+(`CUDA_VISIBLE_DEVICES=` EMPTY does nothing on Windows - an empty env var
+is not set - so the 7a text's suggestion reads True; use -1.)
+
+### What changed
+
+- `extension/js/comfy.js`: `managedBootArgs(install, base, ckAttention)`
+  appends `--use-ck-attention` when asked; new `probeCkAttention` runs
+  the install's own python `import comfy_kitchen;
+  int8_attention_is_available()` (execFile, 60 s timeout, cached per
+  python path for the panel's life) and answers True only on the exact
+  `AELL_CK_INT8=True` line; spawn error, timeout, traceback = no flag,
+  i.e. the previous boot. `bootManaged` runs the probe before spawn (the
+  body is re-indented into its callback; logic unchanged).
+- `tests/test-comfy-backend.js` 4b-ck: True -> flag (and pinned memory
+  kept), second boot reuses the answer, False / error / junk -> no flag
+  and the boot still happens.
+- `extension/js/version.js`: both Wans retaken on the flagged boot.
+  wan22-5b measuredSeconds 127 -> 96, measuredVramMB 26 187 -> 27 071
+  (the higher reading is published; one run, inside that entry's old
+  24 576-26 187 spread plus 884, fp8 A/B moved 2 MiB, so not read as an
+  attention cost), constrainedFit 131 -> 102 s identical (c328a1...).
+  wan22-5b-fp8 129 -> 96 s, 24 314 -> 24 317, constrainedFit 135 -> 102
+  identical (abdf56..., rerun 100 s). `constrainedFit.on` names the
+  flag. Gates and recommendFromGB unchanged.
+- 0.12.34.
+
+### Verified on the real path
+
+`node scripts/comfy-install.js --boot` (Comfy.ensureRunning, the panel's
+boot): the backend's command line read `... --disable-auto-launch
+--disable-pinned-memory --use-ck-attention`. Stopped with `--stop`, card
+back to 1 147 MiB. Smoke under the flag: sd15 4 s / 2 428 MiB, krea2
+8 s / 18 790 MiB, both complete. sdxl and ltx-small ran flagged in item 7.
+Wan fp16 frame 60 looked at: clean.
+
+### VISIBLE CHANGE - say it in the notes
+
+Every Wan clip at a given seed is a different (equal-quality) sample
+from 0.12.33's; sdxl/ltx/sd15/krea2 samples move too. The md5s in
+version.js comments (60f984, ab4fa5, 091c71, b2cc0a, 45630f) are pre-ck
+references now; the Wan ones say so in place.
+
+### Filed / not done
+
+- NEXT UP 7c: minimax-h3 and h3-int8 have not run under the flag (253 /
+  259 s jobs, not taken inside this pass). Also: non-Wan
+  constrainedFit.identical claims were not retaken flagged.
+- Speed on RTX 20/30/40 is unmeasured; a card that reports the kernel
+  available but misbehaves at run time is unmeasured.
+
+### Assumed
+
+- Not owner-gated: core-only, equal quality, gated to never remove a
+  backend. The sample change is the visible part and is written above.
+- The ~2 s probe per panel session is an acceptable boot cost (boot is
+  already 10-20 s); not persisted across sessions, so a GPU swap cannot
+  go stale.

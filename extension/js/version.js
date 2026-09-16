@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.12.33",
+    VERSION: "0.12.34",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -502,12 +502,29 @@
         // bigger than the whole card and still streams; WDDM shared memory
         // peaked at 1 123 / 1 071 MiB. The cast is no longer what buys an
         // 8 GB card Wan -- DynamicVRAM is. Default still held at 32.
+        //
+        // RETAKEN 2026-09-16 (NEXT UP 7a) on the boot that now ships, which
+        // adds --use-ck-attention wherever the kernel exists (comfy.js
+        // probeCkAttention). Same graph, seed 12345:
+        //
+        //   room left for the backend   delta MiB   s     clip
+        //     whole card                   27 071    96   c328a1...
+        //     841                              66   102   identical
+        //
+        // 127 -> 96 s. A DIFFERENT clip from 60f984... (int8 attention moves
+        // the sample; equal quality, frame 60 looked at), so the references
+        // above are the pre-ck boot's. The delta is the higher reading and
+        // is published; it is one run, 884 MiB over the old 26 187, which
+        // sat inside that entry's own 24 576-26 187 spread, so it is not
+        // read as an attention cost (the fp8 A/B moved 2 MiB). On a card
+        // without the kernel the boot is the old one and the old 127 s holds.
         kind: "video", sizeMB: 17304, minVramGB: 8, recommendFromGB: 32,
-        constrainedFit: { roomMB: 841, seconds: 131, identical: true,
+        constrainedFit: { roomMB: 841, seconds: 102, identical: true,
                           on: "RTX 5090 ballasted to the room by scripts/vram-ballast.py, " +
-                    "managed backend --disable-pinned-memory (0.12.26), 2026-09-16" },
+                    "managed backend --disable-pinned-memory --use-ck-attention " +
+                    "(0.12.34), 2026-09-16" },
         measured: true,
-        measuredVramMB: 26187, measuredSeconds: 127,
+        measuredVramMB: 27071, measuredSeconds: 96,
         measuredAt: "1280x704 x 121 frames (the template's authored " +
                     "default, 5.04 s at 24 fps), seed 12345",
         // Unlike minimax-h3, the reading IS the authored job: 121 frames is
@@ -516,7 +533,7 @@
         measuredClipSeconds: 5.04,
         authoredClipSeconds: 5.04,
         measuredOn: "NVIDIA GeForce RTX 5090, ComfyUI 0.34.0 (managed), " +
-                    "2026-09-09",
+                    "2026-09-16",
         workflowTemplate: "AE_LLAMA_WAN22_5B_T2V_V1",
         urls: [{
           url: "https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/resolve/main/split_files/diffusion_models/wan2.2_ti2v_5B_fp16.safetensors",
@@ -582,12 +599,27 @@
         // (WORKPLAN 6b stays unstarted). WDDM shared memory peaked at
         // 1 371 / 1 075 MiB, the driver spill a real 8 GB card has too.
         // recommendFromGB 32 still holds the default (owner, 5a-4e).
+        //
+        // RETAKEN 2026-09-16 (NEXT UP 7/7a) on the boot that now ships, which
+        // adds --use-ck-attention wherever the kernel exists (comfy.js
+        // probeCkAttention). Same graph, seed 12345:
+        //
+        //   room left for the backend   delta MiB   s     clip
+        //     whole card                   24 317    96   abdf56...
+        //     841                              80   102   identical
+        //     841, rerun                      108   100   identical
+        //
+        // 129 -> 96 s, peak unchanged. A DIFFERENT clip from ab4fa5... (int8
+        // attention moves the sample; SSIM 0.974 / PSNR 33.9 dB against it,
+        // looked at, not degraded), so the references above are the pre-ck
+        // boot's. On a card without the kernel the old 129 s holds.
         kind: "video", sizeMB: 17304, minVramGB: 8, recommendFromGB: 32,
-        constrainedFit: { roomMB: 841, seconds: 135, identical: true,
+        constrainedFit: { roomMB: 841, seconds: 102, identical: true,
                           on: "RTX 5090 ballasted to the room by scripts/vram-ballast.py, " +
-                    "managed backend --disable-pinned-memory (0.12.26), 2026-09-16" },
+                    "managed backend --disable-pinned-memory --use-ck-attention " +
+                    "(0.12.34), 2026-09-16" },
         measured: true,
-        measuredVramMB: 24314, measuredSeconds: 129,
+        measuredVramMB: 24317, measuredSeconds: 96,
         measuredAt: "1280x704 x 121 frames (the template authored " +
                     "default, 5.04 s at 24 fps), seed 12345",
         measuredClipSeconds: 5.04,

@@ -663,6 +663,82 @@ step(function (next) {
   });
 });
 
+// 4b-ck. --use-ck-attention only where the kernel exists, ASKED per install.
+//
+// Measured 2026-09-16 (WORKPLAN 13a, NEXT UP 7a): the flag makes Wan 2.2
+// 5B ~23 % faster on the managed backend, but where the kernel is missing
+// ComfyUI's attention.py calls exit(-1) at import -- with CUDA hidden the
+// backend died at boot with the flag and served without it. A card under
+// compute capability 7.5 is the low-end reach this product sells, so the
+// flag must follow the vendor's own answer and any doubt must mean NO.
+function ckBoot(answer, cb) {
+  const seen = [], probes = [];
+  const rec = spawnRecorder([]);
+  const realSpawn = rec.spawn;
+  rec.spawn = function (cmd, args, opts) {
+    seen.push(args || []);
+    return realSpawn(cmd, args, opts);
+  };
+  rec.execFile = function (file, args, opts, done) {
+    if (/int8_attention_is_available/.test((args || []).join(" "))) {
+      probes.push(file);
+      if (answer instanceof Error) done(answer, "");
+      else done(null, answer);
+      return;
+    }
+    done(null, "");
+  };
+  const C = comfyWith([], null, true, MANAGED, null, rec);
+  C.ensureRunning("http://127.0.0.1:8288", null, function () {
+    cb(C, seen, probes);
+  });
+}
+step(function (next) {
+  ckBoot("AELL_CK_INT8=True\r\n", function (C, seen, probes) {
+    assert(probes.length === 1, "the boot asks the install once whether " +
+           "the INT8 attention kernel is available");
+    const a = seen[0] || [];
+    assert(a.indexOf("--use-ck-attention") !== -1,
+           "kernel available -> the managed boot passes --use-ck-attention: " +
+           a.join(" "));
+    assert(a.indexOf("--disable-pinned-memory") !== -1,
+           "and keeps --disable-pinned-memory beside it");
+    C.ensureRunning("http://127.0.0.1:8288", null, function () {
+      assert(probes.length === 1 && seen.length === 2,
+             "a second boot reuses the answer instead of paying the ~2 s " +
+             "probe again (probes " + probes.length + ", boots " +
+             seen.length + ")");
+      assert((seen[1] || []).indexOf("--use-ck-attention") !== -1,
+             "and still passes the flag");
+      next();
+    });
+  });
+});
+step(function (next) {
+  ckBoot("AELL_CK_INT8=False\r\n", function (C, seen) {
+    assert((seen[0] || []).indexOf("--use-ck-attention") === -1,
+           "kernel UNAVAILABLE -> no --use-ck-attention, because the flag " +
+           "makes ComfyUI exit(-1) at boot there");
+    assert(seen.length === 1, "and the backend still boots");
+    next();
+  });
+});
+step(function (next) {
+  ckBoot(new Error("spawn python ENOENT"), function (C, seen) {
+    assert((seen[0] || []).indexOf("--use-ck-attention") === -1 &&
+           seen.length === 1,
+           "a probe that FAILS answers no and the boot goes ahead unflagged");
+    next();
+  });
+});
+step(function (next) {
+  ckBoot("Traceback (most recent call last): ...", function (C, seen) {
+    assert((seen[0] || []).indexOf("--use-ck-attention") === -1,
+           "output that does not say AELL_CK_INT8=True answers no");
+    next();
+  });
+});
+
 // 4c. The script path actually ASKS for that, and only through the lib.
 //
 // scripts/lib/comfy-managed.js exists so three scripts share one boot.

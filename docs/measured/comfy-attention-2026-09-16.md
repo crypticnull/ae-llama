@@ -22,8 +22,9 @@ ComfyUI 0.34.0 has two attention flags that matter here
 (`comfy/cli_args.py`): `--use-sage-attention` (needs the `sageattention`
 package; if the import fails the backend logs an error and **exits**) and
 `--use-ck-attention` (Comfy Kitchen INT8 attention, core, no install; if
-the kernel is unavailable it logs an error and keeps the default
-attention). Without either, the backend uses pytorch SDPA.
+the kernel is unavailable it logs an error and **also exits** -- CORRECTED
+by NEXT UP 7a the same day, see below; this line first said it kept the
+default attention, which was a misreading of `attention.py`). Without either, the backend uses pytorch SDPA.
 
 ## A/B: shipped managed boot vs `--use-ck-attention`
 
@@ -65,3 +66,24 @@ picture with small detail differences, not a degraded one.
   but speed on RTX 20/30/40 is not known.
 - Not measured: SageAttention itself. Nothing is installed; no wheel was
   looked up for python 3.13 / torch 2.13 / cu130.
+
+## Shipped (NEXT UP 7a, 0.12.34) — gated, because the flag is fatal without the kernel
+
+Fallback, measured: `CUDA_VISIBLE_DEVICES=-1`, `--cpu`, shipped args.
+With `--use-ck-attention` the backend logged `Comfy Kitchen attention is
+unavailable` and exited before `Starting server`; without it, it served.
+`comfy_kitchen.int8_attention_is_available()` read False in that
+environment and True on the 5090 (2.2 s from a cold python). The managed
+boot now asks that function first and adds the flag only on True.
+
+Retaken on the flagged boot, seed 12345, `local/ck-ship-run.sh`:
+
+| entry | room | peak delta MiB | seconds | output |
+|---|---|---|---|---|
+| wan22-5b | whole card | 27 071 | **96** (backend 95.77) | md5 c328a1… |
+| wan22-5b | 841 | 66 | **102** (backend 101.30) | md5 c328a1… (identical) |
+| wan22-5b-fp8 | 841, rerun | 108 | **100** (backend 98.94) | md5 abdf56… (identical) |
+| sd15 | whole card | 2 428 | 4 | png c12d65… (smoke only) |
+| krea2 | whole card | 18 790 | 8 | png 06b2ee… (smoke only) |
+
+Not run flagged: minimax-h3, minimax-h3-int8 (WORKPLAN NEXT UP 7c).
