@@ -70,6 +70,12 @@
     ],
     "AE_LLAMA_WAN22_5B_FP8_T2V_V1.manifest.json": [
       "115543d020b3e2dc4fa6f9640cba14f203cd7d8d"
+    ],
+    "AE_LLAMA_LTXV_2B_T2V_V1.json": [
+      "e55a122190eda0976428b4f40731817ef4a37a78"
+    ],
+    "AE_LLAMA_LTXV_2B_T2V_V1.manifest.json": [
+      "7748a5b21c46bcc3f814c77353cc01cbec5e5b11"
     ]
   }
 }

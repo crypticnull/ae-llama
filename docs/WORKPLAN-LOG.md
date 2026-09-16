@@ -23870,3 +23870,192 @@ now, not six.
 
 Managed backend stopped at end of pass (§17q); the card was back to its
 AE-only floor before I finished. AE left running, project untouched.
+
+---
+
+## 2026-09-16 (local session) - ltx-small was not a placeholder, it was an unasked question: LTX-Video 2B measured 13 921 MiB and the video floor went 32 -> 16
+
+SUPERSEDES: two claims in WORKPLAN 18 P7c step 2, both of which were the
+stated evidence that `ltx-small` could not be pinned without the owner.
+(1) "`scripts/comfy-node-defs.json` reports ZERO nodes matching 'ltx' ...
+that fixture is the 17l defect in the flesh - a hand-taken snapshot that
+has drifted." It has NOT drifted; it is a 52-class demand harvest and its
+zero means nothing. (2) "the older LTX-Video 2B line (0.9.x), which the
+vendor ships no blueprint for." The managed backend ships
+`templates/ltxv_text_to_video.json`, which is exactly that graph. Both
+original paragraphs are kept in the workplan under "the original text,
+kept because both of its wrong premises are the point".
+
+Also supersedes the `ALLOW_NO_TEMPLATE` comment in
+`tests/test-model-catalog.js` calling ltx-small's seat "PERMANENT until
+the owner pins its weights or drops the entry (Q1: postponed)". It was
+not a decision, it was a measurement nobody had taken.
+
+**Item:** NEXT UP 5 / WORKPLAN 18 P7c step 2 - "settle what `ltx-small`
+is, then measure it".
+
+**Harness: 770/770 PASSED**, before the work and after it. Full stub
+suite green (every `tests/test-*.js`, twice). Version **0.12.20**
+(extension/ changed).
+
+### What it turned out to be
+
+`ltx-small` shipped as `minVramGB: 6, sizeMB: null, urls: [],
+experimental: true`, no graph - and it was what EVERY card under 32 GB
+was recommended for video, because measuring wan22-5b on 09-09 moved that
+gate 8 -> 32. An entry that could not download and could not render was
+the product's answer for a 4090.
+
+It is now `AE_LLAMA_LTXV_2B_T2V_V1`, two real files, and **measured**.
+
+| | value |
+|---|---|
+| measured (published) | **13 921 MiB** (13.6 GiB) |
+| two runs, seed 12345 | 13 696 MiB / 14 s cold, 13 921 / 12 s warm |
+| output | 768x512, 97 frames, 4.04 s at 24 fps |
+| resident weights | 10 965 MiB (6 047 checkpoint + 4 918 T5-XXL) |
+| gate | **16** (was 6, from nothing) |
+
+Against the other video entries: Wan 2.2 5B is 26 187 MiB in 127 s and
+its fp8 sibling 24 314 in 129. This is **half the VRAM and a tenth of the
+wall clock**.
+
+**So the catalog's video floor is 16, not 32.** A 16 GB or 24 GB card has
+a video graph it can actually run, which it did not have yesterday.
+
+**And the honest half, which matters as much:** 8 GB and 12 GB now get
+NO video recommendation at all. 10 965 MiB of the 13 921 is resident
+weights, so 18 P7's rule applies unchanged - no width, height or length
+this panel can inject brings it under 12 GB. That is 18 P7a option 3 (an
+honest refusal) for those cards, and it is strictly better than what they
+had, which was a recommendation for an entry with nothing behind it. Four
+pins now assert the whole state with reasons inline: the 6 GB and 8 GB
+rows in `test-tiers.js` and `recommendSetup(8GB)` in
+`test-model-catalog.js` assert `video === null`, and a NEW 16 GB row
+asserts a measured entry IS offered, so a future silent re-offer to a
+card that cannot run it fails a test.
+
+### Both premises that had kept this item shut were wrong
+
+**The fixture's zero was a false NO, and this is the finding worth
+carrying.** `scripts/comfy-node-defs.json` holds **52 defs** beside a
+field reading `class_count: 3487`. Those are different quantities: 3487
+is what the author's install DEFINED, 52 is what was written down.
+`harvest-comfy-node-defs.py` takes `--classes-from <workflow>` and
+records only the classes those workflows name - correct for its real job
+(`adapt-workflow.js` needs ordered input lists for template nodes). But
+it answers NO for ~3 435 real classes by design, and a caller cannot
+tell that NO from "does not exist". The RUNNING backend has **30** LTX
+classes. Filed as **17l-b**, distinct from 17l (which is staleness, and
+no refresh would fix this one), with the fix: name the count, refuse
+existence lookups, one stub test.
+
+**The vendor does ship the graph.** The managed backend carries **24**
+LTX templates, including `ltxv_text_to_video.json` - the 0.9.x line,
+`CheckpointLoaderSimple` + `CLIPLoader type=ltxv` + `LTXVConditioning` /
+`EmptyLTXVLatentVideo` / `LTXVScheduler` / `KSamplerSelect` /
+`SamplerCustom`. The six 2.0/2.3 blueprints the item counted were a
+different tree. The 22B/19B LTX-2 line is real and does belong in the
+32 GB bracket; it is simply a different model from the 2B.
+
+### What was built, and why each choice
+
+- **Nodes: all CORE.** 900 classes on `/object_info`, 30 LTX, every
+  non-API one `comfy_extras.nodes_lt*` / `nodes_context_windows`. No
+  custom pack, so 22a (BASICS stay core-only) holds with nothing
+  installed. `CLIPLoader`'s `type` enum carries `ltxv`;
+  `supported_models.py` carries `class LTXV` (`image_model: "ltxv"`,
+  T5-XXL) and `LTXAV` for LTX-2.
+- **Graph: the vendor's own, node for node, ids included** - the same
+  fidelity rule the Wan and KREA2 basics follow. Four deviations, all in
+  the manifest: the two file swaps below, mp4/h264 instead of auto/auto
+  (AE cannot import a WebM/AV1), and a RELATIVE `filename_prefix`
+  (an absolute one is refused by `folder_paths.get_save_image_path` and
+  kills the render at its last node). Seed 12345 for reproducibility.
+- **Checkpoint: `ltxv-2b-0.9.6-dev-04-25` (6 047 MiB)** over the vendor
+  template's `ltx-video-2b-v0.9` (8 936). Same line, same all-in-one
+  shape, same non-distilled sampling - so no retune, and 2 889 MiB
+  cheaper on the entry whose entire purpose is a low floor.
+- **Encoder: `t5xxl_fp8_e4m3fn_scaled` (4 918 MiB)** over the vendor's
+  `t5xxl_fp16` (9 334) - the same fp8-encoder choice the Wan basic
+  already ships.
+- **Worth reusing: the safetensors header was read over an HTTP RANGE
+  request before downloading anything.** First 8 bytes give the header
+  length, the next N give the JSON; that confirmed all-in-one (944
+  tensors, `model.*` 715 + `vae.*` 229, bf16) and the licence string for
+  6 GB and 4 GB candidates at a cost of ~150 KB each. It is how the
+  distilled build was evaluated in step 2a without fetching it.
+
+### Three follow-ups filed, in the order they should be taken
+
+Queued as NEXT UP **5a / 5b / 5c** plus **5d**, not only logged:
+
+- **5a (18 P7c step 2c), and it should go FIRST because it needs
+  nothing:** `t5xxl_fp8` is 4 918 MiB of the 10 965 MiB floor - **45
+  percent of this entry's VRAM is the text encoder, not the video
+  model**, which inverts the intuition this whole section has worked
+  from. ComfyUI was measured EVICTING the encoder before sampling for
+  MiniMax H3 (18 P10: the 10.9 GB its two encoders differ by is a
+  DOWNLOAD difference, not a VRAM one). If it evicts here too, the
+  13 921 MiB peak may never hold the encoder, the gate could already be
+  under 16, and this measurement is understating the entry. One file
+  read answers it: `logs/catalog-vram-probe-2026-09-16T04-47-53.md`,
+  look for two humps.
+- **5b (18 P7c step 2a): the distilled fp8 2B, 4 255 MiB** - resident
+  weights 9 173, plausibly ~12.1 GB measured, the first thing that might
+  give a 12 GB card video. Deliberately NOT taken: distillation retunes
+  steps and cfg, so it is not the one-input swap `wan22-5b-fp8` was, and
+  a basic is the shape ComfyUI ships. Note the trap for whoever takes it:
+  `CheckpointLoaderSimple` has **no `weight_dtype` input**, so the free
+  load-time cast that made `wan22-5b-fp8` work is unavailable on an
+  all-in-one checkpoint.
+- **5c (18 P7c step 2b), OWNER, one line:** the checkpoint's own metadata
+  carries the **"LTXV Open Weights License 0.X"**, not Apache-2.0 as Wan
+  is. The panel redistributes nothing (the buyer downloads from
+  Lightricks' repo), so this is about what a commercial product
+  RECOMMENDS. Refusing it means going back to no video under 32 GB, since
+  Wan is the only Apache-2.0 video entry and it gates at 32. Recorded in
+  the template manifest too, so it cannot surface later as a surprise.
+- **5d (17l-b):** the fixture defect above.
+
+### NEXT UP item 1 was attempted first and is unrunnable as written
+
+"Confirm the backend did not outlive the loop - check this morning's log
+for a `Backend:` line." **No pass can do this.** Every unattended pass
+runs INSIDE the loop whose exit it is asked to observe, so the line
+cannot exist yet: checked at 00:36, loop pid 2888 alive since 23:23, log
+at "pass 1 of 40". And the only completed loop since the teardown landed
+(2026-09-09) was already running when it landed, so no log carries one
+either - `grep 'Backend:'` over `local-agent-20260909-031502.log` matches
+only a line of prose inside a pass's own output.
+
+Rewritten in the queue rather than left to block again: have
+`run-local-agent.ps1` assert after `--stop` that the card actually came
+back - one `nvidia-smi` read against the floor it already knows - and log
+the delta, so the verdict is written by the thing being verified. Same
+shape as 20e. This is a category of item worth naming: **a check a pass
+is asked to perform on the loop that contains it is not a check, it is a
+blocked item that looks takeable**, and it sat at the top of the queue
+for a week.
+
+### Files
+
+- `extension/comfy-workflows/AE_LLAMA_LTXV_2B_T2V_V1.json` +
+  `.manifest.json` (new); hash recorded via
+  `scripts/workflow-hash-history.js`
+- `extension/js/version.js` - the entry pinned and measured; the
+  catalog's header comment corrected (no entry's gate is an opinion now)
+- `tests/test-model-catalog.js` - `ALLOW_NO_TEMPLATE` **now empty**
+  (both allowlists are), `NO_FILE_SIZES_TO_CHECK` down to `[krea2]`, two
+  real byte counts added, the 8 GB row re-pinned to `video: null`
+- `tests/test-tiers.js` - 6 GB and 8 GB rows re-pinned to null, NEW
+  16 GB and 24 GB rows pinning the measured offer
+- `docs/WORKPLAN.md` - step 2 replaced with the result, steps 2a/2b/2c
+  and 17l-b filed, the 18 P7a gate table updated, NEXT UP items 1 and 5
+  rewritten and 5a-5d added
+- `docs/CAPABILITIES.md` - EIGHT basics now, and no catalog entry
+  without one
+
+**Nothing is blocked for a human except 5c**, which is one line from the
+owner and does not block any other item.
+

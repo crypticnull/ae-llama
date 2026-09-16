@@ -88,21 +88,36 @@ assert(cOver.length === 1 && cOver[0].name === "y",
 // an 8 GB card, the gate is 32, and this row now asserts what an 8 GB
 // buyer is actually offered.
 //
-// That is NOT the same as asserting it is a good offer. ltx-small is
-// flagged experimental and has no bundled graph at all (a permanent
-// ALLOW_NO_TEMPLATE seat, owner Q1), so as of 2026-09-09 every card under
-// 32 GB has no runnable video template. This row pins the truth so the
-// gap is visible; closing it is a PRODUCT decision, filed as WORKPLAN
-// 18 P7a. See WORKPLAN 18 P7 and 18 P6a.
+// UPDATED 2026-09-16, and the update is that this row now asserts
+// v: null. ltx-small used to be what an 8 GB card was offered, on a
+// minVramGB of 6 that was written from nothing -- no weights, no graph,
+// never rendered. WORKPLAN 18 P7c step 2 pinned it to a real LTX-Video 2B
+// build and measured it through the shipped AE_LLAMA_LTXV_2B_T2V_V1:
+// 13 921 MiB, so the gate is 16.
+//
+// So the VIDEO floor across the whole catalog went 32 -> 16 (a 16 GB card
+// has a runnable video graph for the first time) and at the same time this
+// 8 GB card lost the offer it had. Both halves are the same measurement
+// and both are the honest answer. It does NOT get a worse offer than
+// before -- it gets no offer, where before it got a recommendation for an
+// entry with no weights to download and no graph to run, which could only
+// ever have failed in the buyer's hands.
+//
+// The gap is therefore narrower but real, and it is WORKPLAN 18 P7a's
+// remaining question. This row pins v: null deliberately: if some future
+// change hands an 8 GB card a video entry again, it must be because
+// something was MEASURED to fit, and this assertion is what forces that
+// to be said out loud. 18 P7c step 2a is the next lever on it.
+// See WORKPLAN 18 P7, 18 P6a and 18 P7c.
 const combo = window.Setup.recommendSetup(null,
   { hasNvidia: true, name: "RTX 4060", vramGB: 8, computeCap: 8.9 });
 assert(combo.tier.id === "T3" && combo.chat &&
        combo.chat.name.indexOf("7B") > 0 &&
        combo.gen.image && combo.gen.image.name === "sd15" &&
-       combo.gen.video && combo.gen.video.name === "ltx-small",
-       "recommendSetup(8GB): T3, 7B chat, sd15 images, and the " +
-       "experimental LTX for video because Wan 2.2 5B's measured " +
-       "26 187 MiB does not fit (got " +
+       combo.gen.video === null,
+       "recommendSetup(8GB): T3, 7B chat, sd15 images, and NO video at " +
+       "all -- Wan 2.2 5B measured 26 187 MiB and LTX-Video 2B measured " +
+       "13 921, and 8 GB holds neither (got " +
        JSON.stringify({ t: combo.tier.id,
                         c: combo.chat && combo.chat.name,
                         i: combo.gen.image && combo.gen.image.name,
@@ -135,6 +150,13 @@ const MEASURED_BYTES = {           // filename -> bytes, 2026-08-30
   "wan2.2_ti2v_5B_fp16.safetensors": 9999658848,
   "umt5_xxl_fp8_e4m3fn_scaled.safetensors": 6735906897,
   "wan2.2_vae.safetensors": 1409400960,
+  // 2026-09-16, WORKPLAN 18 P7c step 2. The checkpoint was stat'd after the
+  // download that measured ltx-small; the encoder was stat'd on disk AND
+  // cross-checked against the HuggingFace content-length, which matched to
+  // the byte -- worth recording, because that equality is the fact 18 P7b is
+  // about: the file the panel's downloader would fetch is already here.
+  "ltxv-2b-0.9.6-dev-04-25.safetensors": 6340743924,
+  "t5xxl_fp8_e4m3fn_scaled.safetensors": 5157348688,
   "minimax_h3_fl2va_pruned_int8_convrot.safetensors": 20970379616,
   "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors": 15687142551,
   "qwen3vl_32b_minimax_h3_int8_convrot.safetensors": 27141342152,
@@ -426,8 +448,8 @@ if (krea2) {
 // tensor file, and 0.10.14 measured what this backend does when a job
 // outgrows the card: it does not OOM, it GRINDS.
 //
-// Entries whose files carry no per-file size (krea2, ltx-small) cannot
-// be checked here and are skipped rather than assumed innocent.
+// Entries whose files carry no per-file size (krea2) cannot be checked
+// here and are skipped rather than assumed innocent.
 // EMPTY as of 2026-09-09. wan22-5b was this list's only seat and it is
 // gone the way the item asked for: measured, not argued. Its gate was 8
 // against a 9536 MiB single file; the shipped graph costs 26 187 MiB and
@@ -437,14 +459,20 @@ if (krea2) {
 const GATE_UNDER_ITS_BIGGEST_FILE = [];
 
 /* The entries the rule below cannot ask the question OF, named rather than
- * silently skipped (WORKPLAN 18 P8a). Both carry `urls: []`, so there are no
- * per-file sizes to compare a gate against: ltx-small has no weights pinned
- * at all (owner Q1, postponed) and krea2's are owner-supplied, listed in
- * `files` as bare names. An unnamed skip is the same defect as the one the
- * comment below this block describes -- a check answering "fine" and
- * "nothing here to check" identically -- so this fails in BOTH directions
- * too: give krea2's files their sizes and its seat must go. */
-const NO_FILE_SIZES_TO_CHECK = ["krea2", "ltx-small"];
+ * silently skipped (WORKPLAN 18 P8a). krea2 carries `urls: []`, so there are
+ * no per-file sizes to compare a gate against -- its weights are
+ * owner-supplied and listed in `files` as bare names. An unnamed skip is the
+ * same defect as the one the comment below this block describes -- a check
+ * answering "fine" and "nothing here to check" identically -- so this fails
+ * in BOTH directions too: give krea2's files their sizes and its seat must
+ * go.
+ *
+ * ltx-small LEFT this list 2026-09-16 (WORKPLAN 18 P7c step 2). It was the
+ * other seat for exactly the reason the old comment gave -- "no weights
+ * pinned at all" -- and pinning them is what removed it. Its biggest file is
+ * now 6047 MiB against a gate the measurement set, so the rule below can ask
+ * the question and does. */
+const NO_FILE_SIZES_TO_CHECK = ["krea2"];
 {
   const offenders = [];
   const unaskable = [];
@@ -504,10 +532,19 @@ window.AELL.COMFY_CATALOG.forEach((e) => {
 // gap is closed. Shrinking them is the work; nothing may grow them
 // without an entry in docs/WORKPLAN-LOG.md saying why.
 
-// Entries that ship no graph yet. §18 P5-P10 empty this, except
-// ltx-small, whose seat is PERMANENT until the owner pins its weights or
-// drops the entry (Q1: postponed, 2026-09-06) — it has `urls: []`, so
-// there is nothing to download and nothing to render.
+// Entries that ship no graph yet. EMPTY as of 2026-09-16, and the seat
+// that emptied it was the one this comment called PERMANENT.
+//
+// ltx-small's seat was held on the stated ground that it had `urls: []`,
+// "so there is nothing to download and nothing to render", pending the
+// owner answering Q1. That turned out to be a question a pass could
+// answer by measuring rather than one needing a decision: the entry was
+// imagining a model line that does exist, core ComfyUI still supports it
+// (30 LTX classes on the managed backend, all comfy_extras), and the
+// vendor ships the graph. So the weights are pinned, the graph is
+// AE_LLAMA_LTXV_2B_T2V_V1, and it has rendered (WORKPLAN 18 P7c step 2).
+// What is still the owner's is narrower and is filed as 18 P7c step 2b:
+// the licence is LTXV Open Weights, not Apache-2.0.
 // sd15 left this list 2026-09-09 (WORKPLAN 18 P5): it ships
 // AE_LLAMA_SD15_T2I_V1 and that graph has rendered on the managed
 // backend and imported into AE. sdxl left it the same day (P6), and
@@ -515,10 +552,10 @@ window.AELL.COMFY_CATALOG.forEach((e) => {
 // rendered 1280x704 x 121 frames twice on the managed backend.
 // minimax-h3-int8 left it 2026-09-09 (P10) with AE_LLAMA_H3_INT8_T2V_V1,
 // the nvfp4 sibling's graph with the text encoder swapped, rendered on
-// the managed backend. So ltx-small is the ONLY seat left and this list
-// has reached the size §18 P12 asked for: it may now only shrink to zero
-// by the owner answering Q1, never grow.
-const ALLOW_NO_TEMPLATE = ["ltx-small"];
+// the managed backend. ltx-small left it 2026-09-16 with
+// AE_LLAMA_LTXV_2B_T2V_V1 and emptied the list; §18 P12 asked for exactly
+// this. It may not grow without an entry in docs/WORKPLAN-LOG.md saying why.
+const ALLOW_NO_TEMPLATE = [];
 
 // Entries whose template has never been measured through
 // catalog-vram-probe. EXISTENCE IS NOT PROOF: a graph can be committed,

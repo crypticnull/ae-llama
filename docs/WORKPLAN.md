@@ -51,11 +51,15 @@ every pass and finished work costs the same context as live work.
 
 | # | item | where | needs | bumps |
 |---|---|---|---|---|
-| 1 | **Confirm the backend did not outlive the loop.** The teardown added 2026-09-09 calls `comfy-install.js --stop` at loop exit. Check this morning's log for a `Backend:` line and that the card was released. If it is missing or the card is still held, that is the item. | §17q | nothing | no |
+| 1 | **Make the loop verify its OWN teardown; a pass cannot.** — rewritten 2026-09-16 after a pass found the item as written is unrunnable. It said "check this morning's log for a `Backend:` line", but EVERY unattended pass runs INSIDE the loop whose exit it is being asked to observe, so the line cannot exist yet; and the only completed loop since the fix landed (2026-09-09) was already running when it landed, so no log carries it. Attempted and blocked 2026-09-16 (loop pid alive, log at pass 1 of 40). The item is now: have `run-local-agent.ps1` assert after `--stop` that the card actually came back (one `nvidia-smi` read, compared against the boot-time floor it already knows) and log the delta, so the verdict is written by the thing being verified. See §17q and §20e, which is the same shape. | §17q | nothing | no |
 | 2 | ~~**Reserve VRAM for the desktop and After Effects before sizing the chat model.**~~ **DONE 2026-09-15 (0.12.18).** The reserve is in `planHandoff` and now gates `Llama.start` too (`Tiers.planChatLoad`), which had no arithmetic at all. The AMOUNT is still provisional and comes from item 3 — two constants, one line each, in `tiers.js`. What it does NOT touch: `recommendChat`/`recommendGen`, i.e. the tier table, which §16f reserves for the owner. See §16g. | §16b | AE, chat model | yes |
 | 3 | **BLOCKED 2026-09-16 on a rule conflict - see §16b BLOCKER, it needs one line from the owner.** ~~Measure the §16b reserve on the owner's four real projects~~ — copies only, originals hashed before and after, close without saving. The exact eight-step procedure is in §16b; follow it to the letter. Paths are in the git-ignored `local/real-projects.json` and must never be committed. Nothing else loaded on the card while measuring. | §16b | AE | no |
 | 4 | ~~**fp8 Wan 2.2 5B as a second entry, then MEASURE it.**~~ **DONE 2026-09-16 (0.12.19).** There is no fp8 FILE of the 5B; shipped as a load-time `weight_dtype` cast instead, zero extra download. 24 314 MiB vs 26 187 at the authored size, 16 834 vs 21 536 at 704x480. **The gate did not move - §18 P7a is still open.** Full table in §18 P7c step 1; follow-ups in step 1a. The §18 P10 pattern: the shipped Wan graph with the diffusion filename swapped and nothing else. Cheapest route to a video option under 32 GB. | §18 P7c step 1 | backend, disk | yes |
-| 5 | **Settle what `ltx-small` is, then measure it.** The vendor's LTX is 2.3-**22B** — larger than Wan, not smaller. Ask a RUNNING backend's `/object_info` whether LTXV 2B nodes exist; the repo fixture says zero and is wrong (§17l). | §18 P7c step 2 | backend, disk | yes |
+| 5 | ~~**Settle what `ltx-small` is, then measure it.**~~ **DONE 2026-09-16 (0.12.20).** It is real: LTX-Video 2B, `AE_LLAMA_LTXV_2B_T2V_V1`, all-core graph copied from the vendor template the MANAGED backend ships, **measured 13 921 MiB in 12 s**. The catalog's video floor went **32 -> 16** and a 16 GB card has a runnable video graph for the first time; 8 and 12 GB now get an honest no video instead of an entry that could never run. Both of this item's premises were wrong - the backend has 30 core LTX classes, and the "fixture says zero" evidence was a false NO from a 52-class demand harvest (filed as §17l-b). Full table in §18 P7c step 2. **§18 P7a is still open for 8-12 GB**; the cheapest lever left is now §18 P7c step 2a, and step 2c is cheaper still and should go first. | §18 P7c step 2 | backend, disk | yes |
+| 5a | **Does the 13 921 MiB peak even HOLD the text encoder?** One file read, no GPU: re-read this pass's own nvidia-smi trace (`logs/catalog-vram-probe-2026-09-16T04-47-53.md`) for two humps. 4 918 MiB of ltx-small's 10 965 MiB floor is `t5xxl_fp8`, and ComfyUI was measured EVICTING the encoder before sampling for MiniMax H3. If it evicts here too, the gate may already be under 16 and the measurement is understating the entry. Cheapest possible lever on §18 P7a and it needs nothing. | §18 P7c step 2c | nothing | maybe |
+| 5b | **The distilled fp8 2B: 4 255 MiB instead of 6 047**, which would put resident weights at 9 173 and the job near 12.1 GB — the first thing that might give a 12 GB card video. NOT a drop-in: distillation retunes steps and cfg, and `CheckpointLoaderSimple` has no `weight_dtype`, so the free cast that made `wan22-5b-fp8` work is unavailable. Look for the vendor's own distilled template among the managed backend's 24 LTX ones before inventing values. | §18 P7c step 2a | backend, disk | yes |
+| 5c | **OWNER, one line: the LTX weights are "LTXV Open Weights License 0.X", not Apache-2.0.** The panel redistributes nothing (the buyer downloads from Lightricks' own repo), so this is about what a commercial product RECOMMENDS. Refusing it means going back to no video under 32 GB, because Wan is the only Apache-2.0 video entry and it gates at 32. | §18 P7c step 2b | owner | no |
+| 5d | **`comfy-node-defs.json` holds 52 defs beside a `class_count` of 3487**, so asking it whether a node exists returns a false NO for ~3 435 classes, by design. That false NO is what gave §18 P7c step 2 a wrong premise and nearly cost the catalog the whole LTX line. Name the count, refuse existence lookups, one stub test. Distinct from §17l (staleness) and both are live. No backend. | §17l-b | nothing | no |
 | 6 | **Quantized video weights: survey what exists and what NODES it needs.** GGUF Q4/Q5 builds are how an 8 GB card runs a model this size. Ask a RUNNING backend's `/object_info` which GGUF loaders exist and which pack owns them — if they are custom, §22d is on the critical path for low-end video (see §18 P7a DECIDED). Report, do not pin. | §18 P7c step 4 | backend | no |
 | 7 | **SageAttention + Triton (§13a).** Owner-specified 2026-09-03 and never queued. §13's own header: on 8-12 GB cards this is the difference between video being usable and not. Measure-first; it is a VRAM lever on the §18 P7a gap. | §13a | backend, disk | maybe |
 | 8 | **KV-cache quantization for llama-server (§13b).** Owner approved 2026-09-15 as a lever of §24: the fixed prompt currently leaves ~800 tokens of conversation at 16K. Measure llama-server VRAM at each window size, fp16 vs quantized KV, through a standalone launcher; then gate on `chat-probe` tool-choice accuracy. It roughly halves what a window costs on every card, which is the only context relief an 8-12 GB buyer can get. | §13b, §24 | chat model | yes |
@@ -4129,18 +4133,44 @@ half of `COMFY_CATALOG` gates at:
 
 | entry | minVramGB | template |
 |---|---|---|
-| `ltx-small` | 6 | **none** (permanent `ALLOW_NO_TEMPLATE` seat, owner Q1) |
+| `ltx-small` | **16** (was 6, never measured) | `AE_LLAMA_LTXV_2B_T2V_V1` (§18 P7c step 2, measured 2026-09-16) |
 | `wan22-5b` | **32** (was 8) | `AE_LLAMA_WAN22_5B_T2V_V1` |
 | `wan22-5b-fp8` | **32** (2026-09-16) | `AE_LLAMA_WAN22_5B_FP8_T2V_V1` |
 | `minimax-h3` | 32 | `AE_LLAMA_H3_T2V_V1` (was the authored `AE_LLAMA_H3_I2V_V1`; §18 P9) |
 | `minimax-h3-int8` | 32 | `AE_LLAMA_H3_INT8_T2V_V1` (§18 P10, measured 2026-09-09) — but gated at 32 too, so it does NOT narrow this gap |
 
-So a 4090, a 4080, a 3090, a 4060 — every card below 32 GB — is
-recommended `ltx-small` for video: an entry flagged `experimental`, with
-`urls: []` and no graph. It cannot download and it cannot render. Both
-8 GB pins (`test-tiers.js` and `test-model-catalog.js` recommendSetup)
-now assert exactly that, with the reason inline, so the gap is visible
-and cannot widen unnoticed — but asserting a gap is not closing it.
+**HALF CLOSED 2026-09-16 (§18 P7c step 2), and the table above is the
+new state rather than the old one.** The paragraph that stood here said
+every card below 32 GB was recommended `ltx-small`, "an entry flagged
+`experimental`, with `urls: []` and no graph — it cannot download and it
+cannot render". That was true and it is now fixed: `ltx-small` names the
+LTX-Video 2B line, pins two real files, ships an all-core graph and has
+rendered twice on the managed backend at 13 921 MiB.
+
+So the floor is **16, not 32**. A 4090, a 4080, a 3090, a 5080 — every
+16 GB-and-up card — now has a video graph it can actually run, which it
+did not have yesterday, and at 12 s a clip rather than 127.
+
+**What is still open is the 8-12 GB half, and it is the half the owner
+cares most about.** 10 965 MiB of the 13 921 is RESIDENT WEIGHTS, so
+§18 P7's rule applies unchanged: no width, height or length this panel
+can inject brings it under 12. A 12 GB card is 12 288 MiB in total.
+The levers left are both about the WEIGHTS:
+
+- **§18 P7c step 2a** — the distilled fp8 2B, `4255 MiB` instead of
+  `6047`, which would put resident weights at 9 173 MiB. Filed below.
+- **§18 P7c step 4** — GGUF Q4/Q5, NEXT UP item 6, still unsurveyed.
+- A smaller TEXT ENCODER. `t5xxl_fp8_e4m3fn_scaled` is 4 918 MiB of the
+  10 965, i.e. 45 percent of the floor is the encoder and not the video
+  model at all. Nothing in this repo has asked whether the LTXV line
+  loads a smaller T5. That is a real question and it is step 2c below.
+
+Four pins now assert the state, each with its reason inline: the 6 GB and
+8 GB rows in `test-tiers.js` and the `recommendSetup(8GB)` row in
+`test-model-catalog.js` all assert **no video at all**, and a new 16 GB
+row asserts that a measured entry IS offered. So neither the remaining
+gap widening nor a future silent re-offer to a card that cannot run it
+can happen unnoticed.
 
 **The gate is not negotiable and re-measuring will not move it.** Three
 runs, 2026-09-09, managed backend, RTX 5090: 26 187 MiB and 24 576 MiB at
@@ -4323,7 +4353,139 @@ changed and NOTHING else, verified node by node, then measured with
 Do NOT replace the fp16 entry. Both stay; `entryFits` and the tie-break
 already handle two entries of one kind at different floors.
 
-### Step 2 - settle what "ltx-small" even IS, before pinning anything
+### Step 2 - DONE 2026-09-16 (settled, pinned, measured), and BOTH of its premises were wrong
+
+**`ltx-small` is real now: `AE_LLAMA_LTXV_2B_T2V_V1`, 13 921 MiB,
+768x512 x 97 frames in 12 s on the managed backend.** The video floor
+across the whole catalog went 32 -> 16.
+
+This item was written expecting to find that the entry was a fiction with
+nothing behind it. It WAS a fiction (`minVramGB: 6` from nothing,
+`sizeMB: null`, `urls: []`, no graph), but the MODEL it was imagining
+exists and core ComfyUI still runs it. The two premises that said
+otherwise were both wrong, and each is wrong in a way worth keeping:
+
+**Premise 1: "`scripts/comfy-node-defs.json` reports ZERO nodes matching
+'ltx', which CONTRADICTS the vendor's own blueprint" - so the fixture has
+drifted (the 17l defect "in the flesh").** It has not drifted. That file
+is a **52-class DEMAND HARVEST**, not a snapshot:
+`harvest-comfy-node-defs.py` takes `--classes-from <workflow>` and
+records only the classes those workflows name. Its `class_count: 3487` is
+the count of what the author's install DEFINED, not of what the file
+holds, and the two sitting one line apart is what makes it misread. So
+asking that file "does node X exist" gets a false NO for ~3 435 classes,
+BY DESIGN, and nothing in the repo stops you asking. That is a sharper
+defect than drift and it is filed as **17l-b** below. Zero LTX nodes was
+never evidence of anything.
+
+**Premise 2: "the vendor ships no blueprint for the LTX-Video 2B line."**
+The MANAGED backend ships
+`comfyui_workflow_templates_json/templates/ltxv_text_to_video.json`,
+which is exactly that graph, naming `ltx-video-2b-v0.9.safetensors` and
+`t5xxl_fp16` through `CLIPLoader type=ltxv`. The six 2.0/2.3 blueprints
+this item counted came from a different tree; the managed backend carries
+**24** LTX templates including the 0.9.x one. So a basic could be copied
+node for node, the way every other basic here was.
+
+**The item's three questions, answered in its own order:**
+
+1. **The nodes exist, and they are CORE.** The running backend's
+   `/object_info` lists 900 classes, **30 of them LTX**, and every
+   non-API one is `comfy_extras.nodes_lt` / `nodes_lt_audio` /
+   `nodes_lt_upsampler` / `nodes_context_windows` - not one custom pack.
+   So this satisfies 22a (the BASICS stay core-only) with nothing
+   installed. `CLIPLoader`'s `type` enum carries `ltxv`, and
+   `supported_models.py` carries `class LTXV` (`image_model: "ltxv"`,
+   T5-XXL) alongside `LTXAV` for the LTX-2 line.
+2. **Pinned:** `ltxv-2b-0.9.6-dev-04-25.safetensors` (6 047 MiB) +
+   `t5xxl_fp8_e4m3fn_scaled.safetensors` (4 918 MiB) = **10 965 MiB**,
+   two files. The checkpoint is all-in-one (944 tensors: `model.*` 715 +
+   `vae.*` 229, bf16), read from the safetensors header over a RANGE
+   request BEFORE downloading 6 GB - a trick worth reusing. Chosen over
+   the vendor template's own `ltx-video-2b-v0.9` (8 936 MiB) and its
+   `t5xxl_fp16` (9 334) because this entry's whole purpose is a low floor
+   and neither swap retunes anything.
+3. **Measured, twice, seed 12345:** 13 696 MiB in 14 s cold, 13 921 MiB
+   in 12 s warm, 225 MiB apart. Published: 13 921 / 14 s, by the
+   established rule (higher delta, cold clock). **Gate 16**, the way
+   sdxl's 8.1 GiB became 12 and krea2's 18.4 became 24.
+
+| | `ltx-small` (new) | `wan22-5b` | `wan22-5b-fp8` |
+|---|---|---|---|
+| measured | **13 921 MiB** | 26 187 | 24 314 |
+| seconds | **12-14** | 127 | 129 |
+| resident weights | **10 965 MiB** | 17 304 | 17 304 |
+| download | **10 965 MiB** | 17 304 | 0 (shares the fp16's) |
+| gate | **16** | 32 | 32 |
+
+**It does not reach 8-12 GB, and that is what step 3 reports.** The
+levers left are listed under 18 P7a above; the cheapest is step 2a.
+
+### Step 2a - the distilled fp8 2B: 1 792 MiB cheaper, but NOT a drop-in (filed 2026-09-16)
+
+`ltxv-2b-0.9.8-distilled-fp8.safetensors` is **4 255 MiB** against the
+6 047 this entry pins - confirmed on the HF tree API, and its header read
+the same all-in-one shape (944 tensors, `model.*` + `vae.*`, mixed
+BF16/F8_E4M3). Resident weights would be **9 173 MiB** instead of
+10 965, which would plausibly put the measured job near 12.1 GB.
+
+**Why this pass did not take it, deliberately.** Distillation changes the
+SAMPLING, not only the storage: a distilled LTX wants a handful of steps
+at cfg ~1, where this graph runs the vendor's 30 steps at cfg 3. So it is
+not the one-input swap `wan22-5b-fp8` was (18 P7c step 1) - it is a
+retune, and "a basic is the shape ComfyUI ships, not a tuned one" is the
+rule every basic here was built under. Note also what blocks the cheap
+route: this graph loads through `CheckpointLoaderSimple`, which has NO
+`weight_dtype` input, so the load-time cast that made `wan22-5b-fp8` free
+is not available on an all-in-one checkpoint. The work:
+
+1. Look for the vendor's own distilled-2B template first (the managed
+   backend has 24 LTX templates; this pass read the 0.9.x t2v one and did
+   not enumerate the rest). If one ships, this is a copy again and the
+   basic rule is satisfied with no judgement needed.
+2. If none ships, take the steps/cfg from Lightricks' own model card
+   rather than inventing them, and say in the manifest that is where they
+   came from.
+3. Measure. At or under 12 GB, a 12 GB card gets video and the gate moves
+   again. At 13, say so and stop.
+
+Cheap: 4.3 GB of download, ~15 s a render.
+
+### Step 2b - OWNER: the LTX weights are not Apache-2.0 (filed 2026-09-16)
+
+The pinned checkpoint's own safetensors metadata carries the **"LTXV Open
+Weights License 0.X"** (license date April 15, 2025, covering every LTXV
+release since v0.9.6), not Apache-2.0 as Wan 2.2 is. The panel never
+redistributes a weight - a buyer downloads from Lightricks' own
+HuggingFace repo - so the question is what a commercial product
+RECOMMENDS to a paying customer, not what it ships.
+
+Flagged rather than decided, because that is a commercial question and it
+is the owner's. It is recorded in the template manifest as well, so it
+cannot surface later as a surprise. The alternative if the answer is no:
+Wan 2.2 is Apache-2.0 and gated at 32, so refusing LTX means going back
+to no video at all under 32 GB.
+
+### Step 2c - 45 percent of this floor is the TEXT ENCODER, and nobody has asked whether it can be smaller (filed 2026-09-16)
+
+`t5xxl_fp8_e4m3fn_scaled` is **4 918 MiB of the 10 965 MiB** of resident
+weights. The 2B video model itself is the smaller half. That inverts the
+intuition every VRAM item in this section has worked from, and it means
+an encoder win is worth as much as a diffusion win.
+
+Open, none of it answered here: does the LTXV line load a smaller T5
+build; does ComfyUI EVICT the encoder before sampling the way it does for
+MiniMax H3's (18 P10 measured exactly that, and the 10.9 GB the H3
+encoders differ by turned out to be a DOWNLOAD difference and not a VRAM
+one); and if it evicts, was the encoder even resident at the 13 921 MiB
+peak. **That last one is cheap and should be answered before step 2a:**
+re-read the nvidia-smi trace this pass wrote to
+`logs/catalog-vram-probe-2026-09-16T04-47-53.md` and see whether the
+curve has two humps. If the peak does not include the encoder, the gate
+may already be lower than 16 and this measurement is understating the
+entry.
+
+### Step 2 - the original text, kept because both of its wrong premises are the point
 
 `ltx-small` in `COMFY_CATALOG` is `minVramGB: 6, measured: false,
 sizeMB: null, urls: [], experimental: true` and has no graph. Measured
@@ -4350,6 +4512,7 @@ vendor ships no blueprint for. Before pinning weights, answer in order:
    basic graph the same way §18 P5-P10 authored six others.
 3. Measure it. If it lands under 12 GB this closes the gap the owner
    asked about; if it lands at 24, say so and stop.
+
 
 ### Step 3 - report, do not choose
 
@@ -6077,6 +6240,53 @@ no-op" from 2026-09-06. That was the PID RECORD not surviving, and it was
 fixed. This was the same symptom from the other end — the record was fine
 and nothing ever called stop. The same sentence describes both, which is
 why the fix has to be a caller, not another guard.
+
+## 17l-b. `comfy-node-defs.json` is a 52-class DEMAND HARVEST that reads like a full snapshot, and asking it "does node X exist" gets a false NO (filed 2026-09-16, local session)
+
+**Measured 2026-09-16 while taking 18 P7c step 2.** The file holds
+**52 defs**. The field one line above them says `class_count: 3487`.
+Those two numbers are not the same quantity and nothing says so: 3487 is
+how many classes the AUTHOR'S INSTALL defined at harvest time, 52 is how
+many were written down. `harvest-comfy-node-defs.py` takes
+`--classes-from <workflow>` and records only the classes those workflows
+name - which is correct for its actual job (`adapt-workflow.js` needs
+ordered input lists for the nodes a TEMPLATE uses, and only those).
+
+**The defect is what happens when something else asks it a question it
+was never built to answer.** 18 P7c step 2 asked "does this backend have
+the LTXV nodes", read zero matches for "ltx", and concluded from that
+zero that the fixture had DRIFTED - "the 17l defect in the flesh". It
+had not drifted at all. It answers NO for roughly 3 435 real classes by
+design, and a caller cannot tell that NO from "this node does not
+exist". The running backend has **30** LTX classes, all core.
+
+That cost a filed item a wrong premise and nearly cost the catalog a
+whole model line: the same zero is what "ltx-small has no weights and
+never will" was resting on.
+
+**This is a different bug from 17l and both are live.** 17l is "the
+snapshot has no refresh trigger when the vendor build moves" - about
+STALENESS of what is there. This is about the 3 435 classes that were
+never there, which no refresh would fix.
+
+**The fix is cheap and is not a re-harvest.** Make the file say what it
+is, and make a wrong question fail instead of lying:
+
+1. Rename the count, or add one beside it:
+   `classes_recorded: 52` next to `class_count: 3487`, and put the
+   reason in `_comment` - it already explains what the file is FOR, so
+   one sentence saying "this is not a complete node list; ask a running
+   backend's /object_info for existence" lands where a reader is.
+2. `adapt-workflow.js:533` already prints the right error for a missing
+   class ("Re-run scripts/harvest-comfy-node-defs.py against a ...").
+   Every OTHER reader should be refused: a lookup helper that throws on
+   a class the file does not hold, rather than returning undefined, so
+   an existence question cannot be answered by absence.
+3. A stub test that asserts the two counts are DIFFERENT and that the
+   comment names /object_info. That is the whole bug class: a partial
+   index read as a total one.
+
+No backend and no GPU needed.
 
 ## 17i. llama-server has the same lifetime bug the managed backend just had (filed 2026-09-09, local session)
 

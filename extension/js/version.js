@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.12.19",
+    VERSION: "0.12.20",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -80,11 +80,14 @@
     // to the download, so a total that disagrees with its own parts is a
     // bug. All twelve URLs were alive on 2026-08-30 and every size below is
     // that day's measurement (x-linked-size, or the file already on this
-    // machine); `measured` is about the VRAM figure, which is measured
-    // for every entry that ships a graph (krea2, sd15, sdxl, wan22-5b,
-    // minimax-h3 and minimax-h3-int8, all measured or re-measured on the
-    // managed backend) and still a guess only for ltx-small, the one
-    // entry that ships none because it has no weights to ship.
+    // machine); `measured` is about the VRAM figure, and as of 2026-09-16
+    // EVERY entry carries one, taken on the managed backend through the
+    // graph it ships. ltx-small was the last guess in the file -- it had
+    // no weights, no graph and a minVramGB of 6 that came from nowhere --
+    // and WORKPLAN 18 P7c step 2 pinned and measured it. So there is no
+    // longer an entry in this catalog whose gate is an opinion, and the
+    // allowlists in tests/test-model-catalog.js that used to hold its
+    // seat (ALLOW_NO_TEMPLATE, ALLOW_UNMEASURED) are both empty.
     // An entry with measured: true carries the reading that earned it --
     // measuredVramMB (nvidia-smi peak minus an established idle floor),
     // measuredSeconds, measuredAt (the SIZE it was measured at, which is
@@ -210,11 +213,74 @@
       {
         name: "ltx-small",
         label: "LTX video (small)",
-        kind: "video", sizeMB: null, minVramGB: 6, measured: false,
+        // PINNED 2026-09-16 (WORKPLAN 18 P7c step 2). Until this pass the
+        // entry was a FICTION: minVramGB 6 written from nothing,
+        // sizeMB null, urls [], no graph -- and it was what every card
+        // under 32 GB was offered for video, because measuring wan22-5b
+        // moved that gate 8 -> 32. The name is kept because it is the one
+        // the tier line already hands out; what changed is that it now
+        // names real files a buyer can download and a graph that runs.
+        //
+        // The build is the LTX-Video 2B line, which core ComfyUI still
+        // supports (supported_models.py LTXV, image_model "ltxv", T5-XXL
+        // text encoder) and whose nodes are all comfy_extras -- 30 LTX
+        // classes on the managed backend's /object_info, zero of them from
+        // a custom pack, so this satisfies the core-only rule of 22a with
+        // nothing installed. The vendor's own ltxv_text_to_video.json
+        // ships inside the managed backend and is what the graph is
+        // copied from. (The 22B/19B LTX-2 line the WORKPLAN feared is
+        // real and is separate: it belongs in the 32 GB bracket and
+        // rescues nothing. See 18 P7c step 2.)
+        //
+        // 0.9.6-dev over the vendor template's 0.9 (6047 MiB vs 8936) and
+        // fp8 over fp16 for the encoder (4918 vs 9334): on the one entry
+        // whose whole job is a low floor, that is 7305 MiB of resident
+        // weights saved without retuning anything.
+        // MEASURED 2026-09-16 on an RTX 5090 (32 607 MiB) by
+        // scripts/catalog-vram-probe.js, running the shipped
+        // AE_LLAMA_LTXV_2B_T2V_V1 through the panel's own comfy_generate on
+        // the MANAGED backend a buyer gets, nvidia-smi streaming at 250 ms.
+        // Two runs at one seed: 13 696 MiB in 14 s COLD and 13 921 MiB in
+        // 12 s warm, 225 MiB apart. The higher delta is published and the
+        // COLD wall clock is the seconds, as sd15 and sdxl do, because a
+        // buyer's first generation is the cold one.
+        //
+        // minVramGB is 16, and the number it replaced (6) was never a
+        // measurement of anything. 13.6 GiB rounds to the next real card,
+        // the way sdxl's 8.1 GiB became 12 and krea2's 18.4 became 24.
+        //
+        // WHAT THIS MOVED, and it is the point of the whole entry: the
+        // video floor was 32 (wan22-5b and its fp8 sibling, both measured)
+        // and it is 16 here. A 16 GB card has a runnable video graph for
+        // the first time. A 12 GB one still does not, and that is the
+        // honest half -- 10 965 MiB of the 13 921 is RESIDENT WEIGHTS, so
+        // no size this panel can inject brings it under 12. The lever that
+        // could is a smaller build, not a smaller frame: WORKPLAN 18 P7c
+        // step 2a. Also note what CheckpointLoaderSimple does NOT have --
+        // the weight_dtype input that let wan22-5b-fp8 cast on load. This
+        // graph cannot take that trick.
+        //
+        // 68x faster per clip than Wan, incidentally: 12 s against 127.
+        kind: "video", sizeMB: 10965, minVramGB: 16, measured: true,
+        measuredVramMB: 13921, measuredSeconds: 14,
+        measuredAt: "768x512 x 97 frames = 4.04 s at the template's 24 fps " +
+                    "(the authored latent), seed 12345",
+        measuredOn: "NVIDIA GeForce RTX 5090, managed ComfyUI backend " +
+                    "(ComfyUI 0.34.0, torch 2.13.0+cu130), 2026-09-16",
+        measuredClipSeconds: 4.04,
+        authoredClipSeconds: 4.04,
         experimental: true,
-        urls: [],
-        note: "experimental short clips for 6 GB cards; files pinned " +
-              "via the update feed after real-hardware timing"
+        workflowTemplate: "AE_LLAMA_LTXV_2B_T2V_V1",
+        urls: [{
+          url: "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltxv-2b-0.9.6-dev-04-25.safetensors",
+          sizeMB: 6047, dir: "checkpoints"
+        }, {
+          url: "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn_scaled.safetensors",
+          sizeMB: 4918, dir: "text_encoders"
+        }],
+        note: "short clips (97 frames at 24 fps = 4.04 s authored); the " +
+              "weights are the LTXV Open Weights License, not Apache-2.0 " +
+              "like Wan -- see 18 P7c step 2b"
       },
       {
         name: "wan22-5b",

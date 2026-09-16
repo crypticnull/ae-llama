@@ -489,16 +489,29 @@ Queued (see WORKPLAN for owners/order):
   (extension/comfy-workflows/) with a dependency manifest; video repos
   are pinned (Wan 2.2, MiniMax H3); the remaining blocker is P4, which
   is every VRAM figure and catalog URL measured on real hardware.
-- Bundled ComfyUI templates: **SEVEN core-only basics, one per catalog
-  entry that has weights** — `AE_LLAMA_SD15_T2I_V1`,
+- Bundled ComfyUI templates: **EIGHT core-only basics, one per catalog
+  entry — there is no longer an entry without one** —
+  `AE_LLAMA_SD15_T2I_V1`,
   `AE_LLAMA_SDXL_T2I_V1`, `AE_LLAMA_KREA2_T2I_V1` (image),
+  `AE_LLAMA_LTXV_2B_T2V_V1`,
   `AE_LLAMA_WAN22_5B_T2V_V1`, `AE_LLAMA_WAN22_5B_FP8_T2V_V1`,
   `AE_LLAMA_H3_T2V_V1`,
   `AE_LLAMA_H3_INT8_T2V_V1` (video). Each was
   authored from a RUNNING backend's `/object_info`, uses core nodes
   only (no custom packs), and has been rendered end to end into AE and
-  had its VRAM measured on the managed backend a buyer installs. Only
-  `ltx-small` (no weights published) ships none. The last two are the
+  had its VRAM measured on the managed backend a buyer installs.
+  `ltx-small` was the one entry that shipped none, on the ground that it
+  had no weights published; 2026-09-16 found that it was imagining the
+  LTX-Video 2B line, which is real, which core ComfyUI still supports
+  (30 LTX classes on the managed backend, every one of them
+  `comfy_extras` rather than a pack), and for which the vendor ships the
+  graph. Pinned and measured, it is **the only video entry a card under
+  32 GB can run**: 13 921 MiB at 768x512 × 97 frames in 12 s, against
+  Wan 2.2 5B's 26 187 in 127. That moved the catalog's video floor from
+  32 GB to 16. It does NOT reach 8-12 GB — 10 965 MiB of the 13 921 is
+  resident weights, so no frame size the panel can inject gets there,
+  and those cards are now told plainly that video will not run rather
+  than handed an entry that could never have worked. The last two are the
   same MiniMax H3 graph with the text encoder swapped — nvfp4 for
   Blackwell cards, int8 for everything else — and measuring both
   showed the 10.9 GB the encoders differ by is a DOWNLOAD difference

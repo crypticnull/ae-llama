@@ -111,9 +111,15 @@ const T = window.Tiers;
   assert(t2.image && t2.image.name === "sd15",
          "6 GB default image is SD 1.5 — SDXL's measured 9472 MiB does " +
          "not fit a 6 GB card (got " + (t2.image && t2.image.name) + ")");
-  assert(t2.video && t2.video.name === "ltx-small" &&
-         t2.video.experimental === true,
-         "6 GB video is the experimental LTX entry, flagged as such");
+  // 2026-09-16: null, not ltx-small. That entry was the 6 GB video
+  // default on a minVramGB of 6 that had never been measured -- no
+  // weights, no graph. 18 P7c step 2 pinned it to a real LTX-Video 2B
+  // build and MEASURED it at 13 921 MiB, so its gate is 16 and a 6 GB
+  // card is not offered it. The offer it lost could never have run.
+  assert(t2.video === null,
+         "6 GB gets no video: LTX-Video 2B measured 13 921 MiB, so even " +
+         "the smallest video entry needs 16 GB (got " +
+         (t2.video && t2.video.name) + ")");
 
   const t3 = rec(8, 8.9);
   assert(t3.image && t3.image.name === "sd15",
@@ -128,17 +134,47 @@ const T = window.Tiers;
   // weights and not the frame. No width, height or length the panel can
   // inject fits this entry on an 8 GB card, so the gate is 32 (18 P7).
   //
-  // What the row asserts now is deliberately uncomfortable: an 8 GB buyer's
-  // video default is the EXPERIMENTAL entry, and ltx-small has no bundled
-  // graph at all (permanent ALLOW_NO_TEMPLATE seat, owner Q1). So every
-  // card under 32 GB currently has no runnable video template. That is the
-  // consequence WORKPLAN 18 P6a said to flag rather than decide, and it is
-  // filed as 18 P7a. Pinned so the gap cannot close or widen unnoticed.
-  assert(t3.video && t3.video.name === "ltx-small" &&
-         t3.video.experimental === true,
-         "8 GB video falls to the experimental LTX entry — Wan 2.2 5B's " +
-         "measured 26 187 MiB does not fit 8 GB at any size (got " +
+  // Between 2026-09-09 and 09-16 this row asserted ltx-small, and said so
+  // "deliberately uncomfortable" because that entry shipped no graph. It
+  // is null now, and the fix for the discomfort was to go and measure the
+  // thing: 18 P7c step 2 pinned ltx-small to a real LTX-Video 2B build
+  // (6047 MiB checkpoint + 4918 MiB T5-XXL, all-core graph) and measured
+  // 13 921 MiB through the shipped AE_LLAMA_LTXV_2B_T2V_V1. Gate 16.
+  //
+  // So the catalog's video floor went 32 -> 16 and this 8 GB row went
+  // from a recommendation that could not run to no recommendation. The
+  // second is better: 18 P7a option 3 is an honest refusal, and
+  // CLAUDE.md's rule is that a card which cannot run a job should be told
+  // so. What remains open is whether an 8-12 GB card can be given video
+  // AT ALL -- 18 P7c step 2a (the distilled fp8 2B, 4255 MiB) and step 4
+  // (GGUF) are the two levers left. Pinned so neither the floor dropping
+  // nor a silent re-offer can happen unnoticed.
+  assert(t3.video === null,
+         "8 GB gets no video at all — Wan 2.2 5B measured 26 187 MiB and " +
+         "LTX-Video 2B measured 13 921, and 8 GB holds neither (got " +
          (t3.video && t3.video.name) + ")");
+
+  // THE POSITIVE HALF of the same 2026-09-16 measurement, and the reason
+  // 18 P7c step 2 was worth a pass. Before it, the catalog's only
+  // MEASURED video entries were wan22-5b and its fp8 sibling, both gated
+  // at 32, so a 16 GB and a 24 GB card were offered ltx-small -- an entry
+  // with urls: [] and no graph. Both are now offered a video entry that
+  // has actually rendered: 13 921 MiB, 768x512 x 97 frames in 12 s on the
+  // managed backend. A 16 GB card having any runnable video graph at all
+  // is new, and this row is what says so.
+  const t16 = rec(16, 8.9);
+  assert(t16.video && t16.video.name === "ltx-small" &&
+         t16.video.measured === true && t16.video.minVramGB === 16,
+         "16 GB gets video for the first time: LTX-Video 2B, MEASURED at " +
+         "13 921 MiB, gate 16 (got " + JSON.stringify(t16.video &&
+         { n: t16.video.name, m: t16.video.measured,
+           g: t16.video.minVramGB }) + ")");
+  const t24 = rec(24, 8.9);
+  assert(t24.video && t24.video.name === "ltx-small" &&
+         t24.video.measured === true,
+         "24 GB gets the same entry, and it is a measured one now rather " +
+         "than the placeholder it was offered before (got " +
+         (t24.video && t24.video.name) + ")");
 
   const t7bl = rec(32, 12.0);
   assert(t7bl.image && t7bl.image.name === "krea2",

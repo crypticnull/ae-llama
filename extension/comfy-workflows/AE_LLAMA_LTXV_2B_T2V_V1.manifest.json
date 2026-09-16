@@ -1,0 +1,62 @@
+{
+  "workflow": "AE_LLAMA_LTXV_2B_T2V_V1",
+  "kind": "video",
+  "catalogEntry": "ltx-small",
+  "notes": "The BASIC text-to-video graph for the ltx-small catalog entry (WORKPLAN 18 P7c step 2). Core nodes only -- CheckpointLoaderSimple / CLIPLoader / CLIPTextEncode x2 / LTXVConditioning / EmptyLTXVLatentVideo / LTXVScheduler / KSamplerSelect / SamplerCustom / VAEDecode / CreateVideo / SaveVideo -- so it runs on the backend the panel installs with nothing added. It is the VENDOR'S OWN default workflow for this model line, node for node: comfyui_workflow_templates_json/templates/ltxv_text_to_video.json as shipped inside the managed backend (ComfyUI 0.34.0), read off disk on 2026-09-16 rather than recalled. Node ids are the vendor template's own ids, deliberately, so the correspondence stays auditable. Every input name was re-confirmed against the RUNNING backend's /object_info on the same day -- none of SamplerCustom, KSamplerSelect, LTXVScheduler, LTXVConditioning or EmptyLTXVLatentVideo is in scripts/comfy-node-defs.json, and that fixture could not have answered for them (it holds 52 demand-harvested classes, not a snapshot -- see WORKPLAN 17l).",
+  "whatChangedFromTheVendorTemplate": "Four things, three of them the same contract changes every basic here makes. (1) The CHECKPOINT is ltxv-2b-0.9.6-dev-04-25.safetensors, not the vendor template's ltx-video-2b-v0.9.safetensors. Same 2B line, same all-in-one shape (944 tensors, model.* + vae.*, verified from the safetensors header before downloading), same non-distilled sampling shape -- and 6047 MiB against 8936, which on an entry whose whole purpose is a low VRAM floor is the reason. A DISTILLED build is 4255 MiB and smaller still, but distillation changes the step count and the cfg, so it is not a drop-in and it is not a basic; it is filed as WORKPLAN 18 P7c step 2a. (2) The TEXT ENCODER is t5xxl_fp8_e4m3fn_scaled.safetensors, not the vendor's t5xxl_fp16 -- 4918 MiB against 9334, and the fp8 encoder is the choice the Wan basic already ships for the same reason. (3) SaveVideo's format/codec are mp4/h264 instead of the vendor's auto/auto: the contract names mp4/h264 because that is what AE imports, and 'auto' picks WebM for an AV1 stream. (4) filename_prefix is this panel's relative prefix (an ABSOLUTE prefix is refused by folder_paths.get_save_image_path and kills the render at its last node; see the KREA2 manifest's node 474). The vendor's two Note/MarkdownNote nodes are dropped, as every basic here drops them -- they are not executable classes. Sampler, scheduler, steps, cfg, shift, terminal, size, length and fps are the vendor's values untouched, except the seed: 12345, so a measurement is reproducible, as sd15 / sdxl / krea2 / wan22-5b all do.",
+  "whyTheNegativeIsThis": "It is the vendor template's own negative, copied verbatim. Unlike Wan's, it is already English, so nothing had to be translated. The panel replaces it whenever the request carries a negative.",
+  "procedural": {
+    "prompt": {
+      "nodeId": 6,
+      "input": "text",
+      "note": "NOT reachable by the panel's usual introspection, and that is the one thing about this graph a reader must not miss. The panel follows KSampler.positive/negative back to the CLIPTextEncode pair (comfy-workflows/README.md); this graph has no KSampler -- it uses SamplerCustom, and its positive/negative come from LTXVConditioning, one hop further back. Declaring the prompt node here is what makes injection work. See whyTheNegativeIsNotDeclared."
+    }
+  },
+  "whyTheNegativeIsNotDeclared": "procedural carries only the positive because that is all the schema takes; the negative sits on node 7, one hop behind LTXVConditioning.negative the same way. If a future request needs the negative injected on this graph, that hop is the work -- it is not a missing value, it is a missing edge in the resolver's walk.",
+  "whyNoResolution": "No procedural.resolution, for the reason measured on the sd15 basic and written up as WORKPLAN 18 P5a. procedural.resolution means 'this template derives its pixel dimensions from a MEGAPIXEL widget' (comfy.js injectProcedural), which is true of H3's ResolutionSelector and false of an EmptyLTXVLatentVideo that takes literal width and height -- those are injected by introspection, which is what the README contract promises.",
+  "whyNoDurationSeconds": "No procedural.durationSeconds either, for the same reason the Wan basic has none: this graph carries a literal numeric `length` on node 70, which is exactly what injectParams' generic frame walk writes to (comfy.js frameKeys = length/frames/video_frames/num_frames). Declaring durationSeconds here would flip lengthIn to 'seconds' and make the panel REFUSE a frames request against a graph that takes frames.",
+  "lengthIsOnAGridOfEight": "LTX-Video samples 8n+1 frames and /object_info gives node 70's `length` a step of 8 (min 1, max 16384, default 97) -- a DIFFERENT grid from Wan's 4n+1, which is why this is stated per template rather than assumed. ComfyUI does not enforce the step server-side, so a frames request that is not 8n+1 is accepted and rounded by the model rather than refused. 97 frames at the CreateVideo fps of 24 is 4.04 s, which is the clip a request naming no length gets -- already under the 6 s cap WORKPLAN 18 P3a(b) is about to impose, unlike minimax-h3's >15-minute authored default.",
+  "theTwoFrameRatesAreTheVendorsOwn": "LTXVConditioning.frame_rate is 25 and CreateVideo.fps is 24, and that is not a transcription error -- the vendor's ltxv_text_to_video.json ships exactly those two numbers. The first is what the MODEL is told it is generating; the second is the container's playback rate. They are left as the vendor set them, because a basic is the shape ComfyUI ships and not a tuned one, but the authored clip length follows the CONTAINER rate (97/24 = 4.04 s), which is what AE will import.",
+  "models": [
+    {
+      "file": "ltxv-2b-0.9.6-dev-04-25.safetensors",
+      "role": "checkpoint (diffusion + vae, all-in-one)",
+      "dir": "checkpoints",
+      "sizeMB": 6047,
+      "url": "https://huggingface.co/Lightricks/LTX-Video/resolve/main/ltxv-2b-0.9.6-dev-04-25.safetensors"
+    },
+    {
+      "file": "t5xxl_fp8_e4m3fn_scaled.safetensors",
+      "role": "text_encoder",
+      "dir": "text_encoders",
+      "sizeMB": 4918,
+      "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn_scaled.safetensors"
+    }
+  ],
+  "licenseIsNotApacheAndTheOwnerShouldKnow": "The checkpoint's own safetensors metadata carries the 'LTXV Open Weights License 0.X' (license date April 15, 2025, covering every LTXV release since v0.9.6), NOT Apache-2.0 as Wan 2.2 is. The panel never redistributes a weight -- a buyer downloads it from Lightricks' own HuggingFace repo -- so this is a question about what the panel RECOMMENDS, not about what it ships. Flagged for the owner in WORKPLAN 18 P7c step 2b; no pass should decide it.",
+  "customNodes": [
+    {
+      "pack": "(comfy-core)",
+      "nodes": [
+        "CLIPLoader",
+        "CLIPTextEncode",
+        "CheckpointLoaderSimple",
+        "CreateVideo",
+        "EmptyLTXVLatentVideo",
+        "KSamplerSelect",
+        "LTXVConditioning",
+        "LTXVScheduler",
+        "SamplerCustom",
+        "SaveVideo",
+        "VAEDecode"
+      ]
+    }
+  ],
+  "panelIntegration": {
+    "promptInjection": "declared: procedural.prompt -> node 6. Introspection cannot find it -- there is no KSampler in this graph (see procedural.prompt.note).",
+    "frameInjection": "introspection: node 70's literal `length` (comfy.js frameKeys)",
+    "resolutionCeilingFrom": "tier ceilings (COMFY_TIERS_PLAN)",
+    "saveNode": "SaveVideo 79 -- mp4/h264 so AE can import it; filename_prefix is RELATIVE, so ComfyUI joins it onto its own output dir"
+  },
+  "nodeAttributionScannedOn": "2026-09-16 (managed backend, /object_info on 127.0.0.1:8288)"
+}
