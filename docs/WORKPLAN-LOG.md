@@ -26209,3 +26209,66 @@ Reference: same md5 at 4 937 MiB (130 s) and on the whole card (127 s).
   buyer needs two Wan 5B choices is a product call for the owner, and
   it rides on the same 5a-4e tier decision, so it was not queued
   separately.
+
+## 2026-09-16 (local session) - the managed backend already has an INT8 attention kernel: Wan 23 percent faster, no VRAM moved, nothing installed
+
+**Item:** NEXT UP 7 / WORKPLAN 13a step 1. Items above it: 3, 5a-4e,
+5a-5b, 5a-5c, 5c are owner-only, 6b is marked not needed, the rest
+struck. Not attempted before. Taken at 06:53, inside the loop window.
+
+**Harness: 770/770 PASSED** at the start. Nothing in extension/ changed,
+so it was not rerun and there is no bump. AE left running, untouched.
+Backend booted and killed per run by `local/headroom-run.sh`; card back
+to 1 134 MiB.
+
+### Step 1, the environment (`docs/measured/comfy-attention-2026-09-16.md`)
+
+python 3.13.14, torch 2.13.0+cu130 (built against CUDA 13.0), ComfyUI
+0.34.0, RTX 5090 capability (12, 0), pip 26.2.1 present. triton,
+sageattention, sageattn3, flash_attn and xformers all ABSENT. But
+`comfy_kitchen` (a core dependency) ships a compiled INT8 attention
+kernel, `int8_attention_is_available()` True, floor 7.5, reached with
+the core flag `--use-ck-attention`. Vendor code: if that kernel is
+unavailable the backend logs an error and keeps pytorch attention;
+`--use-sage-attention` with no package EXITS the backend.
+
+### A/B, shipped boot vs `--use-ck-attention`, seed 12345 (`local/attn-run.sh`)
+
+| entry | room | attention | delta MiB | s | output |
+|---|---|---|---|---|---|
+| sdxl | card | default | 7 194 | 7 | 72bfc2... |
+| sdxl | card | ck | 7 226 | 6 | 0ff252... |
+| ltx-small | card | default | 10 426 | 12 | 45630f... |
+| ltx-small | card | ck | 10 426 | 12 | 239c31... |
+| wan22-5b-fp8 | card | default | 24 315 | 124 | ab4fa5... |
+| wan22-5b-fp8 | card | ck | 24 317 | 96 | abdf56... |
+| wan22-5b-fp8 | 841 | ck | 80 | 102 | abdf56... (6a default: 131/135) |
+
+Quality ck vs default: Wan SSIM 0.974 / PSNR 33.9 dB, ltx 0.978 / 34.3,
+sdxl 0.957 / 29.2. Wan frame 60 and the sdxl pair were looked at: the
+same picture, small detail differences, not degraded.
+
+### What it means
+
+- Attention is a SPEED lever on this backend, not the VRAM gate §13
+  assumed: no entry's peak moved.
+- The speed is Wan-only (~23 percent, whole card and 8 GB room alike).
+- A core route exists before any wheel install, which may make §13a
+  steps 2-6 unnecessary.
+
+### Filed
+
+- NEXT UP 7a: ship `--use-ck-attention` on the managed boot, after
+  retaking the Wan references and proving the unavailable-kernel
+  fallback. Bumps.
+- NEXT UP 7b: check whether a sageattention/triton-windows wheel exists
+  for py3.13/torch 2.13/cu130 at all, and only then A/B it against CK.
+
+### Assumed
+
+- Assumed step 1's "record into docs/measured/" means a markdown file
+  beside the ppro json; there was no earlier env file.
+- Assumed shipping the flag is a pass's call (core-only, equal quality),
+  not the owner's, but did not ship it in this pass: it changes every
+  Wan output and the shipped md5 references, which is its own item.
+- Speed on anything other than sm120 is unmeasured.
