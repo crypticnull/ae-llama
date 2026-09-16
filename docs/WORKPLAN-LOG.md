@@ -27814,3 +27814,31 @@ pass's health off CPU, and as `ltx-small`'s gate of 6 that came from a
 model card.
 
 No `extension/` change, so **no version bump**.
+
+## 2026-09-16 (local session) — owner wants the H3 basic built from his authored graph; filed with the §22a collision named
+
+Owner direction: the H3 basic should include the speed patches, and his
+authored H3 graph should be the template for it. He said outright he has
+no energy to solve it tonight, so §13d is a filing, not a start.
+
+**Named rather than resolved: this collides with §22a**, which shipped
+today and refuses any bundled template naming a non-core pack. The three
+speed nodes are pack nodes. Three exits are written down (fast one in the
+opt-in layer; a narrow §22a exemption; or the patches turn out to be in
+what the backend already ships — five `MiniMaxH3` classes ARE in the
+harvested defs). None is chosen, and §13c's measurement comes first,
+because if the patches are worth little the collision evaporates.
+
+**A fact-check worth more than the filing.** The owner's reason for not
+using his graph was its prompt enhancer: it competes with the panel's own
+chat model, and it does real work — duration lives in its text block
+along with commented lines naming the live inputs. Checked: the H3 i2v
+graph in this repo has **no enhancer and no CLIPTextEncode**, node 138's
+prompt is the neutral placeholder the panel overwrites, and duration is
+not in any text block. The enhancer belongs to his ref-to-image /
+ref-to-video build, which is not in the repo.
+
+So the blocker he remembers may not apply to the i2v/t2v path at all. The
+missing input is that other variant; ask for it rather than rebuild it.
+
+No `extension/` change, so **no version bump**.

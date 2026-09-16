@@ -3101,6 +3101,52 @@ aescripts buyers, not the exception — this is the difference between
 video generation being usable and being unusable. It is a gating
 feature for most of the market, not an optimisation for enthusiasts.
 
+### 13d. OWNER DIRECTION 2026-09-16: the H3 basic should BE the authored graph, patches included — and that collides with §22a
+
+**Owner:** *"our H3 basic should at the very least include those patches.
+That custom node chart that I fed for H3 should be used as basically a
+workflow template for the simple one, with all of the speed gains that it
+has."* He also said plainly he does not have the energy to solve it
+tonight, so this is FILED, not started.
+
+**The collision, stated so nobody resolves it by accident.** §22a shipped
+today and refuses any bundled template naming a non-core pack; the three
+speed nodes (`MiniMaxH3MemoryEfficientSageAttentionPatch`,
+`MiniMaxH3ScheduledSolAttentionPatch`,
+`ApplyMiniMaxH3FirstBlockCache`) are pack nodes. Exactly one of these
+gives:
+
+1. H3's basic stays core-only and slow, and the fast one ships in the
+   opt-in layer (§22d) as a second entry. §22a survives untouched.
+2. §22a gains a narrow exemption: a basic may require a pack IF the
+   installer can place it and the entry says so. §22a's guarantee — a
+   buyer's recommended set installs for everyone — weakens.
+3. The patches move into whatever the managed backend already ships
+   (measure first: five `MiniMaxH3` classes ARE in the harvested defs).
+
+**Do not pick one without the owner, and measure §13c first** — if the
+patches are worth little, the collision evaporates.
+
+**Fact-check that narrows the blocker (checked, not remembered).** The
+owner's stated reason for not basing the basic on his graph was its
+PROMPT ENHANCER: it competes with the panel's own chat model, and it
+carries real work in its text block (the clip DURATION, plus commented
+lines naming which inputs are live in the ref-to-image / ref-to-video
+build).
+
+**The H3 i2v graph in this repo has no enhancer at all.**
+`tests/fixtures/authored-h3/AE_LLAMA_H3_I2V_V1.json` has no enhancer and
+no `CLIPTextEncode`; node 138's `prompt` is
+`"(neutral example - the panel injects the enhanced prompt here at
+generation time)"`, and duration is not carried in any text block —
+`MiniMaxH3ImageToVideo` takes its own inputs. So the enhancer problem
+belongs to the **ref-to-image / ref-to-video** variant, which is NOT in
+this repo.
+
+**What is missing before this can be built:** that variant. Ask the owner
+for it rather than reconstructing it. Until then, the i2v/t2v path looks
+free of the blocker he remembers.
+
 ### 13c. The H3 attention patches were never measured, and 13a's closure was too broad (owner, 2026-09-16)
 
 **SUPERSEDES 13a's conclusion in scope.** 2026-09-16 measured
