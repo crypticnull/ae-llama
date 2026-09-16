@@ -27768,3 +27768,13 @@ SUPERSEDES: 27624,27641 -- that entry's "Bar for q8_0 32K, declared before any 3
 **Nothing new found, nothing filed.** Nothing under extension/ changed, so **no bump**.
 
 **Assumed:** same as the 16:47 entry, starting no GPU work that cannot end by 17:00. If the loop takes another pass before 17:00, it should reach the same answer faster by reading this entry.
+
+## 2026-09-16 (local session) - no item taken a third time: 7 minutes left in the owner's loop window (NEXT UP 12a, 15, 17)
+
+**Item:** none. Pass started 16:52 EDT under `run-local-agent.ps1` PID 47376 (still alive, -UntilHour 17). Queue unchanged since the 16:47 and 16:51 entries above, so their reasoning stands: 12a, 15 and 17 cannot end by 17:00, and the other open rows are owner-gated.
+
+**Harness: 770/770 PASSED** (exit 0), 16:53. AfterFX 9580 untouched.
+
+**Nothing new found, nothing filed.** Nothing under extension/ changed, so **no bump**.
+
+**Assumed:** same as the 16:47 entry. This loop's last passes each cost a harness run for a known answer; if that pattern matters, a pass-start guard in `run-local-agent.ps1` that skips a pass with under ~15 min to `-UntilHour` would save them. Not filed as work: it is a few minutes of AE time, and the owner set the window.
