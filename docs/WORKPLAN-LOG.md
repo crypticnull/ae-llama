@@ -26042,3 +26042,73 @@ bypasses `defOf` is not caught by the test (it only scans
 adapt-workflow.js); that is the documented route, not an enforced one.
 
 No bump: nothing under `extension/` changed.
+
+## 2026-09-16 (local session) - GGUF loaders are a pack, core has its own 4- and 8-bit formats, and the low-end gap left is Wan at 8 GB
+
+SUPERSEDES: 23330,23381 - that entry's "architectural consequence" (quantized loaders are custom, so §22d moves onto the critical path for 8-12 GB cards). The first half is now measured true; the conclusion does not follow, because core loads its own quantized formats and DynamicVRAM already put LTX at gate 8 and Wan at gate 12 with no smaller file.
+
+**Item:** NEXT UP 6 / WORKPLAN 18 P7c step 4. Items above it: 3, 5a-4e,
+5a-5b, 5a-5c, 5c are owner-only, the rest struck. Not attempted before.
+Report only, as the item says; nothing pinned.
+
+**Harness: 770/770 PASSED** at the start. Nothing under `extension/`
+changed, so it was not rerun and there is **no bump**. AE left running,
+untouched. Backend booted with `comfy-install.js --boot` for
+`/object_info` only (no generation), stopped with `--stop`; card back to
+1 200 MiB.
+
+### What the running backend says
+
+ComfyUI 0.34.0, torch 2.13.0+cu130, managed install. `/object_info`: 900
+classes. Every `python_module` is `nodes`, `comfy_extras.*` or
+`comfy_api_nodes.*` except `custom_nodes.websocket_image_save`. **No
+GGUF loader, no class matching gguf/nf4/bnb/int4/svdq/nunchaku** (the one
+"quant" hit is `ImageQuantize`, a colour filter). `UNETLoader.weight_dtype`
+is `default, fp8_e4m3fn, fp8_e4m3fn_fast, fp8_e5m2`. So a GGUF build needs
+city96/ComfyUI-GGUF (GitHub, Apache-2.0, ~4k stars, last push
+2026-01-12). Its class names (`UnetLoaderGGUF` etc.) are from memory, NOT
+read off an install - nothing here installed it.
+
+### What the vendor source says
+
+- `main.py`, the `--disable-dynamic-vram` warning: "If you use gguf we
+  recommend keeping dynamic vram enabled and using native ComfyUI model
+  formats instead. ComfyUI native formats like fp8 will be faster even if
+  they are larger than your memory." This is the same behaviour tonight's
+  ballast runs measured.
+- `comfy/quant_ops.py` + site-packages `comfy_kitchen` 0.2.31:
+  `QUANT_ALGOS` = float8_e4m3fn, float8_e5m2, nvfp4 (uint8, group 16),
+  mxfp8 (when available), int8_tensorwise, convrot_w4a4, asym_w4a8_int8.
+  A safetensors carrying per-layer `comfy_quant` metadata loads through
+  plain `UNETLoader` (`comfy/ops.py`), i.e. a 4-bit build CAN stay
+  core-only under §22a. CUDA kernels declare min compute capability 7.5,
+  8.0 or 10.0 per op, with `backends/eager` as the fallback; speed of that
+  fallback on RTX 30/40 is unmeasured. `comfy_kitchen/sage_attention.py`
+  also exists - relevant to NEXT UP 7, not read further.
+
+### What is published (Hugging Face API, file sizes in MB)
+
+| weight | shipped | Q8_0 | Q4_K_M | Q3_K_S | source / licence |
+|---|---|---|---|---|---|
+| Wan 2.2 TI2V 5B | 9 536 fp16 | 5 150 | 3 274 | 2 188 | QuantStack, apache-2.0, 94k dl (unsloth 71k) |
+| umt5-xxl | 6 424 fp8 scaled | 5 763 | 3 486 | 2 726 | city96, apache-2.0, 125k dl |
+| LTX-Video 2B | 6 047 / 4 255 distilled fp8 | 2 073 | 1 350 | 939 | city96, licence other, **v0.9 only** |
+| t5 v1.1 xxl | 4 918 fp8 scaled | 4 827 | 2 762 | 2 002 | city96, apache-2.0 |
+
+Core-native quantized Wan 5B: `narendra747/wan2.2-ti2v-5b-nvfp4` (12 dl),
+`shunyang90/...-ModelOpt-NVFP4` (9), `JoaoZaokk/...-W4A8-ConvRot` (13).
+Nothing for LTX 2B. None vetted; not a supply a commercial catalog pins.
+The LTX GGUFs are of v0.9, older than every shipped LTX weight, so they
+are not a drop-in for either LTX entry.
+
+### Conclusion and filing
+
+The 8 GB video gap this item was queued against is mostly gone: both LTX
+entries gate at 8 on core weights. What is left is Wan, and Wan was only
+ever measured down to 4 937 MiB of room. Filed NEXT UP **6a** (Wan fp8 at
+841 MiB of room, core-only, same procedure as 5b-1) and **6b** (a
+quantized Wan build, only if 6a fails; core-native first, GGUF-via-pack
+second and owner-gated because it is §22d's first customer). §18 P7c
+step 4 bullet carries the table. Assumed: that a core-only run beats a
+pack install for this buyer whenever it is within the 2x bar, which is
+what §22a and the vendor note both say.
