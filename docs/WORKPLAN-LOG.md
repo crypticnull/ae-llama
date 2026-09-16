@@ -26522,3 +26522,64 @@ bump, no backend booted, no GPU work. AE left running, untouched.
   do an import check, then A/B `--use-sage-attention` against the
   `--use-ck-attention` references (96 s whole card / 102 s at 841 MiB) on
   wan22-5b-fp8, and look at a frame.
+
+## 2026-09-16 (local session) - the rules block is data now: 72 RULE_DEFS, byte-identical prompt, closure-linted (routing step 1, rules half)
+
+**Item:** NEXT UP 9 (§24a). Skipped above it: 7b-2 (needs backend, disk,
+network), 7d (needs backend), 8 (needs the chat model). The detached loop
+(`-UntilHour 8`) started this pass at 07:57 EDT. A GPU item would have run
+into the owner's working day, and CLAUDE.md says the machine is his during
+the day, so I took the first item with needs "nothing".
+
+**Harness: 770/770 PASSED** at the start. NOT re-run after the change: by then
+it was past 08:00, and the change cannot reach it anyway. The CLI runner loads
+hostscript.jsx and selftest.js, never the panel's tools.js. What proves this
+change is the byte-identity pin below.
+
+### Changed
+
+- `extension/js/tools.js`: the 72 rule bullets moved verbatim out of the
+  literal array in `buildSystemPrompt` into `RULE_DEFS` (id, section, order,
+  core, owners, uses, mentions, triggers, lines) plus `RULE_SECTIONS`.
+  `renderRules` puts them back, and `RULES_BY_TOOL` is derived from owners.
+  Classification follows DESIGN §4: 21 core bullets, 4,397 chars as designed.
+  `mentions` was computed by scanning each bullet for tool names.
+  Exposed: `Tools.RULE_DEFS`, `Tools.RULE_SECTIONS`, `Tools._rulesByTool`.
+- `tests/test-prompt-rules.js` (new) checks five things: sha256 of the compact
+  and full prompts matches pre-split c065a76 (39,803 / 58,933 chars); 72
+  bullets and 21 core; order and section contiguity; every bullet renders
+  verbatim; and the closure lint. The lint allows no tool name in a bullet
+  unless owners, uses or mentions lists it, no stale mention, and no
+  non-core bullet that nothing could route. I tried two mutations (drop a
+  mention, change one character of wording) and each was caught.
+- `tests/test-organize-project.js` and `tests/test-presets.js` read rule
+  wording from the SOURCE by position: after `function buildSystemPrompt`,
+  or between two section-header strings. Both now read the rendered prompt.
+  That is a stricter check (it tests what the model receives), not a looser
+  one.
+
+**Tests:** all 13 test files that load tools.js pass (chat-probe,
+context-budget, organize-project, presets, captions, ffmpeg-export, self-test,
+chat-load-gate, comfy-progress, weight-availability, plus the new one). I also
+ran es3-ternary. I did not run the full suite because it is daytime.
+
+**No bump.** WORKPLAN row 9 says "no", and the model's input is
+byte-identical, so a bump would publish an update that changes nothing for a
+user. The brief's mechanical "extension/ changed -> bump" rule points the
+other way. I followed the workplan, because the reason behind that rule
+(don't make users reinstall for nothing) applies here. The code rides the next
+real bump.
+
+### Deviations from §24a as written (also noted in the WORKPLAN)
+
+- Anti-targets and context names share one field, `mentions`. Core bullet 15
+  lists selection-taking tools that are neither owners nor anti-targets.
+- A tool's `rules`/`uses` are derived from RULE_DEFS, not copied onto 79
+  TOOL_DEFS entries, so the two cannot drift.
+- **Per-tool `triggers` are not done.** Filed as NEXT UP 9b. They can only be
+  checked by item 10's router-recall test over the chat-probe matrix, so
+  writing 79 lists before that test exists would be guesswork.
+
+### Open
+
+- NEXT UP 9b (triggers + trigger lint), then 10 (router).

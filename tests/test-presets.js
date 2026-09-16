@@ -687,9 +687,15 @@ assert(AELL_MUTATING.apply_preset === true &&
   assert(/non-text/.test(doc) && /nothing at all/.test(doc) &&
          /partial/.test(doc),
          "and the doc carries the type rule that AE enforces in silence");
-  assert(/list_presets/.test(toolsSrc.slice(
-           toolsSrc.indexOf("Universal property access"),
-           toolsSrc.indexOf("Masks & shape content"))),
+  // The RENDERED prompt: since WORKPLAN §24a the section headers also sit
+  // in RULE_SECTIONS, so a slice of the source no longer spans a section.
+  const promptWin = {};
+  promptWin.window = promptWin;
+  new Function("window", toolsSrc).call(promptWin, promptWin);
+  const prompt = promptWin.Tools.buildSystemPrompt("");
+  assert(/list_presets/.test(prompt.slice(
+           prompt.indexOf("Universal property access"),
+           prompt.indexOf("Masks & shape content"))),
          "the system prompt points at the preset library");
 }
 

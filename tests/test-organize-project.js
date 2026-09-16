@@ -437,7 +437,12 @@ assert(/dryRun is TRUE by default/.test(doc),
 assert(/REFUSED until that list was shown in an EARLIER reply/.test(doc),
        "and that the move is refused until it was shown");
 assert(/dryRun\?: bool/.test(doc), "and the arg is documented");
-const prompt = defs.split("function buildSystemPrompt")[1] || "";
+// The RENDERED prompt, not the source after buildSystemPrompt: since
+// WORKPLAN §24a the rules live in RULE_DEFS, above the function.
+const promptWin = {};
+promptWin.window = promptWin;
+new Function("window", defs).call(promptWin, promptWin);
+const prompt = promptWin.Tools.buildSystemPrompt("");
 assert(/organize the project panel' = organize_project/.test(prompt),
        "the system prompt routes 'organize the project panel' to the tool");
 assert(/not an organized project/.test(prompt),
