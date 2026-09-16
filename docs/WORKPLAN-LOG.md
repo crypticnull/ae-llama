@@ -27534,3 +27534,27 @@ The card is back to about 2 000 MiB, with nothing listening on :8288 (the probe'
 **Not resolved / needs an eye:** one step at `--temperature 0` returned truncated JSON (`{ "reply"`), but on the shared server, so it does not show that temperature 0 is at fault. 11b-2 checks it first. Stash `loop-salvage-20260916-130238` is now fully committed and can be dropped. I left it in place because dropping a stash cannot be undone.
 
 **Assumed:** "one failed attempt per item" covers a pass killed by the timeout, so I did not re-run the matrices. Recovering and grading what already existed is not a second attempt.
+
+## 2026-09-16 (local session) - a killed pass's runners are reaped now: the guard snapshots the pass tree, the loop kills it before the CLI (NEXT UP 31)
+
+**Item:** NEXT UP 31. The rows above it are owner-only or blocked (6, 5a-4e, 5a-5b, 5a-5c, 5c, 6b). Pass 26 started 13:22 EDT, in the daytime. `run-local-agent.ps1` (PID 47376, -UntilHour 17) is running, so the owner-started loop gives permission (17a).
+
+**Harness:** the first run was **769/770**. `{resolution: 'comp'} keeps AE's downsample and warns` wrote 240x180 where 120x90 was expected. No other process was driving AE; I checked the process list and found no node, bash or llama-server. The immediate re-run was **770/770**, and so was the final run after the change. It is filed as **NEXT UP 32** (flaky step, count it first, do not loosen the check) and was not treated as this pass's item, because it did not reproduce.
+
+**Changed (scripts, tests and docs only; extension/ untouched, so no bump):**
+- `scripts/lib/pass-tree.ps1` (new):
+  - `Get-AellPassTree` returns every process under the loop's CLI pass, keyed by pid AND creation time. It is pruned at host processes, so an AE the pass cold-launched is never a member.
+  - `Merge`/`Save`/`Import-AellPassTreeFile` hand the snapshot from the guard job to the loop through a file. The save writes a temp file and then moves it.
+  - `Get-AellPassReapTargets` selects snapshot members that are still alive, plus orphans a snapshot can miss: chat-probe, kv-quant-probe, catalog-vram-probe, comfy-probe, weight-availability-probe, variants-compare, llama-server or `nvidia-smi -l/-lms` started after the pass began whose parent is gone.
+  - It never selects AfterFX, CEP or anything whose live ancestry reaches them, anything under `\Adobe\`, the managed backend (`AE-Llama\vendor\comfy`, which the teardown owns), the desktop app or the loop. The lib selects only; it kills nothing.
+- `scripts/lib/claude-procs.ps1`: the process table now carries `CreationDate`.
+- `scripts/run-local-agent.ps1`: the timeout guard job snapshots the pass tree every 15 s and once more just before it kills the CLI. After the pipeline, the loop imports the snapshot, takes one fresh snapshot while a lingering CLI still has its children, and kills the targets BEFORE the existing CLI reap. Each kill is logged as `Reaped pass leftover pid N (name, reason)`, and the whole block is wrapped so a failure cannot stop the loop.
+- `tests/test-pass-tree.js` (new, 11 checks) + `scripts/lib/pass-tree.selftest.ps1` (15 checks). This is the pass-24 shape on a synthetic table: a CLI that starts a runner, a probe and a server, and also cold-launches AE, whose CEP runs the panel's llama-server, plus the managed backend, a reused pid, a server older than the pass and the owner's own probe. Only the runner, probe and server, plus two real orphaned probes, are selected.
+
+**Verified live, without the loop:** a fake CLI (node with `claude` in its command line) under a PowerShell shell started a DETACHED runner, which started a detached `chat-probe.js` stand-in. After the snapshot, the fake CLI was killed. Both children survived it, the reap selected both as `pass tree` via real CIM data, and 0 were left alive. A first try without `detached` proved nothing, because node's libuv job object kills non-detached children along with the parent. The real CLI's children evidently are not in such a job (pass 24's runner survived), hence the detached stand-in. A dry run against the live machine selected exactly this pass's own shell tree.
+
+Tests: test-pass-tree, claude-procs, powershell-syntax, loop-teardown, loop-heartbeat, loop-exit-reason, loop-log-append, harness-loop-tee, pass-timeout, pass-invocation and host-dialogs all pass.
+
+**Needs a human eye / not verified:** the loop's own new code path (the guard job's snapshot loop and the post-pipeline reap) has not run inside a real loop, because **the running loop (PID 47376) parsed the old script at 10:20 and keeps it until restarted**. The first loop started after this commit is the real test. Its log should show no `Pass leftover reap failed` line, and after a timed-out pass it should show `Reaped pass leftover` lines. I added that caveat to 11b-2, the item most likely to hit the bound.
+
+**Assumed:** the managed ComfyUI backend is left alone even when a pass booted it, because it is detached on purpose for the next pass and the loop teardown stops it (17q). `stop-local-agent.ps1` kills passes by hand without this tree reap. I did not change it (scope); a hand stop is rare and the owner is present when it happens.

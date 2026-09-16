@@ -185,6 +185,8 @@ Set-Location $RepoRoot
 # Electron and runs many processes named claude. Loaded here because the
 # reap below must never kill by name.
 . (Join-Path $PSScriptRoot 'lib\claude-procs.ps1')
+# ...and what those passes started, which outlives a killed CLI (31).
+. (Join-Path $PSScriptRoot 'lib\pass-tree.ps1')
 
 # Reading what the card is holding, for the teardown check below (17q).
 . (Join-Path $PSScriptRoot 'lib\gpu-detect.ps1')
@@ -823,12 +825,41 @@ for ($i = 1; $i -le $Iterations; $i++) {
     # that has been stopped cannot be asked.
     $timeoutFlag = Join-Path $RepoRoot ('logs\pass-timeout-' + $PID + '-' + $i + '.flag')
     Remove-Item -LiteralPath $timeoutFlag -Force -ErrorAction SilentlyContinue
+    #
+    # The guard also SNAPSHOTS the pass's process tree every 15 s (NEXT
+    # UP 31). A killed CLI's children are re-parented, so "what did this
+    # pass start" is only answerable while the CLI lives; the reap after
+    # the pipeline reads the file. Measured 2026-09-16: pass 24's bash
+    # runner and probes drove AE and held llama-server for 18 minutes
+    # into the next pass. See scripts/lib/pass-tree.ps1.
+    $treeFile = Join-Path $RepoRoot ('logs\pass-tree-' + $PID + '-' + $i + '.txt')
+    Remove-Item -LiteralPath $treeFile -Force -ErrorAction SilentlyContinue
     $guard = $null
     try {
         $guard = Start-Job -Name 'AellPassTimeout' -ScriptBlock {
-            param($procLib, $rootId, $flag, $limitSec)
+            param($procLib, $rootId, $flag, $limitSec, $treeLib, $treePath)
             . $procLib
-            Start-Sleep -Seconds $limitSec
+            . $treeLib
+            $snap = @{}
+            $deadline = (Get-Date).AddSeconds($limitSec)
+            while ((Get-Date) -lt $deadline) {
+                try {
+                    $before = $snap.Count
+                    Merge-AellPassTree -Snapshot $snap `
+                        -Tree (Get-AellPassTree -RootId $rootId)
+                    if ($snap.Count -ne $before) {
+                        Save-AellPassTreeFile -Snapshot $snap -Path $treePath
+                    }
+                } catch { }
+                $left = ($deadline - (Get-Date)).TotalSeconds
+                if ($left -gt 15) { $left = 15 }
+                if ($left -gt 0) { Start-Sleep -Seconds ([math]::Ceiling($left)) }
+            }
+            try {
+                Merge-AellPassTree -Snapshot $snap `
+                    -Tree (Get-AellPassTree -RootId $rootId)
+                Save-AellPassTreeFile -Snapshot $snap -Path $treePath
+            } catch { }
             $killed = @()
             foreach ($cp in @(Get-AellCliPassProcesses -RootId $rootId)) {
                 try {
@@ -844,7 +875,9 @@ for ($i = 1; $i -le $Iterations; $i++) {
             (Join-Path $PSScriptRoot 'lib\claude-procs.ps1'),
             $PID,
             $timeoutFlag,
-            ($PassTimeoutMin * 60)
+            ($PassTimeoutMin * 60),
+            (Join-Path $PSScriptRoot 'lib\pass-tree.ps1'),
+            $treeFile
     } catch {
         # A missing guard must never cost the pass, same as the beat.
         Write-Log ('Pass timeout guard could not start: ' + $_.Exception.Message)
@@ -906,6 +939,42 @@ for ($i = 1; $i -le $Iterations; $i++) {
                    '. Taking the next iteration.')
         Remove-Item -LiteralPath $timeoutFlag -Force -ErrorAction SilentlyContinue
     }
+
+    # What the pass STARTED goes before the CLI does (NEXT UP 31): the
+    # guard's snapshot, one more taken now while a lingering CLI still
+    # has its children, and any probe orphaned after the pass began.
+    # Never AE, CEP, the managed backend or the desktop app -- those are
+    # refused inside Get-AellPassReapTargets, whatever the snapshot says.
+    try {
+        $passTree = @{}
+        [void](Import-AellPassTreeFile -Snapshot $passTree -Path $treeFile)
+        $procTable = Get-AellProcessTable
+        Merge-AellPassTree -Snapshot $passTree `
+            -Tree (Get-AellPassTree -RootId $PID -Table $procTable)
+        $cliIds = @(Get-AellCliPassProcesses -RootId $PID -Table $procTable |
+                    ForEach-Object { [int]$_.ProcessId })
+        $leftovers = @(Get-AellPassReapTargets -Snapshot $passTree `
+                         -Table $procTable -PassStartedAt $passStartedAt `
+                         -LoopId $PID -ExcludeIds $cliIds)
+        foreach ($lo in $leftovers) {
+            try {
+                Stop-Process -Id $lo.ProcessId -Force -ErrorAction Stop
+                Write-Log ('Reaped pass leftover pid ' + $lo.ProcessId + ' (' +
+                           $lo.Name + ', ' + $lo.Reason + ')')
+            } catch {
+                # Already gone is the common case: killing a runner takes
+                # its console host and children with it.
+                if (Get-Process -Id $lo.ProcessId -ErrorAction SilentlyContinue) {
+                    Write-Log ('Could not reap pass leftover pid ' +
+                               $lo.ProcessId + ': ' + $_.Exception.Message)
+                }
+            }
+        }
+    } catch {
+        Write-Log ('Pass leftover reap failed: ' + $_.Exception.Message)
+    }
+    Remove-Item -LiteralPath $treeFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath ($treeFile + '.tmp') -Force -ErrorAction SilentlyContinue
 
     foreach ($cp in @(Get-AellCliPassProcesses -RootId $PID)) {
         try {

@@ -44,7 +44,7 @@
 # parent, and .Path throws for a process we lack rights to open.
 function Get-AellProcessTable {
   return @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-           Select-Object ProcessId, ParentProcessId, Name, CommandLine,
+           Select-Object ProcessId, ParentProcessId, Name, CommandLine, CreationDate,
                          ExecutablePath)
 }
 
