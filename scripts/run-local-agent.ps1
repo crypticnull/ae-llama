@@ -178,6 +178,9 @@ Set-Location $RepoRoot
 # reap below must never kill by name.
 . (Join-Path $PSScriptRoot 'lib\claude-procs.ps1')
 
+# Reading what the card is holding, for the teardown check below (17q).
+. (Join-Path $PSScriptRoot 'lib\gpu-detect.ps1')
+
 # --- locate the CLI -------------------------------------------------
 if (-not $ClaudePath) {
     $cmd = Get-Command claude -ErrorAction SilentlyContinue
@@ -407,6 +410,20 @@ Write-Log ('branch : ' + $Branch)
 Write-Log ('log    : ' + $logFile)
 Write-Log ('plan   : ' + $Iterations + ' iterations, ' + $PauseSec + 's pause')
 
+# The card as it was BEFORE the loop touched anything (17q / NEXT UP 1).
+#
+# Read here and not in the teardown because the whole point is a
+# comparison, and the only honest baseline is the one taken before any
+# pass could boot a backend. Recorded even when it is $null (no
+# nvidia-smi): a teardown that cannot compare must SAY so.
+$gpuFloor = Get-AellGpuMemoryMB
+if ($gpuFloor) {
+    Write-Log ('GPU    : floor ' + $gpuFloor.UsedMB + ' MiB used of ' +
+               $gpuFloor.TotalMB + ' before any pass ran')
+} else {
+    Write-Log 'GPU    : no nvidia-smi reading -- the teardown cannot verify the card'
+}
+
 # The stop time, computed once.
 #
 # The old check was `(Get-Date).Hour -eq $UntilHour`, which only matched
@@ -494,6 +511,138 @@ if (-not $NoDialogWatchdog) {
                'unblocks the host and keeps its changes.')
 }
 
+# ------------------------------------------------- backend teardown (17q)
+#
+# Stop a managed ComfyUI the night's passes booted (owner, 2026-09-09),
+# and then CHECK that stopping it worked.
+#
+# `comfy-install.js --boot` opts into setManagedDetached(true) on purpose,
+# so the backend outlives the script that started it and is there for the
+# NEXT pass. That is right during a run and wrong the moment the run ends.
+#
+# Measured 2026-09-09: this loop finished at 10:15 and the backend was
+# still holding 27,844 MiB of the card's 32,607 at 11:31, at 0 percent
+# utilisation, leaving about 4.7 GB for anything else. The owner found it
+# by trying to play a game. Nothing in the product does this to a user
+# (the panel spawns non-detached, so Windows' job object takes the child
+# when the panel goes, and unload plus reapOrphan sit on top) -- it is
+# the SCRIPT path, and the script path had no owner once the loop ended.
+#
+# The same rule the dialog watchdog follows: nothing this loop started
+# for its own convenience may outlive it on a machine nobody is driving.
+#
+# WHY THIS IS A FUNCTION, AND WHY IT VERIFIES. Two lessons, both paid for:
+#
+#  1. The 2026-09-09 fix was pasted into the -PreflightOnly early exit --
+#     the one path on which no pass has run and no backend can exist. It
+#     was never reachable from a real overnight loop, and stayed that way
+#     for a week while the queue's top item was "confirm it worked". One
+#     definition called from every exit is the only shape that cannot
+#     repeat that.
+#
+#  2. NEXT UP item 1 asked a PASS to confirm the teardown, which no pass
+#     can do: every unattended pass runs INSIDE the loop whose exit it is
+#     asked to observe, so the line it looks for cannot exist yet. The
+#     verdict has to be written by the thing being verified.
+#
+# The verdict keys on the managed backend's own PROCESS, not on a memory
+# threshold, because this loop leaves After Effects RUNNING by design (a
+# cold launch costs the next pass minutes, and closing the dirty scratch
+# project raises a modal that blocks the pass after it). So the card is
+# legitimately not back at its floor when the loop ends, and a threshold
+# would either cry wolf about AE or stay silent about a 27 GB ComfyUI.
+# The delta is logged as information; the assertion is presence.
+function Stop-AellLoopBackend {
+    param($Floor)
+
+    # The managed vendor root, as the driver spells it in a process path.
+    # If setManagedRoot ever moves out of %APPDATA%\AE-Llama\vendor\comfy,
+    # this fragment moves with it -- a check that silently matches nothing
+    # is exactly the failure mode being fixed here, so it is asserted by
+    # tests/test-loop-teardown.js against scripts/lib/comfy-managed.js.
+    $fragment = 'AE-Llama\vendor\comfy'
+
+    $before = Get-AellGpuMemoryMB
+    $saidNone = $false
+    try {
+        $stopOut = & node (Join-Path $RepoRoot 'scripts\comfy-install.js') --stop 2>&1
+        $said = @($stopOut) | Where-Object {
+            [string]$_ -match 'stopped the managed|no managed backend found'
+        }
+        if ($said) {
+            foreach ($line in $said) {
+                Write-Log ('Backend: ' + [string]$line)
+                if ([string]$line -match 'no managed backend found') {
+                    $saidNone = $true
+                }
+            }
+        } else {
+            Write-Log 'Backend: --stop said nothing recognisable; check by hand.'
+        }
+    } catch {
+        Write-Log ('Could not stop the managed backend: ' + $_.Exception.Message)
+    }
+
+    # --- and now the part that makes it a verdict rather than a hope ---
+    $after = Get-AellGpuMemoryMB
+    $left = @(Get-AellGpuProcesses -PathFragment $fragment)
+
+    if (-not $after) {
+        Write-Log ('Backend: card NOT VERIFIED -- no nvidia-smi reading. ' +
+                   'Check by hand that no AE-Llama python holds VRAM.')
+        return
+    }
+
+    if ($before) {
+        $freed = $before.UsedMB - $after.UsedMB
+        Write-Log ('GPU    : ' + $before.UsedMB + ' -> ' + $after.UsedMB +
+                   ' MiB used of ' + $after.TotalMB + ' (freed ' + $freed + ')')
+    } else {
+        Write-Log ('GPU    : ' + $after.UsedMB + ' MiB used of ' +
+                   $after.TotalMB + ' after the stop')
+    }
+    if ($Floor) {
+        # Usually positive, because After Effects is still running on
+        # purpose. Logged so a morning reader can see the shape of what
+        # is left rather than guess -- and worded for BOTH signs: the
+        # first real run came out 698 MiB UNDER its own floor (the loop
+        # started with a previous night's backend already on the card),
+        # and "-698 MiB above it" is not a sentence anyone should have to
+        # parse at 8am.
+        $delta = $after.UsedMB - $Floor.UsedMB
+        if ($delta -ge 0) {
+            Write-Log ('GPU    : floor was ' + $Floor.UsedMB + ' MiB; ' +
+                       $delta + ' MiB still held above it (AE is still ' +
+                       'running by design)')
+        } else {
+            Write-Log ('GPU    : floor was ' + $Floor.UsedMB + ' MiB; the ' +
+                       'card is ' + [Math]::Abs($delta) + ' MiB BELOW the ' +
+                       'floor now -- something was already on it at launch')
+        }
+    }
+
+    if ($left.Count -eq 0) {
+        Write-Log 'Backend: card is back -- no AE-Llama process left on the GPU.'
+        return
+    }
+
+    # The loud case. Two different bugs land here and the log must say
+    # which: --stop reporting nothing to stop while a process is plainly
+    # on the card is the PID RECORD not surviving (measured 2026-09-06,
+    # see scripts/lib/comfy-managed.js), not a failed kill.
+    if ($saidNone) {
+        Write-Log ('Backend: STILL ON THE CARD and --stop found no record ' +
+                   'to stop -- the managed PID record did not survive.')
+    } else {
+        Write-Log 'Backend: STILL ON THE CARD after --stop -- the kill did not take.'
+    }
+    foreach ($p in $left) {
+        Write-Log ('Backend:   pid ' + $p.ProcessId + '  ' + $p.Path)
+    }
+    Write-Log ('Backend: the owner wakes up to a held GPU. Stop it by hand: ' +
+               'node scripts\comfy-install.js --stop')
+}
+
 # --- preflight: can a pass WRITE? ------------------------------------
 #
 # 2026-09-08: a full night's loop was started and every pass came back
@@ -546,40 +695,8 @@ if (-not $SkipPreflight) {
         Write-Log 'Preflight OK -- passes can write.'
         if ($PreflightOnly) {
             Write-Log 'PreflightOnly: not starting passes. Environment is good.'
-            # Stop a managed ComfyUI the night's passes booted (owner, 2026-09-09).
-#
-# `comfy-install.js --boot` opts into setManagedDetached(true) on purpose,
-# so the backend outlives the script that started it and is there for the
-# NEXT pass. That is right during a run and wrong the moment the run ends.
-#
-# Measured 2026-09-09: this loop finished at 10:15 and the backend was
-# still holding 27,844 MiB of the card's 32,607 at 11:31, at 0 percent
-# utilisation, leaving about 4.7 GB for anything else. The owner found it
-# by trying to play a game. Nothing in the product does this to a user
-# (the panel spawns non-detached, so Windows' job object takes the child
-# when the panel goes, and unload plus reapOrphan sit on top) -- it is
-# the SCRIPT path, and the script path had no owner once the loop ended.
-#
-# The same rule the dialog watchdog above follows: nothing this loop
-# started for its own convenience may outlive it on a machine nobody is
-# driving. --stop verifies the recorded PID is a live ComfyUI before
-# killing anything and exits 0 with "no managed backend found" when the
-# passes never booted one, so this is safe either way.
-try {
-    $stopOut = & node (Join-Path $RepoRoot 'scripts\comfy-install.js') --stop 2>&1
-    $said = @($stopOut) | Where-Object {
-        [string]$_ -match 'stopped the managed|no managed backend found'
-    }
-    if ($said) {
-        foreach ($line in $said) { Write-Log ('Backend: ' + [string]$line) }
-    } else {
-        Write-Log 'Backend: --stop said nothing recognisable; check by hand.'
-    }
-} catch {
-    Write-Log ('Could not stop the managed backend: ' + $_.Exception.Message)
-}
-
-Remove-Item -Path $styleFile -Force -ErrorAction SilentlyContinue
+            Stop-AellLoopBackend -Floor $gpuFloor
+            Remove-Item -Path $styleFile -Force -ErrorAction SilentlyContinue
             if ($watchdog) {
                 try {
                     Stop-Job -Job $watchdog -ErrorAction Stop
@@ -610,6 +727,10 @@ Remove-Item -Path $styleFile -Force -ErrorAction SilentlyContinue
         Write-Log ('  & "' + $ClaudePath + '" -p ' +
                    $(if ($claudeFlags.Count) { ($claudeFlags -join ' ') + ' ' }
                      else { '' }) + '"write ok.txt containing OK"')
+        # No pass ran, so there should be nothing to stop -- but a
+        # PREVIOUS night's detached backend can still be on the card, and
+        # this is the one exit that used to leave without looking.
+        Stop-AellLoopBackend -Floor $gpuFloor
         if ($watchdog) {
             try {
                 Stop-Job -Job $watchdog -ErrorAction Stop
@@ -889,6 +1010,10 @@ for ($i = 1; $i -le $Iterations; $i++) {
 
     Start-Sleep -Seconds $PauseSec
 }
+
+# The real exit, and the one that matters: the passes are done and the
+# machine is about to be the owner's again.
+Stop-AellLoopBackend -Floor $gpuFloor
 
 if ($watchdog) {
     # The job holds no state worth keeping; it exists only while the

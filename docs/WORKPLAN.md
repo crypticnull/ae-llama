@@ -51,7 +51,8 @@ every pass and finished work costs the same context as live work.
 
 | # | item | where | needs | bumps |
 |---|---|---|---|---|
-| 1 | **Make the loop verify its OWN teardown; a pass cannot.** — rewritten 2026-09-16 after a pass found the item as written is unrunnable. It said "check this morning's log for a `Backend:` line", but EVERY unattended pass runs INSIDE the loop whose exit it is being asked to observe, so the line cannot exist yet; and the only completed loop since the fix landed (2026-09-09) was already running when it landed, so no log carries it. Attempted and blocked 2026-09-16 (loop pid alive, log at pass 1 of 40). The item is now: have `run-local-agent.ps1` assert after `--stop` that the card actually came back (one `nvidia-smi` read, compared against the boot-time floor it already knows) and log the delta, so the verdict is written by the thing being verified. See §17q and §20e, which is the same shape. | §17q | nothing | no |
+| 1 | ~~**Make the loop verify its OWN teardown; a pass cannot.**~~ **DONE 2026-09-16.** And the reason no log ever carried a `Backend:` line was worse than "the loop was already running": the 2026-09-09 fix was pasted INSIDE the `-PreflightOnly` early exit, the one path on which no pass has run and no backend can exist, so it was unreachable from a real overnight loop for a week. One `Stop-AellLoopBackend` now sits at top level and is called from all three exits, reads the card before and after `--stop`, and writes the verdict itself. Verified by running the real exit path twice (`-Iterations 0`): it killed a live backend (pid 50788, 4304 -> 3606 MiB) and then reported the empty case. Guarded by `tests/test-loop-teardown.js`. See §17q. | §17q | nothing | no |
+| 1a | **`stop-local-agent.ps1` kills the loop and leaves the backend on the card** — the same 17q symptom, reached from the path the OWNER actually uses. The loop only tears the backend down on its own exits; a `Stop-Process` has no `finally`, so the hand-stop the detach message tells him to run (`To stop it: ... scripts\stop-local-agent.ps1`) is a silent 27 GB leak. Grep confirms the word `comfy` appears ZERO times in its 111 lines. Fix: call the same `Stop-AellLoopBackend` verdict from there. Extend `tests/test-loop-teardown.js` to cover both scripts. | §17q-b | nothing | no |
 | 2 | ~~**Reserve VRAM for the desktop and After Effects before sizing the chat model.**~~ **DONE 2026-09-15 (0.12.18).** The reserve is in `planHandoff` and now gates `Llama.start` too (`Tiers.planChatLoad`), which had no arithmetic at all. The AMOUNT is still provisional and comes from item 3 — two constants, one line each, in `tiers.js`. What it does NOT touch: `recommendChat`/`recommendGen`, i.e. the tier table, which §16f reserves for the owner. See §16g. | §16b | AE, chat model | yes |
 | 3 | **BLOCKED 2026-09-16 on a rule conflict - see §16b BLOCKER, it needs one line from the owner.** ~~Measure the §16b reserve on the owner's four real projects~~ — copies only, originals hashed before and after, close without saving. The exact eight-step procedure is in §16b; follow it to the letter. Paths are in the git-ignored `local/real-projects.json` and must never be committed. Nothing else loaded on the card while measuring. | §16b | AE | no |
 | 4 | ~~**fp8 Wan 2.2 5B as a second entry, then MEASURE it.**~~ **DONE 2026-09-16 (0.12.19).** There is no fp8 FILE of the 5B; shipped as a load-time `weight_dtype` cast instead, zero extra download. 24 314 MiB vs 26 187 at the authored size, 16 834 vs 21 536 at 704x480. **The gate did not move - §18 P7a is still open.** Full table in §18 P7c step 1; follow-ups in step 1a. The §18 P10 pattern: the shipped Wan graph with the diffusion filename swapped and nothing else. Cheapest route to a video option under 32 GB. | §18 P7c step 1 | backend, disk | yes |
@@ -6229,10 +6230,69 @@ driving. `--stop` verifies the recorded PID is a live ComfyUI before
 killing anything and exits 0 saying `no managed backend found` when the
 passes never booted one, so it is safe on every path.
 
-**Not yet verified.** The teardown has never run at the end of a real
-overnight loop. That is NEXT UP item 1: the morning log must carry a
-`Backend:` line, and the card must be free. Until a night has shown it,
-this is a fix that has only been reasoned about.
+**VERIFIED 2026-09-16 (local session) — and the fix was in the wrong
+branch the whole time.**
+
+The paragraph that used to sit here said the teardown "has never run at
+the end of a real overnight loop" and asked a pass to check the morning
+log for a `Backend:` line. It could never have found one. The `--stop`
+call landed **inside the `if ($PreflightOnly)` early exit** — the single
+path on which no pass has run and therefore no backend can exist. (It was
+inserted next to the `Remove-Item $styleFile` of that exit, which is a
+teardown, just not this one's.) A week of "confirm it worked" sat on top
+of code no overnight loop could reach.
+
+Two properties replace it, because one without the other is how this
+happened:
+
+1. **One definition, called from every exit.** `Stop-AellLoopBackend` is
+   a top-level function in `run-local-agent.ps1`, called at the
+   `-PreflightOnly` exit, the PREFLIGHT FAILED exit and the real end of
+   the loop. The two exits BEFORE it (the WMI detach handoff, and "CLI
+   not found") can have no backend, so they are exempt — and the test
+   enforces exactly that boundary.
+2. **The loop writes its own verdict.** A pass cannot do this: every
+   unattended pass runs INSIDE the loop whose exit it is asked to
+   observe. Worth naming as a category — *a check a pass performs on the
+   loop that contains it is not a check, it is a blocked item that looks
+   takeable* — because this one looked takeable for a week.
+
+The verdict keys on the managed backend's own PROCESS, not a memory
+threshold, because the loop leaves After Effects RUNNING by design. The
+card is legitimately above its floor at loop end, so a threshold would
+either cry wolf about AE or stay silent about a 27 GB ComfyUI. The delta
+is logged as information; the assertion is presence, and the two failures
+are distinguished: `STILL ON THE CARD after --stop` (the kill did not
+take) versus `STILL ON THE CARD and --stop found no record` (the
+2026-09-06 PID-record bug, which is a different fix).
+
+**Measured on the real exit path, twice** (`-Detached -SkipPreflight
+-Iterations 0`, which runs the whole script and takes zero passes, so it
+touches no git):
+
+    GPU    : floor 4304 MiB used of 32607 before any pass ran
+    Backend: [info] stopped the managed backend (pid 50788).
+    GPU    : 4304 -> 3606 MiB used of 32607 (freed 698)
+    Backend: card is back -- no AE-Llama process left on the GPU.
+
+then, with nothing left to stop:
+
+    Backend: [info] no managed backend found to stop (...)
+    Backend: card is back -- no AE-Llama process left on the GPU.
+
+**The driver fact this had to be built around.** `nvidia-smi
+--query-compute-apps=used_memory` answers the literal string `[N/A]` for
+**every** process on this machine (driver 616.56, RTX 5090, WDDM) — per-
+process VRAM does not exist here. A teardown check written against that
+column is silent by construction, and silence reads like success. Only
+two columns are trustworthy: `memory.used` for the device, and the
+process LIST. `Get-AellGpuMemoryMB` / `Get-AellGpuProcesses` in
+`scripts/lib/gpu-detect.ps1` stick to those, and return `$null` rather
+than `0` when there is no reading — `0` would read as an empty card.
+
+Guarded by `tests/test-loop-teardown.js`, which asserts the placement
+(not merely the existence) of the teardown, mutation-checked by deleting
+the final call.
 
 Worth keeping: `scripts/lib/comfy-managed.js:15` already recorded
 "a backend was booted, the owner went to play a game, and --stop was a
@@ -6240,6 +6300,35 @@ no-op" from 2026-09-06. That was the PID RECORD not surviving, and it was
 fixed. This was the same symptom from the other end — the record was fine
 and nothing ever called stop. The same sentence describes both, which is
 why the fix has to be a caller, not another guard.
+
+## 17q-b. Stopping the loop BY HAND leaves the backend on the card (filed 2026-09-16, local session)
+
+Found while verifying 17q, and it is the same bug reached from the path
+the OWNER uses rather than the one a loop takes.
+
+`run-local-agent.ps1` now tears the backend down on all three of its own
+exits. None of those is how a night gets cut short. Its own detach
+message says:
+
+    To stop it: powershell -ExecutionPolicy Bypass -File scripts\stop-local-agent.ps1
+
+and that script `Stop-Process`es the loop and its passes. A killed
+process runs no teardown -- PowerShell has no `finally` on a
+`Stop-Process` from outside -- so the detached ComfyUI survives with the
+whole card, which is precisely the 27,844-MiB morning of 17q. Measured
+2026-09-16: the word `comfy` appears **zero** times in all 111 lines of
+`stop-local-agent.ps1`.
+
+**The fix is small because the verdict already exists.** Move
+`Stop-AellLoopBackend` into `scripts/lib/` (or dot-source the loop's copy)
+and call it from `stop-local-agent.ps1` after the processes are down,
+then widen `tests/test-loop-teardown.js` from one script to both. The
+test already knows the shape of the assertion; it just does not know
+there are two callers.
+
+**Why it is filed rather than fixed in the same pass:** one item per
+pass, and this is a second caller with its own exit paths, not a line of
+the one just verified. It is takeable with nothing but the repo.
 
 ## 17l-b. `comfy-node-defs.json` is a 52-class DEMAND HARVEST that reads like a full snapshot, and asking it "does node X exist" gets a false NO (filed 2026-09-16, local session)
 

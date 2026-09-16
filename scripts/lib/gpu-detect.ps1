@@ -47,3 +47,91 @@ function Get-AellCudaVersionFromSmi {
   }
   return ''
 }
+
+# --- what the card is HOLDING ------------------------------------------
+#
+# Added 2026-09-16 for WORKPLAN 17q / NEXT UP item 1: the overnight loop
+# must verify its own teardown, and "the card came back" is the only
+# verdict that matters. Kept here for the reason the file already gives
+# -- one place to get nvidia-smi wrong.
+#
+# Trap 3, measured on this machine 2026-09-16 (driver 616.56, RTX 5090,
+# WDDM): `--query-compute-apps=used_memory` returns the literal string
+#
+#     [N/A]
+#
+# for EVERY process, including the 27 GB ComfyUI of 17q. Per-process VRAM
+# is simply not available under WDDM, so a check written against that
+# column reports nothing at all and reads like a clean bill of health.
+# Only two numbers are trustworthy: the DEVICE total-used (memory.used),
+# and the process LIST. Both helpers below stick to those.
+
+function Get-AellGpuMemoryMB {
+  <#
+    Total VRAM in use on GPU 0, in MiB, plus the card's capacity.
+
+    Returns $null -- not 0 -- when there is no nvidia-smi, when it fails,
+    or when it answers something unparseable. All three are legitimate
+    (an AMD machine, a container, a driver mid-update) and none is an
+    error a caller should die on. A verdict built on this must say
+    "unknown" when it gets $null, never "fine": 0 would read as an empty
+    card, which is the one answer that is certainly wrong.
+  #>
+  $smi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+  if (-not $smi) { return $null }
+  $out = $null
+  try {
+    $out = & $smi.Source --query-gpu=memory.used,memory.total `
+                         --format=csv,noheader,nounits
+  } catch { return $null }
+  $line = @($out | Where-Object { [string]$_ -match '\d' })[0]
+  if (-not $line) { return $null }
+  $parts = ([string]$line).Split(',')
+  if ($parts.Count -lt 2) { return $null }
+  $used = 0
+  $total = 0
+  if (-not [int]::TryParse($parts[0].Trim(), [ref]$used)) { return $null }
+  if (-not [int]::TryParse($parts[1].Trim(), [ref]$total)) { return $null }
+  return @{ UsedMB = $used; TotalMB = $total }
+}
+
+function Get-AellGpuProcesses {
+  <#
+    The processes the driver says are on the card, optionally only those
+    whose executable path contains -PathFragment.
+
+    No used_memory column -- see trap 3. What this answers is presence,
+    which is the honest question for a teardown check: the managed
+    backend either still has a process on the GPU or it does not.
+
+    Returns an EMPTY array when nvidia-smi is missing or fails, so a
+    caller must not read "none found" as proof on its own; pair it with
+    Get-AellGpuMemoryMB, which returns $null in the same conditions.
+  #>
+  param([string]$PathFragment = '')
+
+  $smi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+  if (-not $smi) { return @() }
+  $out = $null
+  try {
+    $out = & $smi.Source --query-compute-apps=pid,process_name `
+                         --format=csv,noheader
+  } catch { return @() }
+  $found = New-Object System.Collections.Generic.List[object]
+  foreach ($raw in @($out)) {
+    $line = ([string]$raw).Trim()
+    if (-not $line) { continue }
+    $comma = $line.IndexOf(',')
+    if ($comma -lt 1) { continue }
+    $pid_ = 0
+    if (-not [int]::TryParse($line.Substring(0, $comma).Trim(), [ref]$pid_)) {
+      continue
+    }
+    # A Windows path can hold commas, so split ONCE on the first one.
+    $exe = $line.Substring($comma + 1).Trim()
+    if ($PathFragment -and
+        $exe.ToLower().IndexOf($PathFragment.ToLower()) -lt 0) { continue }
+    $found.Add(@{ ProcessId = $pid_; Path = $exe })
+  }
+  return $found.ToArray()
+}
