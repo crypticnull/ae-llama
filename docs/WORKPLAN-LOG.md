@@ -26711,3 +26711,27 @@ So nothing about the exit path was silent in the sense filed. The real failures 
 - `test-source-control-chars` is 3 of 4 FAILED **on clean HEAD as well**. It scans gitignored `local/attn-sweep.txt` and `local/ck7a-sweep.txt`, which carry ANSI escapes from the 7a/7c sweeps. That is local-only (CI has no `local/`). Filed as NEXT UP 2a.
 
 **Needs a human eye:** the loop running now (PID 50256, started 09:32) loaded the old script. It gets none of this until it is restarted, same as 26618.
+
+## 2026-09-16 (local session) - test-source-control-chars scans only what git would commit; local/ sweep output no longer turns it red
+
+**Item:** NEXT UP 2a - `tests/test-source-control-chars.js` failed 3 of 4 on this machine because it walked gitignored `local/` (ANSI-coloured sweep output in `local/attn-sweep.txt`, `local/ck7a-sweep.txt`), while CI stayed green.
+
+**Daytime pass (09:47).** CLAUDE.md makes AE, the self-test harness, the full Node suite, the backend and GPU reads ask-first by day, and nobody is watching to ask. This item needed none of them, so I took it without them. **Harness NOT run**, since nothing under `extension/` changed. **No bump.**
+
+### What changed (tests only)
+
+- The scan list is now `git ls-files -z --cached --others --exclude-standard`. It covers tracked files, plus untracked files that are not ignored, so a new file is still checked before it is added. `SKIP_DIRS` and `EXTS` still apply, deduplicated, and files deleted in the worktree are skipped. The old directory walk runs only when git is unavailable, and the first assertion names which source it used.
+- A new assertion pipes the scanned list through `git check-ignore --no-index --stdin` and requires an empty answer (exit 1). It asks git rather than hard-coding `local/`.
+- A header paragraph records why this changed.
+
+### Verified
+
+- On this machine with `local/` untouched: 3 of 4 FAILED -> **3 checks passed** (291 files, down from 339 walked).
+- Mutation 1: I fed the old walk list through the new code, and it fails with `got: local/AE_LLAMA_SDXL_FP8_T2I_V1.json`.
+- Mutation 2: an untracked, non-ignored `tests/_ctl_probe_tmp.txt` holding a 0x08 byte is still reported. I removed it afterwards.
+- `test-es3-ternary` is still green.
+- Hit on the way: my first write of the edit went through a heredoc into a JS template literal and landed REAL newlines and a NUL where the `\n`/`\0` escapes belonged. It was caught at once as a SyntaxError and repaired. That is the exact failure this test's header describes.
+
+### Found, filed
+
+- **NEXT UP 2b:** `test-probe-backend-url.js`, `test-probe-bundle.js` and `test-probe-reachability.js` each walk `scripts/` with `readdirSync` and read gitignored `scripts/web/` (five node-pack `.js` assets on this machine) and `scripts/__pycache__/`. All three are green today by luck, not by design.
