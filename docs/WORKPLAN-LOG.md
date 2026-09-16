@@ -26890,3 +26890,28 @@ Tests run, all exit 0: prompt-routing, chat-probe, prompt-triggers, prompt-rules
 ### Found, filed (NEXT UP 13a)
 
 The hard-trim retry in `main.js` is broken in the panel. `runRound(system, round)` gets `round` as a number, and main.js runs in strict mode, so `round.forceTinyContext = true` throws `Cannot create property 'forceTinyContext' on number '0'` inside the llama callback. A context-400 then neither retries nor calls `finish()`, and the panel stays on "Thinking…". chat-probe.js is immune because its `round` is an object. I confirmed the throw with node and have not seen it in a panel. I did not fix it here (one item per pass). 12a now also asks for a 2+ round "auto" send.
+
+## 2026-09-16 (local session) - main.js hard-trim retry no longer throws under strict mode; first executed test of sendMessage (NEXT UP 13a)
+
+**Item:** NEXT UP 13a (§24c). This pass started at 10:13 EDT, which is DAYTIME. As with the four earlier passes today, I followed CLAUDE.md's daytime rule over the loop brief's step 3. I did NOT run `scripts/run-ae-selftest.ps1`, the full Node suite, or anything on the GPU, and I did not launch or touch After Effects. Rows skipped above 13a: 12a (AE plus chat model), 7b-2/7d (backend), 10 (chat model), and the owner rows. 13a was the first row whose needs are "nothing".
+
+**Harness: NOT RUN (daytime).** It would not have exercised this code anyway, because the CLI runner never loads main.js.
+
+### Changed
+
+- `extension/js/main.js` (`sendMessage`): new per-send `var forceTinyContext = false`, next to `parseRetried`. `runRound` now reads and sets that variable instead of `round.forceTinyContext`. `round` is a number, and in strict mode setting a property on it threw `TypeError: Cannot create property 'forceTinyContext' on number '0'` inside the llama callback. So a context 400 neither retried nor called `finish()`, and the panel stayed busy on "Thinking…". The flag now lasts for the whole send across rounds, like chat-probe's stats object. Before, it was meant to be per round.
+- `tests/test-main-context-retry.js` (new, CI picks it up via its `test-*.js` glob): main.js had no executed coverage, so this test slices `sendMessage`'s source out of main.js and RUNS it in a strict-mode `new Function`, with stubs for what it closes over. The llama stub answers each call from a script and calls back synchronously, which is the harsher case. It checks two scenarios:
+  - a 400 followed by a good reply: no throw, 2 chat calls, budget 40000 then 1, the "retrying" notice, the reply is shown, and `finish` runs once;
+  - three 400s: no throw, exactly 2 calls (one retry, not a loop), a red "Model error", and the panel is released.
+  - **Before the fix it failed 10 of 13 checks with the exact TypeError. After the fix it passes 13 of 13.**
+
+Also run, all exit 0: chat-probe, prompt-routing, history-trim, tool-result-budget, es3-ternary, source-control-chars.
+
+### Decisions I made unattended
+
+- **No bump, even though extension/ changed.** The brief's two bump rules conflict here: "bump exactly when extension/ changed" versus "bump when you push a fix you VERIFIED in real AE". I could not verify in a panel during the day. Bumping now would also ship NEXT UP 12 and 13's main.js changes, which have never loaded in CEP. They sit on the default send path (`promptOptsFor`), so if they throw in CEP, every chat breaks for test users during the owner's working day. I folded the bump into 12a instead: that overnight pass sends real messages, forces a context 400, and bumps patch if both work. Its `bumps` column now reads yes.
+- The retry flag's lifetime is now per SEND, not per round. The intent was always "one retry", and per send also matches chat-probe.js, whose `round` object lives for the whole turn. If a later round in the same send also overflows, it now gets a red error instead of a second trimmed retry. I judged that the honest outcome, since the first trim already dropped to the current exchange.
+
+### Needs a human eye
+
+Nothing new. 12a now carries the panel check and the bump.

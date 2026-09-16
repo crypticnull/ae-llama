@@ -641,6 +641,11 @@
     busy = true;
     cancelRequested = false;
     var parseRetried = false;   // one compact-retry per send on truncation
+    // One hard-trim retry per send on a context 400. A per-send var, not
+    // a property of `round`: round is a NUMBER here, and in strict mode
+    // `round.forceTinyContext = true` threw inside the llama callback and
+    // left the panel busy (§24c, tests/test-main-context-retry.js).
+    var forceTinyContext = false;
     // ONE rollback per user request, across all its rounds. See
     // executeCommands: a second one turns a deterministic failure into
     // undo/retry/undo until maxRounds.
@@ -708,7 +713,7 @@
       // rounds ran with one turn of memory and nobody knew.
       var hb = global.Tools.historyBudget(s.ctxSize, system.length);
       var histBudget = hb.chars;
-      if (round.forceTinyContext) {
+      if (forceTinyContext) {
         // The reactive path: a context 400 got through anyway (one huge
         // entry, or the estimate lost). Keep only the current exchange.
         histBudget = 1;
@@ -795,8 +800,8 @@
             // grounded message, not llama-server's raw HTTP 400, is
             // what the user sees if that fails too.
             if (/context|exceed|too (?:long|large|many)/i.test(
-                  err.message) && !round.forceTinyContext) {
-              round.forceTinyContext = true;
+                  err.message) && !forceTinyContext) {
+              forceTinyContext = true;
               appendMsg("info", "The request outgrew the model's " +
                 "context window — retrying with older turns trimmed.");
               runRound(system, round);
