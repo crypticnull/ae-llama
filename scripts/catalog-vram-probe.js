@@ -16,12 +16,13 @@
  *     -> its workflowTemplate + every weight the template names, on disk
  *     -> extension/js/settings.js + comfy.js + tools.js  (the real panel)
  *     -> a REAL local ComfyUI, real weights, real GPU
- *     -> nvidia-smi streaming at 250 ms THROUGHOUT
+ *     -> nvidia-smi streaming at 25 ms THROUGHOUT (--sample-ms)
  *     -> idle floor, peak, delta, wall clock, release floor
  *
  *   node scripts/catalog-vram-probe.js --list          # no GPU work at all
  *   node scripts/catalog-vram-probe.js --entry krea2
  *   node scripts/catalog-vram-probe.js --entry minimax-h3 --duration 2
+ *   node scripts/catalog-vram-probe.js --entry sdxl-fp8 --repeat 4   # max of 4
  *   node scripts/catalog-vram-probe.js                 # every measurable one
  *
  * Three things it does deliberately, each learned from an earlier pass:
@@ -37,10 +38,14 @@
  *
  *  2. THE WITNESS IS ONE STREAMING PROCESS, NOT A TIMER. comfy-probe.js
  *     samples with execFile every 4 s, which is fine for "did it use the
- *     GPU" and useless for a peak: a VAE decode spike is shorter than one
- *     sample. `nvidia-smi -lms 250` is a single child that prints a reading
- *     four times a second, so the peak is a measurement rather than a
- *     coincidence of phase.
+  *     GPU" and useless for a peak: a VAE decode spike is shorter than one
+ *     sample. `nvidia-smi -lms` is a single child that prints a reading
+ *     every few milliseconds. It was 250 ms until NEXT UP 7e (2026-09-16):
+ *     sdxl-fp8's 1024x1024 decode spike is shorter than THAT, so four
+ *     identical runs published 4 730 / 6 906 / 6 906 / 4 826 MiB by phase
+ *     alone. Now 25 ms by default (measured ~40 readings a second on the
+ *     5090's driver), and `--repeat N` runs each entry N times and
+ *     reports the MAX: a sampler can miss a peak but never invent one.
  *
  *  3. IT NEVER TOUCHES AFTER EFFECTS. `import: false`. The catalog question
  *     is about the card; putting a file into the user's open project is a
@@ -80,6 +85,11 @@ const OPT = {
   width: argValue("--width", null),
   height: argValue("--height", null),
   duration: argValue("--duration", null),
+  // The witness cadence during a generation (7e). The idle/release floor
+  // keeps 250 ms: it wants stillness over seconds, not spikes.
+  sampleMs: Math.max(10, parseInt(argValue("--sample-ms", "25"), 10)),
+  // Runs per entry; the published figure is the max over them (7e).
+  repeat: Math.max(1, parseInt(argValue("--repeat", "1"), 10)),
   timeout: parseInt(argValue("--timeout", "1800"), 10),
   // How long to wait for the card to stop moving, and how still is still.
   settleSec: parseInt(argValue("--settle", "45"), 10),
@@ -201,6 +211,21 @@ function verdict(ok, label, detail) {
 
 const measurements = [];
 
+/* One row per entry measured, carrying curve.maxOverRuns of its runs. Only
+ * when --repeat asked for more than one: a single run's max is itself. */
+function maxRows() {
+  if (OPT.repeat < 2) return [];
+  const names = [];
+  measurements.forEach(function (m) {
+    if (names.indexOf(m.name) === -1) names.push(m.name);
+  });
+  return names.map(function (n) {
+    return { name: n, max: curve.maxOverRuns(measurements.filter(function (m) {
+      return m.name === n;
+    })) };
+  });
+}
+
 function writeTranscript() {
   const dir = path.join(ROOT, "logs");
   try { fs.mkdirSync(dir, { recursive: true }); } catch (e) {}
@@ -222,6 +247,17 @@ function writeTranscript() {
                          m.minVramGB].join(" | ") + " |");
     });
     lines.push("");
+    const maxes = maxRows();
+    if (maxes.length) {
+      lines.push("## max over runs (publish this, 7e)", "",
+                 "| entry | runs | max delta MiB | max peak MiB | deltas | spread MiB |",
+                 "|---|---|---|---|---|---|");
+      maxes.forEach(function (x) {
+        lines.push("| " + [x.name, x.max.runs, x.max.delta, x.max.peak,
+                           x.max.deltas.join(" / "), x.max.spread].join(" | ") + " |");
+      });
+      lines.push("");
+    }
   }
   /* The samples, kept. This probe streamed nvidia-smi at 250 ms from the
    * day it was written and then reported one number off it; when §18 P7c
@@ -235,10 +271,11 @@ function writeTranscript() {
   if (curved.length) {
     lines.push("## curve", "",
                "`t_ms:MiB`, one reading per nvidia-smi sample (nominally " +
-               "250 ms). A fall of " + curve.DROP_MB + "+ MiB counts as a " +
+               OPT.sampleMs + " ms). A fall of " + curve.DROP_MB + "+ MiB counts as a " +
                "release; see `scripts/lib/vram-curve.js`.", "");
     curved.forEach(function (m) {
-      lines.push("### " + m.name, "", "- shape: " + m.shape);
+      lines.push("### " + m.name + (OPT.repeat > 1 ? " run " + (m.run + 1) : ""),
+                 "", "- shape: " + m.shape);
       curve.humps(m.samples).forEach(function (h, i) {
         lines.push("- hump " + (i + 1) + ": peak " + h.peakMB + " MiB at " +
                    (h.peakT / 1000).toFixed(1) + "s, then " + h.troughMB +
@@ -389,12 +426,14 @@ function readCard(cb) {
   });
 }
 
-/* One streaming nvidia-smi, 250 ms. Returns a handle whose `samples` grows
- * for as long as it runs; `stop()` kills the child. */
-function startWitness() {
+/* One streaming nvidia-smi, every `ms` (default OPT.sampleMs). Returns a
+ * handle whose `samples` grows for as long as it runs; `stop()` kills
+ * the child. */
+function startWitness(ms) {
   const w = { samples: [], t0: Date.now(), proc: null, stopped: false };
   const p = spawn("nvidia-smi",
-    ["--query-gpu=memory.used", "--format=csv,noheader,nounits", "-lms", "250"]);
+    ["--query-gpu=memory.used", "--format=csv,noheader,nounits", "-lms",
+     String(ms || OPT.sampleMs)]);
   w.proc = p;
   let buf = "";
   p.stdout.on("data", function (d) {
@@ -452,7 +491,7 @@ function postFree(cb) {
 function settleFloor(label, cb) {
   postFree(function (err, status) {
     say("info", "POST /free -> " + (err ? err.message : "HTTP " + status));
-    const w = startWitness();
+    const w = startWitness(250);
     const need = 12;
     const deadline = Date.now() + OPT.settleSec * 1000;
     (function poll() {
@@ -536,10 +575,11 @@ function describeOutput(file, cb) {
 
 // ------------------------------------------------------------- one entry
 
-function measure(plan, done) {
+function measure(plan, run, done) {
   say("info", "");
   say("info", "=== " + plan.name + " (" + plan.label + ") via " +
-      plan.workflow + " ===");
+      plan.workflow + (OPT.repeat > 1
+        ? ", run " + (run + 1) + " of " + OPT.repeat : "") + " ===");
   say("info", "weights on disk: " + plan.onDiskMB + " MiB across " +
       plan.weights.length + " file(s)");
 
@@ -619,7 +659,7 @@ function measure(plan, done) {
 
           const files = (r.data && r.data.files) || [];
           describeOutput(files[0], function (geom) {
-            const m = { name: plan.name, workflow: plan.workflow,
+            const m = { name: plan.name, workflow: plan.workflow, run: run,
                         idle: idle, peak: peak, delta: delta,
                         seconds: seconds, minVramGB: plan.minVramGB,
                         onDiskMB: plan.onDiskMB, output: geom,
@@ -680,7 +720,13 @@ function finish() {
       say("row", m.name + ": delta " + m.delta + " MiB (" +
           (m.delta / 1024).toFixed(1) + " GiB), peak " + m.peak +
           ", idle " + m.idle + ", " + m.seconds + "s, output " +
-          (m.output || "?") + ", weights " + m.onDiskMB + " MiB");
+          (m.output || "?") + ", weights " + m.onDiskMB + " MiB" +
+          (OPT.repeat > 1 ? " (run " + (m.run + 1) + ")" : ""));
+    });
+    maxRows().forEach(function (x) {
+      say("row", "MAX " + x.name + ": delta " + x.max.delta + " MiB, peak " +
+          x.max.peak + " over " + x.max.runs + " run(s) " +
+          JSON.stringify(x.max.deltas) + ", spread " + x.max.spread + " MiB");
     });
   }
   const file = writeTranscript();
@@ -792,9 +838,12 @@ readCard(function (card) {
     }
     say("info", "measuring: " + todo.map(function (p) { return p.name; }).join(", "));
 
-    (function next(i) {
+    (function next(i, run) {
       if (i >= todo.length) { finish(); return; }
-      measure(todo[i], function () { next(i + 1); });
-    })(0);
+      measure(todo[i], run, function () {
+        if (run + 1 < OPT.repeat) next(i, run + 1);
+        else next(i + 1, 0);
+      });
+    })(0, 0);
   }
 });

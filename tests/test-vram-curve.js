@@ -105,6 +105,30 @@ eq(lines[0], "0:1 250:2", "seriesLines writes t_ms:MiB pairs");
 eq(curve.seriesLines(trace([1, 2, 3, 4, 5]), 2).join(" ").split(" ").length,
    5, "seriesLines keeps EVERY sample — the 250 ms cadence is the point");
 
+// ---------------------------------------------------------- maxOverRuns
+//
+// NEXT UP 7e. sdxl-fp8's four identical runs read 4 730 / 6 906 / 6 906 /
+// 4 826 MiB because a <250 ms VAE decode spike fell between samples in two
+// of them. Publishing any one run (or a mean) under-states the card.
+
+function runOf(values) {
+  const ss = trace(values);
+  return { delta: curve.peakOf(ss) - 2434, peak: curve.peakOf(ss), samples: ss };
+}
+const caught = runOf([2434, 7164, 7200, 9340, 7100, 2434]);  // sampled the spike
+const missed = runOf([2434, 7164, 7200, 7260, 7100, 2434]);  // stepped over it
+const mx = curve.maxOverRuns([missed, caught, missed]);
+eq(mx.delta, 6906, "maxOverRuns publishes the run that caught the spike");
+eq(mx.peak, 9340, "maxOverRuns carries the highest peak");
+eq(mx.bestRun, 1, "maxOverRuns names which run it was");
+eq(mx.runs, 3, "maxOverRuns counts the runs");
+eq(mx.spread, 2080, "maxOverRuns reports how far apart the runs landed");
+eq(curve.maxOverRuns([missed, missed]).delta, 4826,
+   "with no run catching it, the max is still the best lower bound");
+eq(curve.maxOverRuns([]), null, "maxOverRuns of no runs is null, not 0");
+eq(curve.maxOverRuns([{ delta: NaN, peak: 1 }, missed]).runs, 1,
+   "a run with no reading is not averaged in as a number");
+
 // ------------------------------------------------ the probe actually uses it
 
 /* Guard the wiring, not just the lib: the probe kept a peak-only report
@@ -122,6 +146,13 @@ assert(/"## curve"/.test(probe),
        "the transcript has a curve section");
 assert(/curve\.describe\(/.test(probe),
        "the console line states the shape while the run is still on screen");
+assert(/"--repeat"/.test(probe) && /curve\.maxOverRuns\(/.test(probe),
+       "--repeat exists and the probe reports the max over its runs (7e)");
+const lmsDefault = /argValue\("--sample-ms", "(\d+)"\)/.exec(probe);
+assert(lmsDefault && parseInt(lmsDefault[1], 10) < 250,
+       "the generation witness samples faster than 250 ms by default (7e)");
+assert(/String\(ms \|\| OPT\.sampleMs\)/.test(probe),
+       "startWitness streams at the configured cadence, not a literal 250");
 
 console.log(failed ? "\n" + failed + " FAILED" : "\nall passed");
 process.exit(failed ? 1 : 0);

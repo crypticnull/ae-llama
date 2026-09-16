@@ -27431,3 +27431,36 @@ SUPERSEDES: 25680,25700 -- that entry's whole-card "cold 5 050 / warm 4 672" rea
 **Filed:** NEXT UP 7e. `catalog-vram-probe.js` samples every 250 ms and misses short peaks, so any entry that ends in a decode may be published LOW. The fix belongs in the probe (the backend's own peak, or a faster sampler, plus a max over repeated runs), followed by re-reading the other image and LTX entries.
 
 Card back to 2 003 MiB, nothing listening on :8288, AE left running and untouched.
+
+## 2026-09-16 (local session) - the VRAM probe samples at 25 ms and takes the max over runs; krea2 republished 20 550 (NEXT UP 7e, §13a)
+
+**Item:** NEXT UP 7e. This was the first row with its needs met. Row 6 is still BLOCKED on the §16b owner line, and the rows above 7e are owner-only or done. Started 11:42 EDT, which is daytime. `run-local-agent.ps1` (PID 47376) is running, and a loop the owner started is the permission (17a), so I used AE, the backend and the GPU. About 4 minutes of GPU in total.
+
+**Harness: 770/770 PASSED** before the change, and 770/770 again after it.
+
+**Changed:**
+- `scripts/catalog-vram-probe.js`: the generation witness now streams `nvidia-smi -lms 25` by default (`--sample-ms`, floor 10). A 2 s check measured about 40 readings a second: 64 lines at 20 ms, 32 at 50 ms, 8 at 250 ms. The idle and release floor stays at 250 ms, because it looks for stillness over seconds. `--repeat N` runs each entry N times. The console prints a `MAX` row, and the transcript has a "max over runs" table.
+- `scripts/lib/vram-curve.js maxOverRuns`: a pure function returning max delta, max peak, which run it was, the per-run deltas, and the spread. A sampler can miss a peak but never invent one, so the max is the best lower bound.
+- `tests/test-vram-curve.js`: covers a caught spike against a missed one, all runs missing it, no runs, and a NaN run. It also wiring-checks `--repeat`, `maxOverRuns` and a default cadence under 250 ms.
+- `extension/js/version.js`: krea2 `measuredVramMB` 18848 -> 20550, with a REPUBLISHED comment, and measuredOn now names the sampler.
+
+**Why not the backend's own peak:** ComfyUI has no per-prompt torch peak (`/system_stats` only reports current free memory), so the fix is the faster sampler that the row allowed as the fallback.
+
+**Measured** (managed ComfyUI 0.34.0, shipped boot via `--boot`, whole card, seed 12345, 25 ms). Transcripts are `logs/catalog-vram-probe-2026-09-16T15-45-25.md` through `T15-48-58.md`.
+
+| entry | runs (delta MiB) | max | published | action |
+|---|---|---|---|---|
+| sdxl-fp8 | 6 906 / 6 688 / 6 784 (peaks 9 329 / 9 331 / 9 427) | 6 906 | 7 130 | none: the spike was caught 3 of 3 times (250 ms caught it 2 of 4) |
+| sd15 | 2 876 / 2 176 | 2 876 | 2 656 | none, see below |
+| sdxl | 9 370 / 9 408 | 9 408 | 9 472 | none |
+| krea2 | 20 550 / 20 000 (peaks 22 973 / 22 685) | 20 550 | 18 848 | **republished** |
+| ltx-small | 10 426 / 10 211 | 10 426 | 10 394 | none (+32 is noise) |
+| ltx-small-distilled | 8 602 / 8 416 | 8 602 | 8 637 | none |
+
+**Reading:** krea2's curve shows the pattern. It holds about 20 000 MiB while sampling, then its 1920x1080 VAE decode spikes to 22 973 and is back to 20 093 within 100 ms. Every earlier 250 ms reading missed that spike. The gate stays at 12 (it stands on the constrained run) and recommendFromGB stays at 24 (24 576 still covers it); test-model-catalog passes. sd15's +220 is not a rise of the job. In every invocation, run 1's idle floor read 2 423 and later runs read 2 641 to 2 685 on a freshly booted backend. The peak moved less than that, and the gap matches the offset exactly (2 656 + 2 643 = 5 299), so it was left alone.
+
+**Assumed / skipped:** the Wan and H3 entries were not re-read. The row did not list them, and their decodes last seconds, so a 250 ms sampler already sees those. The fresh-boot floor offset of about 220 MiB is noted here and not filed: it moves a delta by less than the settle tolerance of a typical gate step, and nothing is gated that close.
+
+**No bump, on purpose:** extension/ changed (version.js data only). The 7d precedent applies: a bump now would publish the main.js changes (12, 13, 13a) that have never loaded in a real panel. The krea2 number is added to 12a's carry list. Stubs pass: vram-curve, model-catalog, tiers, capability-doc, workflow-bundle, comfy-backend, es3-ternary.
+
+The card is back to about 2 000 MiB, with nothing listening on :8288 (the probe's `--boot` stopped what it started). AE was left running and untouched.

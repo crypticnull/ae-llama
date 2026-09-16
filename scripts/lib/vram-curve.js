@@ -151,5 +151,34 @@ function seriesLines(samples, perLine) {
   return lines;
 }
 
+/* The number to publish from N runs of one entry: the HIGHEST, never the
+ * mean or the last (NEXT UP 7e, 2026-09-16). sdxl-fp8's 1024x1024 VAE
+ * decode spikes ~2 100 MiB above its sampling plateau for less than one
+ * 250 ms sample, and four identical runs read delta 4 730, 6 906, 6 906,
+ * 4 826 depending on whether a sample landed in the spike. A sampler can
+ * only ever MISS a peak, never invent one, so every reading is a lower
+ * bound and the max over runs is the best of them. `spread` is how far
+ * apart the runs landed: a large one says the sampler is still missing
+ * something and more runs (or a faster -lms) are owed.
+ *
+ * runs: [{delta, peak, ...}] for ONE entry. Returns null for no runs. */
+function maxOverRuns(runs) {
+  const rs = (runs || []).filter(function (r) {
+    return r && typeof r.delta === "number" && !isNaN(r.delta);
+  });
+  if (!rs.length) return null;
+  let best = rs[0];
+  rs.forEach(function (r) { if (r.delta > best.delta) best = r; });
+  const deltas = rs.map(function (r) { return r.delta; });
+  return {
+    runs: rs.length,
+    delta: best.delta,
+    peak: rs.reduce(function (a, r) { return r.peak > a ? r.peak : a; }, 0),
+    bestRun: rs.indexOf(best),
+    deltas: deltas,
+    spread: best.delta - Math.min.apply(null, deltas)
+  };
+}
+
 module.exports = { DROP_MB, peakOf, humps, releaseBeforePeak, describe,
-                   seriesLines };
+                   seriesLines, maxOverRuns };

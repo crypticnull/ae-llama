@@ -297,16 +297,24 @@
         //
         // 14 s against the pre-ck 10 at the same room, one run each; inside
         // the 2x bar and published as read, not averaged away.
+        //
+        // REPUBLISHED 2026-09-16 (NEXT UP 7e): 18 848 -> 20 550. Every
+        // reading above came from a 250 ms sampler, and the 1920x1080 VAE
+        // decode spikes ~2 900 MiB over the sampling plateau for under
+        // 100 ms, so all of them missed it. Retaken on the shipped boot at
+        // 25 ms, two runs: 20 550 and 20 000 MiB (peaks 22 973 / 22 685),
+        // 8 s and 6 s. The higher is published. Gate and default do not
+        // move: 12 stands on the constrained run, 24 GB still covers it.
         kind: "image", sizeMB: null, minVramGB: 12, recommendFromGB: 24,
         constrainedFit: { roomMB: 4937, seconds: 14, identical: true,
                           on: "RTX 5090 ballasted to the room by scripts/vram-ballast.py, " +
                     "managed backend --disable-pinned-memory --use-ck-attention " +
                     "(0.12.34), 2026-09-16" },
         measured: true,
-        measuredVramMB: 18848, measuredSeconds: 8,
+        measuredVramMB: 20550, measuredSeconds: 8,
         measuredAt: "1920x1080 (the template's authored latent), seed 12345",
         measuredOn: "NVIDIA GeForce RTX 5090, ComfyUI 0.34.0 (managed), " +
-                    "2026-09-09",
+                    "nvidia-smi at 25 ms, 2026-09-16",
         workflowTemplate: "AE_LLAMA_KREA2_T2I_V1",
         files: ["krea2_turbo_int8_convrot.safetensors",
                 "qwen3vl_4b_fp8_scaled.safetensors",
