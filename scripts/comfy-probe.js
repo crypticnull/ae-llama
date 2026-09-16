@@ -572,7 +572,8 @@ function finish() {
   // Only ever stop a backend THIS RUN booted. A probe that kills the
   // one the owner already had running is a probe nobody runs twice.
   if (OPT.stop || (OPT.boot && bootedHere)) {
-    managed.stop(Comfy, storage, Comfy.managedPort(S), say);
+    managed.stop(Comfy, storage, Comfy.managedPort(S), say,
+                 managed.managedRoot(Settings));
   }
   const file = writeTranscript();
   say("info", "transcript: " + file);

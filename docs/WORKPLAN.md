@@ -53,7 +53,7 @@ every pass and finished work costs the same context as live work.
 |---|---|---|---|---|
 | 1 | ~~**Make the loop verify its OWN teardown; a pass cannot.**~~ **DONE 2026-09-16.** And the reason no log ever carried a `Backend:` line was worse than "the loop was already running": the 2026-09-09 fix was pasted INSIDE the `-PreflightOnly` early exit, the one path on which no pass has run and no backend can exist, so it was unreachable from a real overnight loop for a week. One `Stop-AellLoopBackend` now sits at top level and is called from all three exits, reads the card before and after `--stop`, and writes the verdict itself. Verified by running the real exit path twice (`-Iterations 0`): it killed a live backend (pid 50788, 4304 -> 3606 MiB) and then reported the empty case. Guarded by `tests/test-loop-teardown.js`. See §17q. | §17q | nothing | no |
 | 1a | ~~**`stop-local-agent.ps1` kills the loop and leaves the backend on the card.**~~ **DONE 2026-09-16.** `Stop-AellLoopBackend` is `scripts/lib/comfy-teardown.ps1` now, dot-sourced by BOTH scripts with no copy in either; the hand-stop the detach message recommends tears the backend down after the kills and before both exits, with a `-KeepBackend` opt-out. Runs even when no loop was found, because the 17q morning WAS a backend with no loop left to own it. Verified on the real script (a loop-finder-neutered copy, since the real one would have killed the pass measuring it): a live backend went 3957 -> 3526 MiB, and the empty case and `-KeepBackend` both read right. Found and fixed on the way past: the verdict never recognised `stopped the backend holding port N`, so a stop that WORKED through the port fallback read as "said nothing recognisable". `tests/test-loop-teardown.js` now covers both scripts and the lib. See §17q-b. | §17q-b | nothing | no |
-| 1b | **`--stop` can kill a ComfyUI the panel never booted, and that now happens on a command the OWNER types.** `comfy-managed.js stop()` falls back to `stopByPort`: if the PID record is gone it kills whatever holds port 8288 whose command line matches /ComfyUI/i. Inside the overnight loop that is nearly always ours. Since 17q-b the same call is one keystroke of `stop-local-agent.ps1` away, so the owner running his OWN ComfyUI on the configured port loses it to a command whose stated job is stopping the agent. Cheap fix: have the hand-stop path pass a flag that declines the port fallback (record-only), or name the process it is about to kill and require it to live under `AE-Llama\vendor\comfy`. Filed 2026-09-16 by the pass that introduced the exposure. | §17q-c | nothing | no |
+| 1b | ~~**`--stop` can kill a ComfyUI the panel never booted, and that now happens on a command the OWNER types.**~~ **DONE 2026-09-16.** Fixed by OWNERSHIP (candidate 2), not by a flag: the port holder's command line must run out of `<dataRoot>\vendor\comfy`, so BOTH the loop and the hand-stop are covered and there is only one behaviour to test. `managed.managedRoot(Settings)` is spelled once in `scripts/lib/comfy-managed.js` and passed by all three `managed.stop()` call sites; `stopByPort` returns `killed|none|foreign|failed` now, because a boolean collapsed a refusal into "nothing there" and `stop()` then contradicted its own warning three lines later. Verified on the REAL machine both ways: a ComfyUI-shaped decoy outside the vendor root survived `--stop --port` with a named refusal, and a listener staged UNDER the real vendor root was still killed. `tests/test-comfy-managed-ownership.js` (26 assertions) ties the root to what the shipped `setup.js` really installs, so the guard cannot rot into one that matches nothing. See §17q-c. | §17q-c | nothing | no |
 | 2 | ~~**Reserve VRAM for the desktop and After Effects before sizing the chat model.**~~ **DONE 2026-09-15 (0.12.18).** The reserve is in `planHandoff` and now gates `Llama.start` too (`Tiers.planChatLoad`), which had no arithmetic at all. The AMOUNT is still provisional and comes from item 3 — two constants, one line each, in `tiers.js`. What it does NOT touch: `recommendChat`/`recommendGen`, i.e. the tier table, which §16f reserves for the owner. See §16g. | §16b | AE, chat model | yes |
 | 3 | **BLOCKED 2026-09-16 on a rule conflict - see §16b BLOCKER, it needs one line from the owner.** ~~Measure the §16b reserve on the owner's four real projects~~ — copies only, originals hashed before and after, close without saving. The exact eight-step procedure is in §16b; follow it to the letter. Paths are in the git-ignored `local/real-projects.json` and must never be committed. Nothing else loaded on the card while measuring. | §16b | AE | no |
 | 4 | ~~**fp8 Wan 2.2 5B as a second entry, then MEASURE it.**~~ **DONE 2026-09-16 (0.12.19).** There is no fp8 FILE of the 5B; shipped as a load-time `weight_dtype` cast instead, zero extra download. 24 314 MiB vs 26 187 at the authored size, 16 834 vs 21 536 at 704x480. **The gate did not move - §18 P7a is still open.** Full table in §18 P7c step 1; follow-ups in step 1a. The §18 P10 pattern: the shipped Wan graph with the diffusion filename swapped and nothing else. Cheapest route to a video option under 32 GB. | §18 P7c step 1 | backend, disk | yes |
@@ -6408,6 +6408,27 @@ the non-ComfyUI case, so the shape exists.
 
 No backend and no GPU needed; the port branch is testable with any
 listener on the port.
+
+**RESOLVED 2026-09-16 (local session), by candidate (2).** The path IS
+reliably readable: the managed backend is spawned as
+`<vendor>\...\python_embeded\python.exe -s <vendor>\...\ComfyUI\main.py`,
+both absolute and both under `vendor\comfy`, which is why 17q's GPU
+verdict already finds it by that same fragment. Ownership beats a flag
+because it needs no caller to remember anything: a third caller of
+`managed.stop()` gets the protection for free, and there is one behaviour
+to test instead of two. The refusal names the port, the pid, the path it
+expected and the command line it found, and `comfy-teardown.ps1`'s
+verdict was taught to recognise it -- 17q-b's own lesson was a stop that
+WORKED reading as "said nothing recognisable".
+
+**Leftover, small, filed here rather than in NEXT UP because it is one
+line of wording.** `stopByPort`'s `catch` around the PowerShell query
+returns `"none"`, so a query that FAILED (no `Get-NetTCPConnection`, a
+timeout, a denied CIM read) is reported as "nothing ComfyUI-shaped on
+port N" -- unknown dressed as verified-empty. It is caught downstream
+today (the teardown's own GPU-process check is what asserts presence, not
+this), which is why it is not promoted, but a distinct `"unknown"` return
+with its own sentence would cost about six lines.
 
 ## 17l-b. `comfy-node-defs.json` is a 52-class DEMAND HARVEST that reads like a full snapshot, and asking it "does node X exist" gets a false NO (filed 2026-09-16, local session)
 

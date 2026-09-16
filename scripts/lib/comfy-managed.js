@@ -97,11 +97,61 @@ function pidIsComfy(pid) {
 }
 
 /**
- * Kill whatever holds `port`, when the PID record cannot answer. Same
- * command-line guard: a process that is not ComfyUI is reported and left
- * alone, never killed for being in the way.
+ * Where a MANAGED backend lives on disk: `<dataRoot>/vendor/comfy`, the
+ * folder setup.js's own `comfyVendorDir()` installs into. Returns null
+ * when it cannot be worked out, and every caller treats null as "cannot
+ * prove ownership" rather than "no restriction".
+ *
+ * It is spelled here rather than at three call sites because all three
+ * stop paths need it, and a second spelling is how the copies drift.
+ * `tests/test-comfy-managed-ownership.js` ties it to what setup.js
+ * actually does, so a move of the install folder cannot leave this
+ * matching nothing — a check that silently matches nothing is precisely
+ * the failure 17q was.
  */
-function stopByPort(port, say) {
+function managedRoot(Settings) {
+  try {
+    const root = Settings && Settings.dataRoot ? Settings.dataRoot() : null;
+    if (!root) return null;
+    return path.join(String(root), "vendor", "comfy");
+  } catch (e) { return null; }
+}
+
+/** Does `cmdline` run out of `root`? Windows paths: case- and slash-blind. */
+function commandLineIsUnder(cmdline, root) {
+  if (!root) return false;
+  function norm(v) {
+    return String(v || "").replace(/\//g, "\\").toLowerCase();
+  }
+  return norm(cmdline).indexOf(norm(root)) !== -1;
+}
+
+/**
+ * Kill whatever holds `port`, when the PID record cannot answer.
+ *
+ * Returns a STRING, because the caller's wording depends on which of
+ * these happened and a boolean collapsed three of them into "false":
+ *
+ *   "killed"  - it was ours and it is gone
+ *   "none"    - nothing is listening on that port
+ *   "foreign" - something IS, and it is not the managed backend
+ *   "failed"  - it was ours and taskkill did not take
+ *
+ * TWO guards, not one (WORKPLAN 17q-c). The command-line shape
+ * (/ComfyUI/i) was the only one until 2026-09-16, and shape is not
+ * ownership: the owner's OWN ComfyUI on the configured port is
+ * ComfyUI-shaped too. That was theoretical while this path lived inside
+ * the overnight loop, where the thing on the port is nearly always the
+ * loop's own backend. 17q-b ended that — `stop-local-agent.ps1` now
+ * reaches this code, and it is a command the OWNER types, during the day,
+ * about a port that is HIS setting. So the port holder must also run out
+ * of `ownRoot`; anything else is reported and left alone.
+ *
+ * A refusal is always a SENTENCE. Silence here reads exactly like "there
+ * was nothing to stop", and the two need different actions from whoever
+ * is reading the log.
+ */
+function stopByPort(port, say, ownRoot) {
   let out = "";
   try {
     out = cp.execFileSync("powershell.exe",
@@ -111,8 +161,8 @@ function stopByPort(port, say) {
        "if ($p) { (Get-CimInstance Win32_Process -Filter " +
        "\"ProcessId=$p\").CommandLine + '|' + $p }"],
       { timeout: 30000, encoding: "utf8" }).trim();
-  } catch (e) { return false; }
-  if (!out) return false;
+  } catch (e) { return "none"; }
+  if (!out) return "none";
   const cut = out.lastIndexOf("|");
   const cmdline = cut === -1 ? "" : out.slice(0, cut);
   const pid = cut === -1 ? "" : out.slice(cut + 1).trim();
@@ -122,7 +172,25 @@ function stopByPort(port, say) {
                   "line is not ComfyUI — NOT killing it: " +
                   cmdline.slice(0, 120));
     }
-    return false;
+    return "foreign";
+  }
+  if (!ownRoot) {
+    if (say) {
+      say("warn", "a ComfyUI holds port " + port + " (pid " + pid + ") but " +
+                  "this run cannot work out where the managed backend is " +
+                  "installed, so it cannot tell whether that is ours — " +
+                  "NOT killing it.");
+    }
+    return "foreign";
+  }
+  if (!commandLineIsUnder(cmdline, ownRoot)) {
+    if (say) {
+      say("warn", "a ComfyUI holds port " + port + " (pid " + pid + ") and " +
+                  "it is NOT ours — it does not run from the managed " +
+                  "backend at " + ownRoot + " — NOT killing it: " +
+                  cmdline.slice(0, 120));
+    }
+    return "foreign";
   }
   try {
     cp.execFileSync("taskkill", ["/PID", pid, "/T", "/F"],
@@ -131,10 +199,10 @@ function stopByPort(port, say) {
       say("info", "stopped the backend holding port " + port +
                   " (pid " + pid + ").");
     }
-    return true;
+    return "killed";
   } catch (e) {
     if (say) say("warn", "taskkill failed for pid " + pid + ": " + e.message);
-    return false;
+    return "failed";
   }
 }
 
@@ -142,8 +210,12 @@ function stopByPort(port, say) {
  * Stop a managed backend. Returns true only when something was really
  * killed — a stop is never REPORTED without a process behind it, which
  * is the whole point of the PID verification.
+ *
+ * `ownRoot` is `managedRoot(Settings)`; see stopByPort for why the port
+ * fallback needs it. Omitting it is safe in the only direction that
+ * matters: the fallback then refuses rather than killing by shape.
  */
-function stop(Comfy, storage, port, say) {
+function stop(Comfy, storage, port, say, ownRoot) {
   const known = storage.getItem(PID_KEY);
   if (known) {
     if (pidIsComfy(known)) {
@@ -159,8 +231,12 @@ function stop(Comfy, storage, port, say) {
     }
     storage.removeItem(PID_KEY);
   }
-  if (stopByPort(port, say)) return true;
-  if (say) {
+  const byPort = stopByPort(port, say, ownRoot);
+  if (byPort === "killed") return true;
+  // "foreign" and "failed" have each already said their specific thing.
+  // Saying "nothing ComfyUI-shaped on port N" on top of "a ComfyUI holds
+  // port N and it is not ours" would contradict it in the same log.
+  if (say && byPort === "none") {
     say("info", "no managed backend found to stop (nothing remembered, " +
                 "and nothing ComfyUI-shaped on port " + port + ").");
   }
@@ -252,6 +328,8 @@ module.exports = {
   PID_KEY: PID_KEY,
   makeStorage: makeStorage,
   pidIsComfy: pidIsComfy,
+  managedRoot: managedRoot,
+  commandLineIsUnder: commandLineIsUnder,
   stopByPort: stopByPort,
   stop: stop,
   boot: boot,

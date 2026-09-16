@@ -632,7 +632,10 @@ function finish() {
   // Only ever stop a backend THIS RUN booted — never the one the owner
   // already had running.
   if (OPT.stop || (OPT.boot && bootedHere)) {
-    try { managed.stop(Comfy, storage, Comfy.managedPort(S), say); }
+    try {
+      managed.stop(Comfy, storage, Comfy.managedPort(S), say,
+                   managed.managedRoot(Settings));
+    }
     catch (eS) {}
   }
   if (measurements.length) {

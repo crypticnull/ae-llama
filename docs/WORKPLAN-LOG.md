@@ -24379,3 +24379,151 @@ exposure, which is the only honest place for it.
   1b / §17q-c filed
 
 **Nothing is blocked for a human.**
+
+## 2026-09-16 (local session) - `--stop` asks who owns the port now, not what it looks like, and the owner's own ComfyUI survives it
+
+**Item:** NEXT UP 1b / WORKPLAN 17q-c - "`--stop` can kill a ComfyUI the
+panel never booted, and that now happens on a command the OWNER types".
+
+**Harness: 770/770 PASSED**, before the work and after it. Full stub suite
+green (90 suites, `tests/test-*.js`). **No version bump** - nothing under
+`extension/` changed; the whole fix is in `scripts/`.
+
+### What was wrong
+
+`scripts/lib/comfy-managed.js` `stop()` tries the remembered PID, and when
+that cannot answer it falls back to `stopByPort`: whatever is listening on
+the configured port gets `taskkill /PID <n> /T /F` if its command line
+matches `/ComfyUI/i`. That fallback earns its keep - the PID record not
+surviving is a real, measured failure (2026-09-06) - but `/ComfyUI/i` is a
+test of SHAPE, and shape is not ownership. The owner's own ComfyUI is
+ComfyUI-shaped too.
+
+It stayed theoretical while the only way to reach that code was a script
+running inside the overnight loop, where the thing on the port is nearly
+always the loop's own backend. Yesterday's 17q-b work ended that:
+`stop-local-agent.ps1` now dot-sources the shared teardown, the teardown
+calls `comfy-install.js --stop`, and `stop-local-agent.ps1` is a command
+the OWNER types, during the day, about a port that is HIS setting (8288 by
+default). A motion designer with his own ComfyUI on 8288 would have lost
+it to a command whose stated job is stopping the agent - and the log would
+have read `stopped the backend holding port 8288`, i.e. like a success.
+
+### What was done - candidate (2), ownership, not candidate (1), a flag
+
+17q-c offered two fixes: a record-only mode for the hand-stop path, or
+verify OWNERSHIP by requiring the port holder to run out of the managed
+vendor folder. (2) won on two grounds. The path is reliably readable - the
+managed backend is spawned as
+`<vendor>\...\python_embeded\python.exe -s <vendor>\...\ComfyUI\main.py`,
+both arguments absolute and both under `vendor\comfy`, which is exactly
+why 17q's GPU verdict already finds the process by that same fragment. And
+ownership needs no caller to remember anything: it protects the loop and
+the hand-stop with ONE behaviour to test, where a flag protects only the
+call sites that pass it and leaves the next caller to repeat the mistake.
+
+Three changes:
+
+1. **`managedRoot(Settings)`** in `scripts/lib/comfy-managed.js` -
+   `<dataRoot>/vendor/comfy`, spelled once, because three stop paths need
+   it and a second spelling is how copies drift. Returns `null` when it
+   cannot be worked out, and null means "cannot prove ownership", never
+   "no restriction". `commandLineIsUnder` beside it is case- and
+   slash-blind: Windows hands back `C:/Users/...` and `C:\Users\...` for
+   the same process and a compare blind to neither is a guard that matches
+   nothing.
+2. **`stopByPort(port, say, ownRoot)`** refuses anything not under
+   `ownRoot`, with a sentence naming the port, the pid, the path it
+   expected and the command line it found.
+3. **`stopByPort` returns a STRING** - `killed` / `none` / `foreign` /
+   `failed` - because a boolean collapsed three outcomes into `false` and
+   `stop()` could not tell them apart. With a boolean, a refusal was
+   followed three lines later by `no managed backend found to stop
+   (nothing remembered, and nothing ComfyUI-shaped on port 8288)`, which
+   contradicts the warning above it in the same log. Whoever reads that at
+   8am cannot act on it.
+
+All three `managed.stop()` call sites (`comfy-install.js`,
+`comfy-probe.js`, `catalog-vram-probe.js`) pass `managedRoot(Settings)`,
+and a test refuses any that does not.
+
+`scripts/lib/comfy-teardown.ps1`'s verdict regex learned `NOT killing it`.
+That is 17q-b's own lesson applied before it costs anything: yesterday a
+stop that WORKED read as "said nothing recognisable" purely because the
+regex had never been taught the wording. A refusal is rarer and more
+surprising than a success, so it must not land in the same blind spot.
+
+### Verified on the real machine, both directions
+
+The stub suite can only prove what the code does with a faked
+`child_process`. The thing worth knowing is what the SHIPPED script does
+to a real process, so both halves were run for real, against
+`node scripts/comfy-install.js --check --stop --port <free port>` with the
+real `%APPDATA%` (checked first: no `comfy-managed.pid` record and no
+python.exe with `ComfyUI` in its command line, so `stop()` fell straight
+through to the port branch, and the only process on the named port was the
+fixture):
+
+- **The exposure.** A decoy listener at
+  `...\Temp\aell-17qc\ComfyUI_decoy\ComfyUI_main.js` - ComfyUI-shaped,
+  outside the vendor root - held the port as pid 36872. `--stop` said:
+
+      [warn] a ComfyUI holds port 61239 (pid 36872) and it is NOT ours -
+      it does not run from the managed backend at
+      C:\Users\mr\AppData\Roaming\AE-Llama\vendor\comfy - NOT killing it:
+      C:\Users\mr\AppData\Local\hermes\node\node.exe C:/Users/...
+
+  and `Get-Process -Id 36872` afterwards: **DECOY SURVIVED**. Before this
+  change that process was killed.
+- **The regression the fix could cause.** A guard aimed at the wrong
+  folder matches nothing, refuses to stop OUR backend, and is 17q's 27 GB
+  morning all over again. So the same listener was staged UNDER the real
+  `...\AE-Llama\vendor\comfy\aell-17qc-tmp\` and given another free port:
+  `[info] stopped the backend holding port 61241 (pid 36984).` and the pid
+  was **gone**. Both fixtures and the temp folder were removed afterwards;
+  the vendor root holds only `ComfyUI_windows_portable` again, and no PID
+  record was created.
+
+### The stub test
+
+`tests/test-comfy-managed-ownership.js`, 26 assertions, no GPU and no
+backend. `child_process` is patched before the lib is required (it calls
+`cp.execFileSync` at call time, so the cached module object reaches it) and
+every call is RECORDED - the assertion that matters most here is a
+`taskkill` that must not happen, and only watching the calls can check
+that. It covers the foreign holder, the owned holder (forward slashes and
+mixed case on purpose), a null root, the original non-ComfyUI branch, an
+empty port, and `stop()` not contradicting its own refusal.
+
+Two assertions exist to stop the guard rotting into a silent one:
+
+- It builds a portable install in a temp `dataRoot` and asks the SHIPPED
+  `setup.js` to find it, then checks that the `python` and `main.py`
+  `findComfyInstall()` returns - the two things that will BE the command
+  line - sit under `managedRoot()`. If the install ever moves out of
+  `vendor/comfy`, this fails rather than the guard going quiet.
+- It scans `scripts/*.js` for any `managed.stop(` that does not pass
+  `managedRoot(`.
+
+### Files
+
+- `scripts/lib/comfy-managed.js` - `managedRoot`, `commandLineIsUnder`,
+  the ownership guard, the string return, `stop()`'s wording
+- `scripts/comfy-install.js`, `scripts/comfy-probe.js`,
+  `scripts/catalog-vram-probe.js` - the root passed at each call site
+- `scripts/lib/comfy-teardown.ps1` - the verdict recognises a refusal
+- `tests/test-comfy-managed-ownership.js` - new
+- `docs/WORKPLAN.md` - NEXT UP 1b struck with the measurement, 17q-c
+  resolved, one small leftover recorded in that section
+
+### One leftover, deliberately not promoted
+
+`stopByPort`'s `catch` around the PowerShell query returns `"none"`, so a
+query that FAILED (no `Get-NetTCPConnection`, a timeout, a denied CIM
+read) is reported as "nothing ComfyUI-shaped on port N" - unknown dressed
+as verified-empty. It is covered downstream (the teardown's GPU-process
+check is what ASSERTS presence; this line only narrates), so it is written
+into 17q-c rather than NEXT UP. A distinct `"unknown"` return with its own
+sentence is about six lines whenever someone is next in the file.
+
+**Nothing is blocked for a human.**

@@ -212,7 +212,7 @@ function step2Boot(inst, done) {
 
 function finish() {
   if (OPT.stop) {
-    managed.stop(Comfy, storage, port, say);
+    managed.stop(Comfy, storage, port, say, managed.managedRoot(Settings));
   } else if (OPT.boot) {
     // Do not ASSERT it is running — verify the PID we recorded is a live
     // ComfyUI and say what is actually true. Measured 2026-09-09, this

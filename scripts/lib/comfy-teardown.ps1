@@ -83,7 +83,7 @@ function Stop-AellLoopBackend {
     try {
         $stopOut = & node (Join-Path $RepoRoot 'scripts\comfy-install.js') --stop 2>&1
         $said = @($stopOut) | Where-Object {
-            [string]$_ -match 'stopped the managed|stopped the backend holding|no managed backend found'
+            [string]$_ -match 'stopped the managed|stopped the backend holding|no managed backend found|NOT killing it'
         }
         if ($said) {
             foreach ($line in $said) {
