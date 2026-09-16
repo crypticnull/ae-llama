@@ -26614,3 +26614,57 @@ and asked for the loop to run until 17:00. The CLAUDE.md daytime rule is
 unchanged for every other day.
 
 No `extension/` change, so **no version bump**.
+
+## 2026-09-16 (local session) — the loop log was never dead: PS 5.1 Add-Content is refused while anyone tails it
+
+Item: NEXT UP 1 (the loop stops writing its log ~90 s in). Daytime pass
+under the owner's 2026-09-16 exception (loop authorised until 17:00).
+
+Harness before: **770/770 PASSED**. After: **PASSED** (same suite, no
+`extension/` change).
+
+**Cause, reproduced three ways.** Windows PowerShell 5.1 `Add-Content`
+throws "The process cannot access the file ... because it is being used
+by another process" whenever ANY other handle on the file is open, even a
+read-only handle that itself shares write (a raw
+`[IO.File]::Open(path, Open, Write, ReadWrite)` succeeds under the same
+reader). Measured with a Git-Bash `tail -n 0 -F` and with a plain Node
+`fs.openSync(path, 'r')`: refused on every call. Every loop write site
+either wrapped it in `catch { }` (heartbeat, watchdog) or ran it
+non-terminating under `$ErrorActionPreference = 'Continue'` (Write-Log,
+pass output), so the log just stopped.
+
+**Caught live on this very pass's loop** (`logs/local-agent-20260916-093201.log`):
+heartbeat at 09:32:40, then nothing; the Restart Manager API named the
+only holder of the file as `tail.exe -n 0 -F .../local-agent-20260916-093201.log`,
+started **09:33:00**, parent already gone. All three loop jobs were alive
+and idle. Process census also found **four** orphaned `tail -F` on
+2026-09-15's `232320` log and one on `013924` — the watchers of both
+silent nights. That is why fresh 0-iteration runs "logged fine": nobody
+was tailing them.
+
+**Fix (scripts only, so no bump):** `scripts/lib/log-append.ps1`
+`Add-AellLogLine` appends through a FileStream with FileShare
+ReadWrite|Delete, retries 5x for a same-instant writer race, never
+throws, returns `$false` on failure. `run-local-agent.ps1` routes every
+write to the loop log through it: Write-Log, the preflight probe lines,
+the pass output pipeline, the final `git log`, and both jobs (watchdog and
+heartbeat are handed `$logAppendLib` and dot-source it — a job is its own
+process). Verified: lib appends under a live `tail -F` and tail SEES the
+lines; same from inside a `Start-Job`.
+
+Tests: new `tests/test-loop-log-append.js` (wiring + a real reader held
+open while powershell 5.1 appends; it also prints that plain Add-Content
+was REFUSED under that reader) — fails 4 asserts against the old script.
+`tests/test-loop-heartbeat.js` interval regex now allows the trailing
+comma the heartbeat's `-ArgumentList` gained. `test-loop-teardown`,
+`test-powershell-syntax` pass.
+
+**Needs a human eye:** the loop running now (pid 50256, started 09:32)
+loaded the OLD script, so its log stays silent until it is restarted.
+The orphaned `tail.exe` processes are not ours and were left alone
+(harmless for the new writer).
+
+**Lead for NEXT UP 2** (filed on its row): the 01:39 log had a `tail -F`
+on it, so "exited with no log line" may be an exit reason that was
+written and refused. Read the exit paths before adding more logging.

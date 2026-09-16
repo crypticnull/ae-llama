@@ -93,7 +93,8 @@ assert(iStop > -1 && iReap > -1 && iStop < iReap,
 // The interval. 30s is what the item asked for; anything over a minute
 // puts the log back to looking silent.
 const beatBlock = loop.slice(iStart, iStop > iStart ? iStop : loop.length);
-const interval = beatBlock.match(/^\s+(\d+)\s*$/m);
+// A bare number in the -ArgumentList, with or without a trailing comma.
+const interval = beatBlock.match(/^\s+(\d+)\s*,?\s*$/m);
 assert(interval && Number(interval[1]) > 0 && Number(interval[1]) <= 60,
        "the heartbeat interval is at most 60s (found " +
        (interval ? interval[1] : "none") + ")");

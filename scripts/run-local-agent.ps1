@@ -243,10 +243,16 @@ function Clean-Line([string]$s) {
     return $sb.ToString()
 }
 
+# Every write to $logFile goes through Add-AellLogLine, never Add-Content:
+# PS 5.1 Add-Content is REFUSED while anyone has the log open to read it
+# (a tail -F, a Monitor), and that silenced two whole nights. See the lib.
+$logAppendLib = Join-Path $PSScriptRoot 'lib\log-append.ps1'
+. $logAppendLib
+
 function Write-Log([string]$msg) {
     $line = '[' + (Get-Date -Format 'HH:mm:ss') + '] ' + (Clean-Line $msg)
     Write-Host $line
-    Add-Content -Path $logFile -Value $line -Encoding ASCII
+    [void](Add-AellLogLine -Path $logFile -Value $line)
 }
 
 # --- the per-iteration brief ----------------------------------------
@@ -472,11 +478,12 @@ if ($UntilHour -ge 0) {
 $watchdog = $null
 if (-not $NoDialogWatchdog) {
     $watchdog = Start-Job -Name 'AellDialogWatchdog' -ScriptBlock {
-        param($lib, $owned, $procs, $everySec, $log)
+        param($lib, $owned, $procs, $everySec, $log, $appendLib)
         . $lib
+        . $appendLib
         function Note([string]$m) {
             $line = ((Get-Date -Format 'HH:mm:ss') + '  [watchdog] ' + $m)
-            try { Add-Content -Path $log -Value $line -Encoding ASCII } catch { }
+            [void](Add-AellLogLine -Path $log -Value $line)
         }
         Note 'started'
         $sweeps = 0
@@ -504,7 +511,8 @@ if (-not $NoDialogWatchdog) {
         # the window that matters is the one between a pass asking AE
         # to close and that pass giving up on it.
         5,
-        $logFile
+        $logFile,
+        $logAppendLib
     Write-Log ('Dialog watchdog running (job ' + $watchdog.Id + '): a ' +
                'save-changes prompt on a project this harness owns is ' +
                'answered Do not Save; anything else is cancelled, which ' +
@@ -561,8 +569,7 @@ if (-not $SkipPreflight) {
             ForEach-Object {
                 $line = Clean-Line ([string]$_)
                 $probeOut.Add($line)
-                Add-Content -Path $logFile -Value ('  probe| ' + $line) `
-                            -Encoding ASCII
+                [void](Add-AellLogLine -Path $logFile -Value ('  probe| ' + $line))
             }
     } catch {
         Write-Log ('Preflight error: ' + $_.Exception.Message)
@@ -723,9 +730,10 @@ for ($i = 1; $i -le $Iterations; $i++) {
     try {
         $beat = Start-Job -Name 'AellPassHeartbeat' -ScriptBlock {
             param($procLib, $beatLib, $rootId, $repo, $log, $label,
-                  $startedAt, $everySec)
+                  $startedAt, $everySec, $appendLib)
             . $procLib
             . $beatLib
+            . $appendLib
             while ($true) {
                 # Sleep FIRST: the '===== pass N =====' line above
                 # already stamps t=0, and a beat at 00:00 says nothing.
@@ -738,9 +746,7 @@ for ($i = 1; $i -le $Iterations; $i++) {
                     $line = '[heartbeat] failed: ' + $_.Exception.Message
                 }
                 $stamped = ((Get-Date -Format 'HH:mm:ss') + '  ' + $line)
-                try {
-                    Add-Content -Path $log -Value $stamped -Encoding ASCII
-                } catch { }
+                [void](Add-AellLogLine -Path $log -Value $stamped)
             }
         } -ArgumentList `
             (Join-Path $PSScriptRoot 'lib\claude-procs.ps1'),
@@ -750,7 +756,8 @@ for ($i = 1; $i -le $Iterations; $i++) {
             $logFile,
             ('pass ' + $i + '/' + $Iterations),
             $passStartedAt,
-            30
+            30,
+            $logAppendLib
     } catch {
         # A missing heartbeat must never cost the pass. Say so and run.
         Write-Log ('Heartbeat could not start: ' + $_.Exception.Message)
@@ -806,7 +813,7 @@ for ($i = 1; $i -le $Iterations; $i++) {
             & $ClaudePath @claudeArgs 2>&1 | ForEach-Object {
             $line = Clean-Line ([string]$_)
             $passLines.Add($line)
-            Add-Content -Path $logFile -Value $line -Encoding ASCII
+            [void](Add-AellLogLine -Path $logFile -Value $line)
             Write-Host $line
         }
     } catch {
@@ -917,7 +924,7 @@ Write-Log 'Loop finished.'
 Write-Log ('Full log: ' + $logFile)
 Write-Log 'Recent work:'
 & git log --oneline -15 | ForEach-Object {
-    Add-Content -Path $logFile -Value ([string]$_) -Encoding ASCII
+    [void](Add-AellLogLine -Path $logFile -Value ([string]$_))
     Write-Host ([string]$_)
 }
 exit 0
