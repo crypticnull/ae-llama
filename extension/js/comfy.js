@@ -2799,10 +2799,16 @@
    * Make sure a ComfyUI answers where this panel expects one.
    *
    * MANAGED mode: the panel owns its port. Something already answering
-   * there is ours only if we started it (this session, or a previous one
-   * whose PID we remembered) — anything else is REFUSED, never adopted.
-   * Adopting it would be the same defect the old default shipped: a
-   * server the panel did not start, silently deciding what models exist.
+   * there is ours if we started it (this session, or a previous one whose
+   * PID we remembered) — and, since §17q-e, also when the process holding
+   * the port RUNS OUT OF the managed install folder. That last case is
+   * adoption, and it is not the defect the old default shipped: that one
+   * attached to any server at a URL, deciding from an HTTP answer. This
+   * one asks the OS whose process it is and only takes back a backend
+   * this panel's own install could have produced.
+   *
+   * Anything else is REFUSED, in today's wording, because the refusal is
+   * what protects the owner's own ComfyUI on his own port (§17q-c).
    * Foreign instances on other ports are ignored here by design; status()
    * offers them as a mode switch instead.
    *
@@ -2825,14 +2831,26 @@
           cb(null, { started: false });
           return;
         }
-        // Managed, the port answers, and it is not ours. Refusing is the
-        // whole point of owning a port: attaching here is the bug the
-        // mode exists to remove, wearing a different port number.
-        cb(new Error("Something is already answering on " + base.label +
-          ", the port this panel's own ComfyUI uses, and the panel did " +
-          "not start it. Change 'Managed backend port' in Settings → " +
-          "ComfyUI, or switch to 'Use my own ComfyUI' and point the URL " +
-          "at it."));
+        // Managed, the port answers, and the BOOKKEEPING says it is not
+        // ours. Ask the OS before believing that: an orphan of our own
+        // install looks identical from here (§17q-e).
+        adoptablePid(base.port, function (pid) {
+          if (pid) {
+            rememberPid(pid);
+            say("Reconnected to the hidden ComfyUI backend already " +
+                "running on " + base.label + ".");
+            cb(null, { started: false, adopted: true });
+            return;
+          }
+          // Not ours. Refusing is the whole point of owning a port:
+          // attaching here is the bug the mode exists to remove, wearing
+          // a different port number.
+          cb(new Error("Something is already answering on " + base.label +
+            ", the port this panel's own ComfyUI uses, and the panel did " +
+            "not start it. Change 'Managed backend port' in Settings → " +
+            "ComfyUI, or switch to 'Use my own ComfyUI' and point the URL " +
+            "at it."));
+        });
         return;
       }
       if (managed) {
@@ -2871,6 +2889,79 @@
     try { pid = parseInt(global.localStorage.getItem(COMFY_PID_KEY), 10); }
     catch (e) {}
     return !!pid;
+  }
+
+  /**
+   * Where the MANAGED backend is installed — the ownership predicate of
+   * §17q-c, ASKED rather than re-derived. setup.js's comfyVendorDir() is
+   * the folder bootstrapComfy() really extracts into; joining
+   * dataRoot + "vendor" + "comfy" a second time here is exactly how two
+   * copies drift apart, and a guard aimed at the wrong folder matches
+   * nothing and is silent about it.
+   *
+   * null means "cannot prove ownership", and the one caller treats that
+   * as REFUSE — never as "no restriction".
+   */
+  function managedRootDir() {
+    try {
+      return (global.Setup && global.Setup.comfyVendorDir)
+        ? (global.Setup.comfyVendorDir() || null) : null;
+    } catch (e) { return null; }
+  }
+
+  /** Does `cmdline` run out of `root`? Windows paths: case/slash-blind. */
+  function commandLineIsUnder(cmdline, root) {
+    if (!root) return false;
+    function norm(v) {
+      return String(v || "").replace(/\//g, "\\").toLowerCase();
+    }
+    return norm(cmdline).indexOf(norm(root)) !== -1;
+  }
+
+  /**
+   * Is the process holding `port` a backend this panel may ADOPT?
+   * cb(pid) when it is, cb(null) when it is not.
+   *
+   * §17q-e. `ownsManagedBackend()` answers from localStorage, and there
+   * are three ordinary ways for that record to be gone while the process
+   * on the port is unmistakably ours: the panel crashed with a backend
+   * up, a second panel session (localStorage is per-host), or the
+   * recycled-PID branch cleared the record while the real backend was
+   * still booting. In every one of them the buyer got a refusal with no
+   * path forward — generation bricked until someone killed a python
+   * process they never launched.
+   *
+   * TWO guards, the same pair stopByPort uses and for the same reason:
+   * the command-line SHAPE (/ComfyUI/i) is not ownership, because the
+   * owner's own ComfyUI on the configured port is ComfyUI-shaped too. It
+   * must also run out of the managed root. Adoption is the mirror of a
+   * kill: both are "this process is ours", and getting it wrong here
+   * hands a stranger's server the panel's trust.
+   */
+  function adoptablePid(port, cb) {
+    ensureNode();
+    var root = managedRootDir();
+    if (!root) { cb(null); return; }
+    var n = parseInt(port, 10);
+    if (!(n > 0)) { cb(null); return; }
+    child_process.execFile("powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command",
+       "$p=(Get-NetTCPConnection -LocalPort " + n +
+       " -State Listen -ErrorAction SilentlyContinue).OwningProcess; " +
+       "if ($p) { (Get-CimInstance Win32_Process -Filter " +
+       "\"ProcessId=$p\").CommandLine + '|' + $p }"],
+      { timeout: 15000 },
+      function (err, stdout) {
+        if (err) { cb(null); return; }
+        var out = String(stdout || "").trim();
+        var cut = out.lastIndexOf("|");
+        if (!out || cut === -1) { cb(null); return; }
+        var cmdline = out.slice(0, cut);
+        var pid = parseInt(out.slice(cut + 1).trim(), 10);
+        if (!(pid > 0) || !/ComfyUI/i.test(cmdline)) { cb(null); return; }
+        if (!commandLineIsUnder(cmdline, root)) { cb(null); return; }
+        cb(pid);
+      });
   }
 
   /** Spawn the vendor install on `base`'s port and health-poll it up. */
@@ -3097,6 +3188,9 @@
     stopManaged: stopManaged,
     setManagedDetached: setManagedDetached,
     reapOrphan: reapOrphan,
+    _adoptablePid: adoptablePid,                  // exposed for tests
+    _commandLineIsUnder: commandLineIsUnder,      // exposed for tests
+    _managedRootDir: managedRootDir,              // exposed for tests
     bypassNode: bypassNode,
     substituteNode: substituteNode,
     expandFilenameTokens: expandFilenameTokens,

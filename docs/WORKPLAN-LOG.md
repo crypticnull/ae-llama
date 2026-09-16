@@ -24936,3 +24936,136 @@ BEHAVIOURAL, not shape - a race cannot be caught by reading source:
   open when the orphan appears, still gets `ensureRunning`'s refusal with
   no way out. The ownership predicate 17q-c already spells once
   (`managedRoot`) is the same one adoption needs.
+
+## 2026-09-16 (local session) - the panel takes its own orphan back, and asks the OS rather than its own bookkeeping
+
+**Item:** NEXT UP 1d / WORKPLAN 17q-e. `ensureRunning` could not ADOPT a
+backend on its own port. Version 0.12.22 -> **0.12.23** (extension/
+changed).
+
+**Harness: 770/770 passed**, before and after. Full stubbed suite green
+(every `tests/test-*.js`, zero failures).
+
+### What was wrong
+
+Managed mode owns a port, and `ensureRunning` refuses to generate against
+a listener there that it did not start:
+
+    Something is already answering on 127.0.0.1:8288, the port this
+    panel's own ComfyUI uses, and the panel did not start it.
+
+That refusal is correct against a stranger and it is what protects the
+owner's own ComfyUI on his own port (17q-c). The defect was the question
+it asked. "Did we start it" was answered by `ownsManagedBackend()`, which
+is `managedProc || a remembered PID in localStorage` - and all three of
+these leave that record absent while the process on the port is
+unmistakably ours:
+
+- the panel crashed with a backend up and localStorage went with it;
+- a second panel session (the key is per-host - see the Premiere notes);
+- the recycled-PID branch cleared the record while the real backend was
+  still booting and not yet answering `pidIsComfy`.
+
+17q-d closed the common case from the other side (the PID record now
+survives a kill that did not take, so `reapOrphan()` finds the survivor
+at the next panel init). It could not close this one: with no record at
+all there is nothing to reap. The buyer then gets a refusal with no
+button, no PID and no path forward - generation is bricked until someone
+kills a python process they never launched. The 02:19 pass of 2026-09-16
+lost its first probe run to exactly this state and had to `taskkill` by
+hand.
+
+### The fix: ownership, the same predicate read the other way round
+
+17q-c put ownership in one place - the port holder's command line must
+run out of `<dataRoot>\vendor\comfy`. A kill asks that question; so does
+an adoption. `extension/js/comfy.js` gained `adoptablePid(port, cb)`,
+which is the `stopByPort` lookup without the taskkill: ask
+`Get-NetTCPConnection` who holds the port, take that PID's command line
+from `Win32_Process`, and require BOTH guards - `/ComfyUI/i` for shape
+and `commandLineIsUnder(cmdline, root)` for ownership. Shape alone is not
+ownership, which is the whole lesson of 17q-c: the owner's own ComfyUI is
+ComfyUI-shaped too.
+
+`ensureRunning`'s managed-and-up branch now asks that before refusing.
+When it answers a PID, the panel calls `rememberPid(pid)` and returns
+`{started: false, adopted: true}` with a status line the user can read
+("Reconnected to the hidden ComfyUI backend already running on ..."). The
+`rememberPid` is not decoration: without it the adopted backend is
+unreachable by `stopManaged()` and `reapOrphan()`, so adopting it would
+have leaked it again at the next unload. When it answers null the refusal
+is byte-for-byte today's, because that wording is load-bearing.
+
+**One spelling of the root, and the panel does not own a second one.**
+The panel cannot `require` `scripts/lib/comfy-managed.js` - the
+dependency runs the other way, scripts load the PANEL into globals - so
+`comfy.js` asks `Setup.comfyVendorDir()` instead, which is the folder
+`bootstrapComfy()` really extracts into, and never re-joins
+`dataRoot + vendor + comfy` itself. `comfyVendorDir` is exported from
+`setup.js` for this and gained an `ensureNode()`: as an exported function
+it may now be the first thing a caller touches, and without it `path` is
+still null and it throws - measured, it threw in the new test before that
+line existed, and the throw was invisible because `managedRootDir()`
+catches and answers null, i.e. "refuse". A guard that silently matches
+nothing is precisely the 17q failure.
+
+### Verified on the REAL machine, not only in a stub
+
+The risky half is the PowerShell lookup, which a stub cannot exercise. So
+the shipped path was run against a real backend:
+
+1. `node scripts/comfy-install.js --boot` - managed backend up, pid 8800,
+   card 3536 -> (booting) MiB.
+2. A throwaway probe built a FRESH panel sandbox - the shipped
+   `settings/tiers/comfy/setup.js`, with an EMPTY localStorage, which is
+   exactly the crashed-panel state - and called `ensureRunning` on 8288.
+
+       localStorage PID before: undefined
+         status: Reconnected to the hidden ComfyUI backend already running on 127.0.0.1:8288.
+       ms: 854
+       res: {"started":false,"adopted":true}
+       localStorage PID after: "8800"
+       that pid really is: C:\Users\mr\AppData\Roaming\AE-Llama\vendor\comfy\
+                           ComfyUI_windows_portable\python_embeded\python.exe -s ...
+
+   Adopted in **854 ms**, and the PID it re-remembered is the same one
+   `--boot` had reported.
+3. `--stop` afterwards: `stopped the managed backend (pid 8800)`, card
+   back to its 3536 MiB floor. Nothing left on the machine.
+
+Gate 0 first, as required: `origin()` said `from: file`,
+`appdata: C:\Users\mr\AppData\Roaming`.
+
+### The stub back-fill
+
+`tests/test-comfy-managed-ownership.js` (the file that already owns the
+root predicate) grew five cases, 23 assertions. They run the SHIPPED
+`comfy.js` against a REAL `http.createServer` on an ephemeral port, so
+`isUp` is a genuine 200 rather than a stubbed one; only the port-holder
+lookup is faked, because `Get-NetTCPConnection` cannot be made to report
+a process that does not exist.
+
+- 10: an orphan under the managed root is adopted, reports
+  `adopted: true`, re-remembers the PID, and says so.
+- 11: a ComfyUI OUTSIDE the root keeps today's refusal verbatim, both
+  ways out still named, and **remembers nothing** - a remembered stranger
+  is a taskkill waiting to happen.
+- 12: a non-ComfyUI holder and an unreadable port are both refused.
+- 13: a REMEMBERED backend costs no lookup at all (the PowerShell spawn
+  only happens on the path that would otherwise refuse).
+- 14: the two spellings of the managed root are pinned EQUAL -
+  `Comfy._managedRootDir() === managed.managedRoot(Settings) ===
+  Setup.comfyVendorDir()` - plus a source assertion that `comfy.js`
+  contains no `"vendor", "comfy"` join of its own, and a five-case table
+  where the panel's and the script lib's containment checks must agree
+  (case, slashes, a foreign path, the empty string). A move of the
+  install folder that updates only one side now fails here instead of in
+  the morning, on the card.
+
+### What this does NOT do
+
+Adoption only fires on the managed port, in managed mode, for a process
+under the managed root. It does not touch "own" mode, `findLocalComfy`,
+or the elsewhere-hint. An adopted backend is treated as fully ours from
+that moment, including being stopped at unload - which is the point: it
+IS ours, and the only thing that was ever missing was the bookkeeping.

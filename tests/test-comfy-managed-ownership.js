@@ -265,5 +265,204 @@ cp.execFileSync = realExec;
          "comfy-teardown.ps1's verdict recognises a refusal to kill");
 }
 
-console.log(failed ? "\n" + failed + " TEST(S) FAILED" : "\nALL TESTS PASSED");
-process.exit(failed ? 1 : 0);
+// ================================================================ 17q-e
+//
+// ADOPTION is the same predicate read the other way round, and it is the
+// last hole in this family. `ensureRunning` refuses a listener on the
+// managed port that `ownsManagedBackend()` (localStorage) does not claim
+// -- correct against a stranger, and a brick wall against an orphan of
+// our OWN install, which is what the buyer actually meets:
+//
+//   - the panel crashed with a backend up and localStorage went with it;
+//   - a second panel session (the key is per-host);
+//   - the recycled-PID branch cleared the record while the real backend
+//     was still booting.
+//
+// In all three the user saw "the panel did not start it" with no button,
+// no PID and no path forward: generation bricked until someone killed a
+// python process by hand. Measured 2026-09-16, a pass lost a probe run to
+// exactly this.
+//
+// These cases run the SHIPPED comfy.js against a REAL http server (so
+// `isUp` is a genuine 200, not a stub) with only the port-holder lookup
+// faked -- the one thing a test cannot conjure. The assertion that
+// matters most is again a NEGATIVE: a ComfyUI outside the managed root
+// must not be adopted, because adopting a stranger hands it the panel's
+// trust the same way killing one destroys the owner's work.
+const http = require("http");
+
+function makePanel(dataRoot) {
+  const EXT = path.join(ROOT, "extension");
+  const store = {};
+  const fakeProcess = { env: { APPDATA: dataRoot }, platform: "win32" };
+  const win = {
+    console: console,
+    setTimeout: setTimeout, clearTimeout: clearTimeout,
+    setInterval: setInterval, clearInterval: clearInterval,
+    localStorage: {
+      getItem: function (k) {
+        return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null;
+      },
+      setItem: function (k, v) { store[k] = String(v); },
+      removeItem: function (k) { delete store[k]; }
+    },
+    AEBridge: {
+      nodeRequire: function (n) {
+        return n === "process" ? fakeProcess : require(n);
+      },
+      getExtensionPath: function () { return EXT; },
+      evalScript: function (s, cb) { if (cb) cb("", "no AE here"); }
+    }
+  };
+  win.window = win;
+  for (const f of ["settings.js", "tiers.js", "comfy.js", "setup.js"]) {
+    new Function("window", fs.readFileSync(path.join(EXT, "js", f), "utf8"))(win);
+  }
+  return { win: win, store: store };
+}
+
+(async function () {
+  const tmp = path.join(os.tmpdir(), "aell-adopt-" + process.pid);
+  // APPDATA/AE-Llama is what Settings.dataRoot() builds, so the vendor
+  // root the panel will trust is <tmp>/AE-Llama/vendor/comfy.
+  const data = path.join(tmp, "AE-Llama");
+  const OWN_ROOT = path.join(data, "vendor", "comfy");
+  fs.mkdirSync(OWN_ROOT, { recursive: true });
+
+  const srv = http.createServer(function (req, res) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end("{}");
+  });
+  await new Promise(function (ok) { srv.listen(0, "127.0.0.1", ok); });
+  const PORT = srv.address().port;
+  const SETTINGS = { comfyBackend: "managed", comfyManagedPort: PORT };
+
+  // The port-holder lookup is the only stub: Get-NetTCPConnection cannot
+  // be made to report a process that does not exist.
+  const realExecFile = cp.execFile;
+  let holder = "";           // "<command line>|<pid>", "" = nothing there
+  let asked = 0;
+  cp.execFile = function (file, args, opts, cb) {
+    if (typeof opts === "function") { cb = opts; }
+    if (String(file).toLowerCase().indexOf("powershell") !== -1) {
+      asked++;
+      setImmediate(function () { cb(null, holder, ""); });
+      return {};
+    }
+    return realExecFile.apply(cp, arguments);
+  };
+
+  function ensure(panel) {
+    return new Promise(function (ok) {
+      const msgs = [];
+      panel.win.Comfy.ensureRunning("http://127.0.0.1:" + PORT,
+        function (m) { msgs.push(m); },
+        function (err, res) { ok({ err: err, res: res, msgs: msgs.join("\n") }); },
+        SETTINGS);
+    });
+  }
+
+  // 10. An orphan of OUR install, with the PID record gone, is ADOPTED.
+  {
+    const panel = makePanel(tmp);
+    holder = path.join(OWN_ROOT, "ComfyUI_windows_portable",
+                       "python_embeded", "python.exe") +
+             " -s ComfyUI\\main.py --port " + PORT + "|9911";
+    const r = await ensure(panel);
+    assert(!r.err, "an orphan running out of the managed root is ADOPTED, " +
+                   "not refused: " + (r.err && r.err.message));
+    assert(r.res && r.res.adopted === true && r.res.started === false,
+           "and it is reported as adopted rather than started");
+    assert(panel.store["aell-comfy-pid"] === "9911",
+           "the PID is re-remembered, so stopManaged() and reapOrphan() " +
+           "can reach it -- adoption without the bookkeeping would leak " +
+           "it again at the next unload", panel.store["aell-comfy-pid"]);
+    assert(/Reconnected/i.test(r.msgs),
+           "the user is told what happened: " + r.msgs);
+  }
+
+  // 11. The owner's OWN ComfyUI on that port is still refused, verbatim.
+  {
+    const panel = makePanel(tmp);
+    holder = "D:\\tools\\ComfyUI\\python.exe main.py --port " + PORT + "|4242";
+    const r = await ensure(panel);
+    assert(r.err && /did not start it/.test(r.err.message),
+           "a ComfyUI OUTSIDE the managed root keeps today's refusal: " +
+           (r.err && r.err.message));
+    assert(r.err && /Managed backend port/.test(r.err.message) &&
+           /own ComfyUI/.test(r.err.message),
+           "with both ways out still named");
+    assert(panel.store["aell-comfy-pid"] === undefined,
+           "and nothing is remembered about a process that is not ours -- " +
+           "a remembered stranger is a taskkill waiting to happen");
+  }
+
+  // 12. Shape alone is not ownership, and neither is an unreadable port.
+  {
+    const panel = makePanel(tmp);
+    holder = "C:\\Windows\\System32\\svchost.exe|777";
+    let r = await ensure(panel);
+    assert(r.err && /did not start it/.test(r.err.message),
+           "a non-ComfyUI holder is refused");
+    holder = "";
+    r = await ensure(panel);
+    assert(r.err && /did not start it/.test(r.err.message),
+           "and so is a port whose holder cannot be read at all -- the " +
+           "safe direction is always the refusal");
+    assert(panel.store["aell-comfy-pid"] === undefined,
+           "neither case remembers a PID");
+  }
+
+  // 13. A backend we DO remember costs no lookup at all.
+  {
+    const panel = makePanel(tmp);
+    panel.store["aell-comfy-pid"] = "9911";
+    const before = asked;
+    const r = await ensure(panel);
+    assert(!r.err && r.res && r.res.adopted === undefined,
+           "a remembered backend is used as before, not re-adopted");
+    assert(asked === before,
+           "and the port holder is not looked up -- the PowerShell spawn " +
+           "only happens on the path that would otherwise refuse");
+  }
+
+  cp.execFile = realExecFile;
+  await new Promise(function (ok) { srv.close(ok); });
+
+  // 14. ONE spelling of the managed root, checked both ways.
+  //
+  // The panel cannot require scripts/lib (the scripts load the PANEL, not
+  // the other way round), so "spelled once" here means the panel asks
+  // setup.js's comfyVendorDir() and never re-joins the path itself. That
+  // leaves two implementations in the repo that must agree, so they are
+  // pinned against each other: a move of the install folder that updates
+  // only one of them fails here rather than in the morning, on the card.
+  {
+    const panel = makePanel(tmp);
+    const panelRoot = panel.win.Comfy._managedRootDir();
+    assert(panelRoot === managed.managedRoot(panel.win.Settings),
+           "comfy.js's managed root IS comfy-managed.js's", panelRoot);
+    assert(panelRoot === panel.win.Setup.comfyVendorDir(),
+           "and both are setup.js's comfyVendorDir(), which is where the " +
+           "install really goes");
+    const src = fs.readFileSync(
+      path.join(ROOT, "extension", "js", "comfy.js"), "utf8");
+    assert(!/"vendor",\s*"comfy"/.test(src),
+           "comfy.js does not re-derive vendor/comfy -- it asks setup.js");
+    const cases = [[OWN_ROOT + "\\x\\python.exe", true],
+                   [OWN_ROOT.toUpperCase() + "\\x\\python.exe", true],
+                   [OWN_ROOT.replace(/\\/g, "/") + "/x/python.exe", true],
+                   ["D:\\tools\\ComfyUI\\python.exe", false],
+                   ["", false]];
+    for (const c of cases) {
+      assert(panel.win.Comfy._commandLineIsUnder(c[0], OWN_ROOT) === c[1] &&
+             managed.commandLineIsUnder(c[0], OWN_ROOT) === c[1],
+             "both containment checks agree on: " + (c[0] || "(empty)"));
+    }
+  }
+
+  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (e) {}
+  console.log(failed ? "\n" + failed + " TEST(S) FAILED" : "\nALL TESTS PASSED");
+  process.exit(failed ? 1 : 0);
+})();
+

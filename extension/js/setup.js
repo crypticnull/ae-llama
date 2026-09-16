@@ -931,7 +931,20 @@
 
   // --------------------------------------------- hidden ComfyUI backend
 
+  /*
+   * Where the managed backend is installed. EXPORTED since §17q-e,
+   * because it is also the OWNERSHIP predicate — comfy.js asks this
+   * rather than joining the same three components again, and two
+   * spellings of an ownership test drift into a guard that matches
+   * nothing (the failure 17q-c was filed for).
+   *
+   * ensureNode() because an exported function may now be the FIRST thing
+   * a caller touches; every other entry point here already calls it, and
+   * without it `path` is still null and this throws (measured in the
+   * adoption test before it was added).
+   */
   function comfyVendorDir() {
+    ensureNode();
     return path.join(global.Settings.dataRoot(), "vendor", "comfy");
   }
 
@@ -1112,6 +1125,7 @@
     detectInstallKind: detectInstallKind,
     installUpdate: installUpdate,
     findComfyInstall: findComfyInstall,
+    comfyVendorDir: comfyVendorDir,
     pickComfyAsset: pickComfyAsset,
     bootstrapComfy: bootstrapComfy,
     isBusy: function () { return bootstrapBusy || comfyBusy; }
