@@ -735,6 +735,145 @@
   var SCAN_MAX_DEPTH = 3;       // ComfyUI allows subfolders; not a tree walk
   var SCAN_MAX_ENTRIES = 5000;  // per kind folder, so a junk folder is cheap
 
+  function countModelFiles(fsMod, pathMod, dir) {
+    var n = 0, walked = 0;
+    (function walk(p, depth) {
+      var names;
+      try { names = fsMod.readdirSync(p); } catch (eR) { return; }
+      for (var i = 0; i < names.length; i++) {
+        if (++walked > SCAN_MAX_ENTRIES) return;
+        var full = pathMod.join(p, names[i]), st;
+        try { st = fsMod.statSync(full); } catch (eS) { continue; }
+        if (st.isDirectory()) {
+          if (depth < SCAN_MAX_DEPTH) walk(full, depth + 1);
+        } else if (MODEL_FILE_EXT.test(names[i]) && st.size > 0) {
+          n++;
+        }
+      }
+    })(dir, 1);
+    return n;
+  }
+
+  function countsText(counts) {
+    var parts = [];
+    for (var k in counts) {
+      if (Object.prototype.hasOwnProperty.call(counts, k)) {
+        parts.push(k + " " + counts[k]);
+      }
+    }
+    return parts.join(", ");
+  }
+
+  function filesWord(n) { return n + " model file" + (n === 1 ? "" : "s"); }
+
+  function trimLine(l) { return String(l).replace(/^\s+|\s+$/g, ""); }
+
+  /**
+   * Check every line of the Extra model folders box (WORKPLAN §19b), so a
+   * typo shows up under the box instead of as a Workflows row still saying
+   * files are missing. Reads a line the way `Tools.comfyModelRoots` does:
+   * `kind=path` is one kind's folder, a bare path is a models root holding
+   * kind subfolders.
+   * deps: {fs, path, kinds}, each defaulting to the panel's own.
+   * Returns [{line, kind, path, ok, counts, total, message}], blank lines
+   * skipped; `ok` means model files are there for the backend to find.
+   */
+  function checkModelRootLines(text, deps) {
+    deps = deps || {};
+    var fsMod = deps.fs, pathMod = deps.path;
+    try {
+      if (!fsMod || !pathMod) ensureNode();
+      fsMod = fsMod || fs;
+      pathMod = pathMod || path;
+    } catch (e) { return []; }
+    var kinds = deps.kinds ||
+      ((global.Comfy && global.Comfy.MODEL_SUBS) || []);
+    var lines = String(text || "").split(/\r?\n/), out = [];
+    for (var i = 0; i < lines.length; i++) {
+      var line = trimLine(lines[i]);
+      if (!line) continue;
+      var kind = null, p = line, eq = line.indexOf("=");
+      if (eq > 0) {
+        kind = trimLine(line.slice(0, eq));
+        p = trimLine(line.slice(eq + 1));
+      }
+      var row = { line: line, kind: kind, path: p, ok: false, counts: {},
+                  total: 0, message: "" };
+      out.push(row);
+      var isDir = false;
+      try { isDir = fsMod.existsSync(p) && fsMod.statSync(p).isDirectory(); }
+      catch (eD) { isDir = false; }
+      if (!isDir) {
+        row.message = "folder not found";
+        continue;
+      }
+      if (kind !== null) {
+        if (kinds.length && kinds.indexOf(kind) === -1) {
+          row.message = "unknown kind \"" + kind + "\" — use one of: " +
+            kinds.join(", ");
+          continue;
+        }
+        row.total = countModelFiles(fsMod, pathMod, p);
+        if (row.total) row.counts[kind] = row.total;
+      } else {
+        for (var k = 0; k < kinds.length; k++) {
+          var n = countModelFiles(fsMod, pathMod, pathMod.join(p, kinds[k]));
+          if (n) { row.counts[kinds[k]] = n; row.total += n; }
+        }
+      }
+      if (row.total) {
+        row.ok = true;
+        row.message = filesWord(row.total) +
+          (kind === null ? " (" + countsText(row.counts) + ")" : "");
+        continue;
+      }
+      // A bare path straight at ONE kind's folder is the likely mistake,
+      // and "0 files" would not tell the user how to write it.
+      var direct = kind === null ? countModelFiles(fsMod, pathMod, p) : 0;
+      row.message = direct
+        ? "no kind folders (checkpoints, loras, ...) here, but " +
+          filesWord(direct) + " directly inside — if they are one " +
+          "kind, write it as e.g. checkpoints=" + p
+        : "no model files found here";
+    }
+    return out;
+  }
+
+  /** One Settings line for a scanForModelRoots candidate (§19b). */
+  function describeModelRootCandidate(c) {
+    return (c.source ? c.source + ": " : "") + filesWord(c.total) +
+      " (" + countsText(c.counts) + ")" +
+      (c.covered ? " — already used" : "");
+  }
+
+  /** A candidate written the way the Extra model folders box takes it. */
+  function modelRootCandidateLine(c) {
+    return c.kind ? c.kind + "=" + c.path : c.path;
+  }
+
+  /**
+   * The Extra model folders text with `additions` appended, skipping any
+   * line it already holds. Case- and trailing-separator-blind, the same
+   * identity scanForModelRoots uses for `covered`.
+   */
+  function mergeModelRootLines(text, additions) {
+    function norm(l) {
+      return trimLine(l).replace(/[\\\/]+$/, "").replace(/\//g, "\\")
+        .toLowerCase();
+    }
+    var lines = String(text || "").split(/\r?\n/).map(trimLine)
+      .filter(function (l) { return !!l; });
+    var have = {};
+    for (var i = 0; i < lines.length; i++) have[norm(lines[i])] = true;
+    for (var j = 0; j < (additions || []).length; j++) {
+      var a = trimLine(additions[j] || "");
+      if (!a || have[norm(a)]) continue;
+      have[norm(a)] = true;
+      lines.push(a);
+    }
+    return lines.join("\n");
+  }
+
   function scanForModelRoots(s, deps) {
     deps = deps || {};
     var fsMod = deps.fs, pathMod = deps.path, env = deps.env;
@@ -804,24 +943,7 @@
       coveredSigs[sig(covered[c].kind, covered[c].path)] = true;
     }
 
-    function countIn(dir) {
-      var n = 0, walked = 0;
-      (function walk(p, depth) {
-        var names;
-        try { names = fsMod.readdirSync(p); } catch (eR) { return; }
-        for (var i = 0; i < names.length; i++) {
-          if (++walked > SCAN_MAX_ENTRIES) return;
-          var full = pathMod.join(p, names[i]), st;
-          try { st = fsMod.statSync(full); } catch (eS) { continue; }
-          if (st.isDirectory()) {
-            if (depth < SCAN_MAX_DEPTH) walk(full, depth + 1);
-          } else if (MODEL_FILE_EXT.test(names[i]) && st.size > 0) {
-            n++;
-          }
-        }
-      })(dir, 1);
-      return n;
-    }
+    function countIn(dir) { return countModelFiles(fsMod, pathMod, dir); }
 
     var out = [], seen = {};
     for (var k = 0; k < shortlist.length; k++) {
@@ -1277,6 +1399,10 @@
     _genWeightDest: genWeightDest,    // exposed for tests
     _existingGenWeight: existingGenWeight, // exposed for tests and the CLI
     scanForModelRoots: scanForModelRoots, // §19a; Settings "Scan" is §19b
+    checkModelRootLines: checkModelRootLines,               // §19b
+    describeModelRootCandidate: describeModelRootCandidate, // §19b
+    modelRootCandidateLine: modelRootCandidateLine,         // §19b
+    mergeModelRootLines: mergeModelRootLines,               // §19b
     modelCatalog: modelCatalog,
     comfyCatalog: comfyCatalog,
     recommendModel: recommendModel,

@@ -363,3 +363,10 @@ input:focus, select:focus, textarea:focus { outline: 1px solid #2d6ca2; }
 .tier-line { margin: 8px 0; color: #9a9; font-size: 11px;
              line-height: 1.45; }
 .tier-line:empty { display: none; }
+/* Extra model folders: per-line check and scan results (WORKPLAN 19b) */
+.model-roots-report { margin: 4px 0 8px; font-size: 11px; line-height: 1.45; }
+.model-roots-report:empty { display: none; }
+.model-roots-report .mr-ok { color: #9a9; }
+.model-roots-report .mr-bad { color: #d98; }
+.model-roots-report .mr-path { color: #999; word-break: break-all; }
+.model-roots-report label.check { margin: 2px 0; }

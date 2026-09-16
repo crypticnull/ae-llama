@@ -181,6 +181,13 @@
           <textarea id="set-comfy-model-roots" rows="2" spellcheck="false"
                     placeholder="(none)"></textarea>
         </label>
+        <div class="drawer-actions" style="justify-content: flex-start;">
+          <button id="btn-scan-model-roots"
+                  title="Look in the usual ComfyUI model folders on this PC (never the whole drive)">
+            Scan for models</button>
+        </div>
+        <div id="model-roots-report" class="model-roots-report"><!-- filled
+          by main.js: per-line folder check, or scan candidates --></div>
 
         <div class="grid2">
           <label>Generation timeout (s)

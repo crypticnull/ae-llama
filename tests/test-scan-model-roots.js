@@ -135,6 +135,71 @@ eq(found.filter((c) => c.path === DOCS).map((c) => c.covered), [true],
 // Injected deps: no comfyDir, no env -> nothing, and no throw.
 eq(Setup.scanForModelRoots({}, { env: {}, covered: [] }), [], "empty env finds nothing");
 
+// ---- §19b: checking what is typed, describing and adding candidates.
+const typed = [
+  DOCS,                                   // a models root: ok, per-kind counts
+  "  checkpoints = " + YAML_CKPT + "  ",  // per-kind, spaces around '='
+  path.join(TMP, "no-such-folder"),       // typo
+  "",                                     // blank: skipped
+  path.join(DOCS, "checkpoints"),         // bare path AT a kind folder
+  "loras=" + path.join(HOME, "ComfyUI", "models", "checkpoints"), // placeholders only
+  "lora=" + YAML_CKPT                     // not a kind
+].join("\r\n");
+const checked = Setup.checkModelRootLines(typed);
+eq(checked.map((r) => r.ok), [true, true, false, false, false, false],
+   "check: ok per line, blank skipped");
+eq(checked[0].counts, { checkpoints: 2, loras: 1 }, "check: a bare root counts its kind folders");
+assert(/^3 model files \(checkpoints 2, loras 1\)$/.test(checked[0].message),
+       "check: root message names the total and kinds [" + checked[0].message + "]");
+eq([checked[1].kind, checked[1].path, checked[1].total], ["checkpoints", YAML_CKPT, 2],
+   "check: kind=path trimmed and counted as that kind");
+eq(checked[2].message, "folder not found", "check: a typo says folder not found");
+assert(/2 model files directly inside/.test(checked[3].message) &&
+       checked[3].message.indexOf("checkpoints=" + path.join(DOCS, "checkpoints")) !== -1,
+       "check: a bare path at a kind folder says how to write it [" + checked[3].message + "]");
+eq(checked[4].message, "no model files found here", "check: placeholders only is not ok");
+assert(/^unknown kind "lora" .*loras/.test(checked[5].message),
+       "check: an unknown kind lists the real ones [" + checked[5].message + "]");
+eq(Setup.checkModelRootLines(""), [], "check: empty box -> no lines");
+
+const desc = Setup.describeModelRootCandidate(
+  { source: "Documents\\ComfyUI", total: 3, counts: { checkpoints: 2, loras: 1 }, covered: false });
+eq(desc, "Documents\\ComfyUI: 3 model files (checkpoints 2, loras 1)", "describe: uncovered candidate");
+assert(/already used$/.test(Setup.describeModelRootCandidate(
+  { source: "x", total: 1, counts: { vae: 1 }, covered: true })), "describe: covered says already used");
+eq(Setup.modelRootCandidateLine({ kind: null, path: DOCS }), DOCS, "line: bare root");
+eq(Setup.modelRootCandidateLine({ kind: "checkpoints", path: YAML_CKPT }),
+   "checkpoints=" + YAML_CKPT, "line: per-kind root keeps kind=");
+
+eq(Setup.mergeModelRootLines("  D:\\A\r\n\r\nD:\\B\\", ["d:\\b", "D:/C/", "", "E:\\D"]),
+   "D:\\A\nD:\\B\\\nD:/C/\nE:\\D",
+   "merge: appends new lines, skips a case/separator duplicate, drops blanks");
+eq(Setup.mergeModelRootLines("", [DOCS, DOCS]), DOCS, "merge: into an empty box, once");
+
+// The scan result feeds the box end to end: add every uncovered one, and
+// a rescan then reports all of them covered and every line checks ok.
+SETTINGS = { comfyDir: COMFY, comfyModelRoots: [] };
+const offered = Setup.scanForModelRoots(SETTINGS).filter((c) => !c.covered);
+const merged = Setup.mergeModelRootLines("", offered.map(Setup.modelRootCandidateLine));
+SETTINGS = { comfyDir: COMFY, comfyModelRoots: merged.split("\n") };
+eq(Setup.scanForModelRoots(SETTINGS).filter((c) => !c.covered), [],
+   "scan -> add -> rescan: nothing left to offer");
+assert(Setup.checkModelRootLines(merged).every((r) => r.ok), "added lines all check ok");
+
+// main.js wires both halves (no CEP here, so this pins the calls exist).
+const mainSrc = fs.readFileSync(path.join(REPO, "extension/js/main.js"), "utf8");
+const html = fs.readFileSync(path.join(REPO, "extension/index.html"), "utf8");
+assert(/id="btn-scan-model-roots"/.test(html) && /id="model-roots-report"/.test(html),
+       "index.html has the Scan button and the report box");
+assert(/\$\("btn-scan-model-roots"\)\.addEventListener\("click", renderModelRootsScan\)/.test(mainSrc),
+       "main.js: Scan button runs renderModelRootsScan");
+assert(/setComfyModelRoots\.addEventListener\("change"/.test(mainSrc),
+       "main.js: editing the box re-checks it");
+["Setup.scanForModelRoots", "Setup.checkModelRootLines", "Setup.describeModelRootCandidate",
+ "Setup.modelRootCandidateLine", "Setup.mergeModelRootLines"].forEach((fn) => {
+  assert(mainSrc.indexOf("global." + fn + "(") !== -1, "main.js calls " + fn);
+});
+
 fs.rmSync(TMP, { recursive: true, force: true });
 if (failures) { console.log("\n" + failures + " FAILED"); process.exit(1); }
 console.log("\nALL CHECKS PASSED");

@@ -27273,3 +27273,21 @@ No `extension/` change, so **no version bump**.
 **Hit:** the edit tool wrote the `"\u0000"` separator (copied from tools.js's dedupe) as a literal NUL byte, which test-source-control-chars caught; the separator is `"|"` now (cannot occur in a Windows path). Worth knowing for the next pass that copies that idiom.
 
 **Bump: none**, extension/ changed but was not verified in real AE (daytime); it rides with NEXT UP 12a, whose row now lists it. Decisions made unattended are written into WORKPLAN §19a (extension set, depth 3 / 5 000 entries cap, zero-file folders dropped, `covered` semantics). Next daytime pass: §19b.
+
+## 2026-09-16 (local session) - "Scan for models" in Settings, and each typed model folder is checked (§19b)
+
+**Item:** §19b, next in the "always takeable" list after §19a, as the 11:05 pass directed. DAYTIME pass, started 11:08 EDT inside the `-UntilHour 17` loop. Checked first that it was not done: nothing in main.js or index.html called `scanForModelRoots`.
+
+**Harness: NOT RUN, on purpose.** Same reading as today's earlier daytime passes (17a is unanswered and CLAUDE.md's daytime rule is the written one). AE not touched. No backend, no GPU, no network, no full suite.
+
+**Changed:**
+- `extension/js/setup.js`: the file counter is now the shared `countModelFiles`, and four new pure helpers are exported: `checkModelRootLines` (per typed line: "N model files (kinds)", "folder not found", "unknown kind ... use one of", and for a bare path pointed AT one kind folder, how to write it as `checkpoints=<path>`), `describeModelRootCandidate`, `modelRootCandidateLine` and `mergeModelRootLines` (dedupe ignores case and trailing separators).
+- `extension/index.html` + `css/style.css`: a **Scan for models** button and a report box under Extra model folders.
+- `extension/js/main.js`: `renderModelRootsCheck` runs when Settings opens and when the box changes (on blur). `renderModelRootsScan` lists what the scan found: folders already used say so, the others get a checkbox (ticked by default), and **Add ticked folders** appends them, saves, and redraws the Workflows rows. Found on the way: the textarea had NO `change` listener, so an edit only persisted through the drawer's close button. Fixed.
+- `tests/test-scan-model-roots.js`: +22 checks covering every message kind, CRLF and blank lines, `kind = path` with spaces, merge dedupe, and scan -> add -> rescan leaving nothing to offer. Also static checks that main.js and index.html wire the button, the change listener and all five Setup calls.
+
+**Verified (stubs only):** test-scan-model-roots ALL CHECKS PASSED; all 21 tests that load setup.js/main.js/index.html/style.css pass; test-source-control-chars and test-manifest-xml pass; capability doc fresh; main.js parses. **Never loaded in a real panel.**
+
+**Bump: none.** extension/ changed but was not verified in real AE (daytime). It rides with NEXT UP 12a, whose row now spells out the panel check (click Scan, type a bad path).
+
+**Decisions made unattended** are written into WORKPLAN §19b: check on blur, not per keystroke, because it walks the disk; uncovered candidates start ticked; a per-kind yaml root is added as `kind=path`; an empty scan names the places it looked. **Hit:** a Node heredoc through the Bash tool turned `\r` inside a template literal into a real CR, so regex-heavy edits went through the Edit tool instead. Next daytime pass: 19c is owner-gated, so take the next row of the always-takeable list (§15 prompt deletions need chat-probe, which is night work; `test-context-budget.js` starve row is repo-only).

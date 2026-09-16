@@ -1170,8 +1170,96 @@
     els.setVramOverride.value = s.vramOverrideGB || 0;
     renderEnhanceToggles(s);
     renderGenModelRows();
+    renderModelRootsCheck();
     renderTierLine();
     els.setAutoUpdate.checked = !!s.autoInstallUpdates;
+  }
+
+  /**
+   * Under Extra model folders (WORKPLAN §19b): one line per typed folder
+   * saying what the backend will find there ("12 model files" / "folder
+   * not found"), so a typo is visible at once instead of as a Workflows
+   * row still missing files three screens away.
+   */
+  function renderModelRootsCheck() {
+    var box = els.modelRootsReport;
+    if (!box) return;
+    box.innerHTML = "";
+    var rows = [];
+    try { rows = global.Setup.checkModelRootLines(els.setComfyModelRoots.value); }
+    catch (e) { rows = []; }
+    for (var i = 0; i < rows.length; i++) {
+      var line = document.createElement("div");
+      line.className = rows[i].ok ? "mr-ok" : "mr-bad";
+      line.textContent = (rows[i].ok ? "✓ " : "✗ ") +
+        rows[i].line + " — " + rows[i].message;
+      box.appendChild(line);
+    }
+  }
+
+  /**
+   * "Scan for models": the §19a shortlist, one line per folder found.
+   * Folders the panel already searches say so; the rest get an Add
+   * checkbox (ticked) and one button appends the ticked ones to the box.
+   */
+  function renderModelRootsScan() {
+    var box = els.modelRootsReport;
+    if (!box) return;
+    formToSettings();
+    box.innerHTML = "";
+    var found = [];
+    try { found = global.Setup.scanForModelRoots(global.Settings.get()); }
+    catch (e) { found = []; }
+    var head = document.createElement("div");
+    if (!found.length) {
+      head.textContent = "No model files in the usual places (Documents\\" +
+        "ComfyUI, ComfyUI in your user folder, ComfyUI Desktop, your " +
+        "ComfyUI install folder). If yours are elsewhere, type the folder " +
+        "above.";
+      box.appendChild(head);
+      return;
+    }
+    head.textContent = "Found:";
+    box.appendChild(head);
+    var picks = [];
+    for (var i = 0; i < found.length; i++) {
+      var c = found[i];
+      var label = document.createElement("label");
+      label.className = "check";
+      var text = document.createElement("span");
+      text.textContent = global.Setup.describeModelRootCandidate(c);
+      var where = document.createElement("div");
+      where.className = "mr-path";
+      where.textContent = c.path;
+      if (c.covered) {
+        text.className = "mr-ok";
+        label.appendChild(text);
+      } else {
+        var cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = true;
+        picks.push({ box: cb, line: global.Setup.modelRootCandidateLine(c) });
+        label.appendChild(cb);
+        label.appendChild(text);
+      }
+      box.appendChild(label);
+      box.appendChild(where);
+    }
+    if (!picks.length) return;
+    var add = document.createElement("button");
+    add.textContent = "Add ticked folders";
+    add.addEventListener("click", function () {
+      var lines = [];
+      for (var p = 0; p < picks.length; p++) {
+        if (picks[p].box.checked) lines.push(picks[p].line);
+      }
+      els.setComfyModelRoots.value = global.Setup.mergeModelRootLines(
+        els.setComfyModelRoots.value, lines);
+      formToSettings();
+      renderGenModelRows();
+      renderModelRootsCheck();
+    });
+    box.appendChild(add);
   }
 
   /**
@@ -1257,6 +1345,7 @@
       setComfyOut: $("set-comfy-out"),
       setComfyModels: $("set-comfy-models"),
       setComfyModelRoots: $("set-comfy-model-roots"),
+      modelRootsReport: $("model-roots-report"),
       setComfyTimeout: $("set-comfy-timeout"),
       setComfyPauseLlm: $("set-comfy-pause-llm"),
       setVramOverride: $("set-vram-override"),
@@ -1480,6 +1569,12 @@
       browseIntoField(els.setComfyModels,
         "Choose a folder for generation models (they get big)", true);
     });
+    els.setComfyModelRoots.addEventListener("change", function () {
+      formToSettings();
+      renderGenModelRows();
+      renderModelRootsCheck();
+    });
+    $("btn-scan-model-roots").addEventListener("click", renderModelRootsScan);
     // -- one-click real-AE self-test with a copyable report
     $("btn-self-test").addEventListener("click", function () {
       els.settingsDrawer.classList.add("hidden");
