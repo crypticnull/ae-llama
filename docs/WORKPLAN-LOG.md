@@ -27386,3 +27386,21 @@ No `extension/` change, so **no version bump**.
 **Checked, not assumed:** `git pull` brought nothing new. The NEXT UP rows that are not struck are unchanged: each one needs AE, the backend, the chat model or the owner. The 17a row still has no owner answer.
 
 **Changed:** this entry only. Nothing new filed, because 17a already asks the owner to stop a daytime loop once its queue is empty, and this pass is one more example of that. No bump.
+
+## 2026-09-16 (local session) - SageAttention is not faster than CK attention on Wan; 7b closes (NEXT UP 7b-2, §13a)
+
+**Item:** NEXT UP 7b-2, the first row with its needs met. Started 11:26 EDT, which is DAYTIME. I checked first: `run-local-agent.ps1` (PID 47376, started 10:20) is running, and CLAUDE.md now says a loop the owner started IS the permission (17a, answered 11:26 by commit 798189a). So this pass used AE, the backend and the GPU. Rows above it were skipped: owner rows (6, 5a-4e, 5a-5b, 5a-5c, 5c, 6b) and 7b, whose step 1 was already done and which points at 7b-2.
+
+**Harness: 770/770 PASSED** at the start. It was not rerun, because nothing in `extension/` changed.
+
+**Did:** robocopied `python_embeded` to `python_sage7b` beside it (4.08 GB), then pip `--no-deps` installed `triton-windows==3.7.1.post27` and the woct0rdho sageattention 2.2.0 post6 wheel into the COPY only. The managed interpreter still finds neither package (checked). The import is clean, and a `sageattn` kernel smoke on the GPU runs with no NaN, cosine 0.9993 against SDPA. Then wan22-5b-fp8, whole card, seed 12345, back to back:
+- `--use-sage-attention` on the copy: **96.58 s** executed, peak delta 25 180 MiB, md5 47e5f5...
+- `--use-ck-attention` control on the managed interpreter: **95.32 s**, 25 116 MiB, md5 abdf56... (the shipped reference, so the control is sound).
+
+I looked at frame 60 of the Sage clip: a correct picture, not the old black or noise output. Against CK it scores SSIM 0.962 / PSNR 32.0 dB.
+
+**Verdict:** there is no material Wan win, so CK attention is the answer. 7b and 7b-2 are struck, and §13a carries a CLOSED note: steps 2-6 (the automated Sage install) stay closed. Reopen only if cards below the CK kernel's capability floor of 7.5 matter to buyers. Table: `docs/measured/comfy-attention-2026-09-16.md`.
+
+**Assumed / skipped:** the 841 MiB-room run the row asked for was NOT taken. The owner is at the machine in the daytime, and a ballast leaving under 1 GB free is exactly the display risk 5a-5c has not answered yet. With no whole-card win, that run could not change the verdict. The copy `python_sage7b` was deleted afterwards. The card is back to 2 005 MiB, with nothing listening on :8288. `local/headroom-run.sh` (gitignored) now takes `PYDIR`.
+
+**Changed:** docs only (WORKPLAN rows 7b/7b-2 and §13a, the measured doc, this entry). Nothing in extension/, so no bump.

@@ -87,3 +87,33 @@ Retaken on the flagged boot, seed 12345, `local/ck-ship-run.sh`:
 | krea2 | whole card | 18 790 | 8 | png 06b2ee… (smoke only) |
 
 Not run flagged: minimax-h3, minimax-h3-int8 (WORKPLAN NEXT UP 7c).
+
+## SageAttention vs CK attention (NEXT UP 7b-2)
+
+Wheels, installed with `pip --no-deps` into a robocopy of
+`python_embeded` (`python_sage7b`, 4.08 GB, deleted afterwards; the
+managed interpreter was checked to still have neither package):
+`triton-windows==3.7.1.post27` (cp313) and woct0rdho
+`sageattention-2.2.0+cu130torch2.10.0andhigher.post6-cp310-abi3-win_amd64.whl`.
+`import torch, triton, sageattention` is clean (torch 2.13.0+cu130,
+triton 3.7.1). Kernel smoke `sageattn` on a 1x24x4096x128 fp16 tensor:
+it runs, no NaN, cosine 0.9993 against SDPA.
+
+wan22-5b-fp8, whole card, shipped args plus the flag, seed 12345, back to
+back in one session (`local/sage7b-run.sh` over `local/headroom-run.sh`,
+which now takes `PYDIR`). AE was open and the idle floor was 2 436 MiB.
+
+| attention | interpreter | backend log | peak MiB | delta MiB | executed s | output |
+|---|---|---|---|---|---|---|
+| sage | copy | `Using sage attention` | 27 616 | 25 180 | **96.58** | md5 47e5f5… |
+| ck (control) | managed | `Using Comfy Kitchen attention` | 27 552 | 25 116 | **95.32** | md5 abdf56… (= shipped reference) |
+
+Frame 60 of the Sage clip looked at: the same red toy car shot, no black
+frames or noise (the post5 bug). Sage vs CK: SSIM 0.962, PSNR 32.0 dB
+(min 29.9).
+
+**Verdict:** no speed win and no VRAM win, so Sage is not worth an
+install step here. The 841 MiB-room run was not taken. The pass ran in
+the daytime with the owner at the machine, and a ballast leaving under
+1 GB free is the open display question (WORKPLAN 5a-5c). With no
+whole-card win it could not change the verdict.
