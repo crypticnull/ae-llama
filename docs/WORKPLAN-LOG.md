@@ -27464,3 +27464,40 @@ Card back to 2 003 MiB, nothing listening on :8288, AE left running and untouche
 **No bump, on purpose:** extension/ changed (version.js data only). The 7d precedent applies: a bump now would publish the main.js changes (12, 13, 13a) that have never loaded in a real panel. The krea2 number is added to 12a's carry list. Stubs pass: vram-curve, model-catalog, tiers, capability-doc, workflow-bundle, comfy-backend, es3-ternary.
 
 The card is back to about 2 000 MiB, with nothing listening on :8288 (the probe's `--boot` stopped what it started). AE was left running and untouched.
+
+## 2026-09-16 (local session) - KV-cache quantization measured: q8_0 at 32K costs what 16K costs today (NEXT UP 11, §13b)
+
+**Item:** NEXT UP 11. Rows above it are owner-only (5a-4e, 5a-5b, 5a-5c, 5c) or done. Started 11:51 EDT, daytime; `run-local-agent.ps1` (PID 47376, -UntilHour 17) is running, so the owner-started loop is the permission (17a). About 12 minutes of GPU; no ComfyUI booted.
+
+**Harness: 770/770 PASSED** at the start. Nothing under extension/ changed, so it was not re-run for this change (scripts/tests/docs only).
+
+**Scope taken:** the VRAM + speed half, via the standalone launcher §13b requires (no extension/ change, no bump). The accuracy half needs the paraphrase matrix and is filed as 11b; ship-with-fallback as 11c.
+
+**Changed:**
+- `scripts/kv-quant-probe.js` (new): per model x ctx x KV type, settled card baseline, llama-server with the panel's argv plus `-ctk/-ctv`, `nvidia-smi -lms 25` through load and one fixed completion (2 657 prompt tokens, 256 generated, temp 0), the server's timings, and its own buffer lines. `--serve` leaves one config up on the settings port for `chat-probe --reuse-server`. Refuses to run if its port already answers.
+- `scripts/lib/kv-quant.js` (new): `buildArgs`, `parseServerLog` (model/KV/compute buffers, K/V types, resolved flash attention, forced-FA line, n_ctx, slots, `-fit` projection, rejected-flag shapes), `fp16KvMiB`.
+- `tests/test-kv-quant.js` (new, 8 checks) against REAL build-10240 log lines.
+- `docs/measured/kv-quant-2026-09-16.md` (+ .json): 18 rows and a hand-written reading.
+- WORKPLAN: row 11 struck/measured, 11b + 11c filed, §13b gets a measured paragraph.
+
+**Measured** (RTX 5090, llama-server build 10240, Qwen2.5 Q4_K_M, card delta MiB / KV buffer MiB / gen t/s):
+
+| model | ctx | shipped | q8_0 | q4_0 |
+|---|---|---|---|---|
+| 7B | 8192 | 5 275 / 448 / 256 | 5 065 / 238 / 246 | 4 953 / 126 / 246 |
+| 7B | 16384 | 5 731 / 896 / 254 | 5 311 / 476 / 245 | 5 087 / 252 / 247 |
+| 7B | 32768 | 6 643 / 1 792 / 255 | 5 803 / 952 / 246 | 5 355 / 504 / 245 |
+| 32B | 16384 | 23 329 / 4 096 / 69 | 21 414 / 2 176 / 66 | 20 387 / 1 152 / 66 |
+| 32B | 32768 | 27 441 / 8 192 / 69 | 23 603 / 4 352 / 66 | 21 555 / 2 304 / 66 |
+
+**Reading:** the KV buffer scales exactly with the type (q8_0 8.5/16, q4_0 4.5/16), and the card delta follows it. For the 7B at 32K, q8_0 costs 5 803 MiB, against 5 731 for today's 16K. That is the §24 lever in numbers. Generation is 4 % slower, and prompt processing 0 to 7 %. On the 7B at 16K the whole fp16 KV is only 896 MiB, so the saving at the default window is 420 MiB (q8_0); the win is in raising the window, not in shrinking the 16K footprint much.
+
+**Traps found (not in §13b before):**
+- The KV/model/compute buffer lines print ONLY at `-lv 4`; at the default verbosity none appear.
+- This build's `-fa` default is `auto` and resolves to "Flash Attention enabled" with the panel's plain argv, so flash attention is already on for buyers on this build. A quantized V cache forces it on anyway ("enabling flash_attn since it is required for quantized V cache"). `--flash-attn` takes a VALUE here, so a bare `-fa` would swallow the next arg (noted in 11c).
+- `n_parallel` is auto = 4 slots on a unified KV (no VRAM cost, since KV is unified), and `-fit` is on by default ("no changes needed" on every row). On a card that cannot fit the load, `-fit` may shrink params silently; the probe reports it as `fitChanged`.
+- My first matrix mis-read shipped rows as `fa auto` (the request, not the resolution), and a heredoc edit mangled the build-version regex. Both fixed and the matrix re-run; the committed artifact is the clean second run.
+
+**Assumed:** Qwen2.5 7B and 32B Q4_K_M are the models that matter (the only two installed; 7B is the small-card model). Measured on a 32 GB card; KV MiB is card-independent, but whether `-fit` changes params on a small card is not measured here.
+
+**No bump:** extension/ untouched. Card back to 1 990 MiB, no llama-server left, AE left running and untouched.
