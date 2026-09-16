@@ -27173,3 +27173,42 @@ No `extension/` change, so **no version bump**.
 
 - Took 25 over 24 (reason above).
 - Reused `findWeightFile` instead of `catalog-probe.js`'s `onDisk`, which is a hand-mirrored root list. The panel's own rule is the one the product acts on.
+## 2026-09-16 (local session) - llama-server lifetime decided: stay attached, keep the reap (NEXT UP 26, §17i)
+
+**Item:** NEXT UP 26. DAYTIME pass, started 10:53 EDT, inside the `-UntilHour 17` daytime loop.
+
+**Harness: NOT RUN, on purpose**, same reading as the earlier daytime passes: 17a is unanswered, and CLAUDE.md's daytime rule is the one written down. AE was running (pid 9580) and was not touched. No backend, no GPU, no network.
+
+**Skipped, all marked done or blocked in their rows:** everything above 26 that needs AE, a backend, a chat model or the owner.
+
+### Decision
+
+§17i offered two options: give llama the detach seam, or delete the reap "that can never fire". Neither was taken, because the second option's premise is half wrong.
+
+- The job object kills a non-detached child when the PROCESS exits. That half is true, and it is why llama-server stays **non-detached**: closing AE frees the model even when CEP skips `unload`.
+- The job object does not act when the PAGE is replaced inside a live process. After a reload that skips `Llama.stop()` (DevTools / Ctrl+R), the new page has no `proc` and the old server still holds the port, so `startServer` would wait 8 s and fail "Port ... is still in use". `reapOrphan()` covers exactly that case. `reloadPanel()` (the self-update) already calls stop first.
+
+### Changed
+
+- `extension/js/llama.js`: the orphan-management comment now states the lifetime decision and the real survivor case. There is a one-line note at `spawn`, and the reap's log line reads "left by an earlier load of this panel" instead of "from a previous session". No behaviour change.
+- `extension/js/main.js`: the init comment at the reap is updated the same way.
+- `tests/test-llama-lifetime.js` (new, 11 ok) pins three things:
+  - the spawn has no `detached`;
+  - init calls `Llama.reapOrphan()`;
+  - `reapOrphan` is executed against stubs. With no record, nothing runs. A live llama-server at the recorded pid is killed with `/PID n /T /F` and its record forgotten. A RECYCLED pid is never killed, and its record is still forgotten.
+
+### Verified
+
+- **Negative control:** with `detached: true` added and the tasklist match forced true, 2 FAIL. Restored, green again.
+- Also green: test-chat-probe, test-main-context-retry, test-source-control-chars, test-capability-doc, test-es3-ternary, test-comfy-backend, test-loop-teardown.
+
+**No bump**, following the 13a/15/17/25 daytime precedent: extension/ changed only in comments and one log string, and it never loaded in a real panel. It rides with 12a, whose row now names it.
+
+### Filed
+
+- **NEXT UP 26a / §17i-a (AE, chat model):** measure that the CEP process survives `location.reload()` and that the reap fires. If the process is replaced on reload instead, the reap really is dead code and deleting it is right.
+
+### Decisions made unattended
+
+- Kept both halves instead of choosing one of the two options offered. The reason is above.
+- No bump, despite the row's "bumps: yes": nothing in it changes behaviour.

@@ -1293,8 +1293,10 @@
     // never-filled (empty) fields over the real settings.
     settingsToForm();
 
-    // A llama-server or hidden ComfyUI from a previous session may have
-    // survived panel teardown (CEP doesn't reliably fire unload) — reap.
+    // A llama-server or hidden ComfyUI from an earlier load of this page may
+    // still be alive: both are non-detached, so AE exiting kills them, but a
+    // reload keeps the process (and its job object) and loses our handles.
+    // Reap by recorded PID (WORKPLAN 17i).
     try { global.Llama.reapOrphan(); } catch (e) {}
     try { global.Comfy.reapOrphan(); } catch (eC) {}
 

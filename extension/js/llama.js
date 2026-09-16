@@ -158,9 +158,22 @@
 
   // -------------------------------------------------- orphan management
 
-  // CEP panels don't reliably fire unload when closed, so a spawned
-  // llama-server can outlive us (pinning RAM/VRAM and the port). We persist
-  // the child's PID and reap it on the next panel session.
+  // LIFETIME, decided 2026-09-16 (WORKPLAN 17i): the server dies with the
+  // PROCESS that spawned it, on purpose. spawnServer() passes no
+  // `detached`, so libuv puts llama-server in the host process's Windows
+  // job object and it is killed the moment that process exits - measured
+  // 2026-09-09 for the same spawn in comfy.js; `unref()` does not change
+  // it. Closing AE therefore frees the model's RAM/VRAM even when CEP never
+  // fires `unload`. Nothing needs a llama-server that outlives the panel
+  // (unlike `comfy-install.js --boot`), so there is no detach seam here.
+  //
+  // What the job object does NOT cover is a new PAGE in the SAME process:
+  // the job lives as long as the process, not the JS context. A reload that
+  // skips Llama.stop() (DevTools / Ctrl+R; reloadPanel() does call stop)
+  // leaves a live server whose `proc` handle died with the old page, still
+  // holding the port. That is the survivor reapOrphan() exists for: the PID
+  // is persisted, and init reaps it. Whether CEF keeps the process across
+  // location.reload() is reasoned, not measured (WORKPLAN 17i-a).
 
   function rememberPid(pid, serverPath) {
     try {
@@ -173,7 +186,7 @@
     try { global.localStorage.removeItem(PID_KEY); } catch (e) {}
   }
 
-  /** Kill a recorded llama-server from a previous session, if it survives. */
+  /** Kill a recorded llama-server left by an earlier page load, if it lives. */
   function reapOrphan(done) {
     ensureNode();
     var rec = null;
@@ -188,7 +201,7 @@
                      /llama-server/i.test(stdout);
         if (!isOurs) { forgetPid(); if (done) done(false); return; }
         emit("log", "[panel] killing orphaned llama-server (pid " +
-                    rec.pid + ") from a previous session\n");
+                    rec.pid + ") left by an earlier load of this panel\n");
         child_process.execFile("taskkill",
           ["/PID", String(rec.pid), "/T", "/F"],
           function () {
@@ -244,7 +257,7 @@
 
     setState("starting", "Preparing…");
     stopServer(true);          // ask any previous child to die
-    reapOrphan(function () {   // kill a survivor from an earlier session
+    reapOrphan(function () {   // kill a survivor from an earlier page load
       // The old process releases the port asynchronously — spawning in the
       // same tick makes the new server intermittently fail to bind.
       waitForPortFree(opts.port, 8000, function (portErr) {
@@ -271,6 +284,7 @@
     setState("starting", "Loading model…");
 
     try {
+      // No `detached`: the job object must take the server down with AE.
       proc = child_process.spawn(serverPath, args, {
         cwd: path.dirname(serverPath),
         windowsHide: true
