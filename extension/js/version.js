@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.12.34",
+    VERSION: "0.12.35",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -672,14 +672,32 @@
         // the four weights are 40 503 MiB on disk. This entry is also
         // Blackwell-only (the nvfp4 encoder), so 32 GB is the card it is
         // offered to either way.
+        //
+        // RETAKEN 2026-09-16 (NEXT UP 7c) on the boot that now ships, which
+        // adds --use-ck-attention wherever the kernel exists (comfy.js
+        // probeCkAttention; every Blackwell card has it). Same graph, same
+        // seed, same backend, one run each, A/B minutes apart:
+        //
+        //   boot                     idle   peak MiB  delta MiB   s
+        //     pytorch attention      1 656    28 705     27 049  251
+        //     --use-ck-attention     1 655    29 469     27 814  145
+        //
+        // 251 -> 145 s, the biggest win the flag has bought (Wan was 23 %).
+        // The unflagged run reproduces 09-09's 253 s, so the speed is the
+        // flag's and not a backend drift. The flagged delta is published:
+        // it is the higher reading, but its PEAK sits inside the unflagged
+        // 28 705-29 648 spread, so it is not read as an attention cost; the
+        // delta rose over 09-09's 26 080 mostly because the idle floor fell
+        // 3 566 -> 1 655. Clip 89d65b... (flagged), frame 60 looked at:
+        // clean; a different sample from the unflagged a29ec2..., as on Wan.
         kind: "video", sizeMB: 40503, minVramGB: 32, measured: true,
-        measuredVramMB: 26080, measuredSeconds: 253,
+        measuredVramMB: 27814, measuredSeconds: 145,
         measuredAt: "1344x768 (0.98 MP, the template's authored frame), " +
                     "5.17 s / 124 frames, seed 12345",
         measuredClipSeconds: 5.17,
         authoredClipSeconds: 5.17,
-        measuredOn: "NVIDIA GeForce RTX 5090, ComfyUI 0.34.0 (managed), " +
-                    "2026-09-09",
+        measuredOn: "NVIDIA GeForce RTX 5090, ComfyUI 0.34.0 (managed, --use-ck-attention), " +
+                    "2026-09-16",
         requiresBlackwell: true,
         workflowTemplate: "AE_LLAMA_H3_T2V_V1",
         urls: [{
@@ -726,8 +744,15 @@
         // exists for cards that cannot load the Blackwell-native nvfp4
         // encoder at all — which is a format question, not a size one, so
         // it does not soften the floor.
+        //
+        // RETAKEN 2026-09-16 (NEXT UP 7c) on the --use-ck-attention boot,
+        // one run: delta 27 718 MiB (idle 1 655, peak 29 373), 147 s, clip
+        // 9b8b93..., frame 100 looked at: clean. Still the sibling's reading
+        // (27 814 / 145 s) within noise. 259 -> 147 s holds only where the
+        // kernel exists (compute capability 7.5+); a 32 GB card below that
+        // boots without the flag and waits the old ~259 s.
         kind: "video", sizeMB: 51427, minVramGB: 32, measured: true,
-        measuredVramMB: 26048, measuredSeconds: 259,
+        measuredVramMB: 27718, measuredSeconds: 147,
         measuredAt: "1344x768 (0.98 MP, the template's authored frame), " +
                     "5.17 s / 124 frames, seed 12345",
         // As with the nvfp4 sibling, the reading IS the authored job:
@@ -735,8 +760,8 @@
         // equal and the row needs no authoredNote.
         measuredClipSeconds: 5.17,
         authoredClipSeconds: 5.17,
-        measuredOn: "NVIDIA GeForce RTX 5090, ComfyUI 0.34.0 (managed), " +
-                    "2026-09-09",
+        measuredOn: "NVIDIA GeForce RTX 5090, ComfyUI 0.34.0 (managed, --use-ck-attention), " +
+                    "2026-09-16",
         note: "the same four-file H3 stack as minimax-h3 with the int8 " +
               "text encoder in place of the Blackwell-only nvfp4 one: " +
               "10 924 MiB more to download, measured the same VRAM and " +

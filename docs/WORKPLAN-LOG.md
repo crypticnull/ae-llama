@@ -26350,3 +26350,65 @@ references now; the Wan ones say so in place.
 - The ~2 s probe per panel session is an acceptable boot cost (boot is
   already 10-20 s); not persisted across sessions, so a GPU swap cannot
   go stale.
+
+## 2026-09-16 (local session) - both MiniMax H3 entries run under --use-ck-attention, and it cuts them 251 -> 145 s
+
+**Item:** NEXT UP 7c. Items above it are owner-only (3, 5a-4e, 5a-5b,
+5a-5c, 5c), marked not needed (6b) or done. Not attempted before today.
+
+**Assumed:** this pass was started at 07:23 EDT with the overnight brief,
+and no loop log newer than 01:47 exists, so it was started by hand. I
+took that as the owner's "unless he says otherwise" and ran the backend.
+Total GPU time was ~12 min. The card was back to 1 225 MiB (AE only) after
+every run, with no listener left on 8288.
+
+**Harness: 770/770 PASSED** before and after. AE left running, untouched.
+
+### Measured (managed ComfyUI 0.34.0, shipped args, seed 12345, whole card)
+
+| entry | boot | idle | peak MiB | delta MiB | s | clip md5 (decoded frames) |
+|---|---|---|---|---|---|---|
+| minimax-h3 | --use-ck-attention | 1 655 | 29 469 | 27 814 | 145 (143.11 executed) | 89d65b... |
+| minimax-h3-int8 | --use-ck-attention | 1 655 | 29 373 | 27 718 | 147 (144.83) | 9b8b93... |
+| minimax-h3 | pytorch attention (A/B) | 1 656 | 28 705 | 27 049 | 251 (250.23) | a29ec2... |
+
+Both flagged backend logs say `Using Comfy Kitchen attention`; the A/B says
+`Using pytorch attention`. Transcripts: `logs/catalog-vram-probe-2026-09-16T11-32-00.md`
+and `T11-34-47.md`, plus the A/B run right after them. I looked at frame 60 of h3 and
+frame 100 of h3-int8: both clean, the same scene, no artefacts.
+
+**Reading:** the flag takes 42 percent off H3, more than it took off Wan (23
+percent). The unflagged run reproduces 09-09's 253 s, so the backend has
+not drifted and the speed-up comes from the flag. The flagged PEAK is 764 MiB over this
+A/B but inside the unflagged 28 705 (today) - 29 648 (09-09) spread, so it is
+not read as an attention cost. The deltas rose over 09-09's 26 080 / 26 048
+mainly because the idle floor fell from 3 566 to 1 655.
+
+### What changed (0.12.35)
+
+- `extension/js/version.js`: minimax-h3 26 080 / 253 -> **27 814 / 145**,
+  minimax-h3-int8 26 048 / 259 -> **27 718 / 147**. I published the higher
+  delta, following 7a. measuredOn names the flag and the date. Gates stay
+  32 and no default moved. The comment keeps the A/B table.
+- `tests/test-workflow-bundle.js` and `docs/CAPABILITIES.md`: the sibling-pair
+  numbers are updated in the prose.
+
+**VISIBLE CHANGE:** the panel's ETA for H3 drops from ~4m13s to ~2m25s on
+cards that have the kernel, and the sample at a given seed changes, as it did on Wan.
+
+### Tests
+
+Model-catalog, workflow-bundle, tiers and comfy-backend all pass. The full
+stubbed suite passes 91 of 92. The one failure is `test-source-control-chars.js`,
+which trips on ANSI escapes in the git-IGNORED `local/attn-sweep.txt` and
+`local/ck7a-sweep.txt`. Those are scratch files from 7a and this pass, so CI never
+sees them. It is a local false alarm, not a defect; I did not file it.
+
+### Not done / open
+
+- The flagged H3 was run once per entry, not twice.
+- A 32 GB card under compute capability 7.5 (for example a V100) boots
+  without the flag and still waits ~259 s on h3-int8. That is written in
+  its comment.
+- 7c's other half, retaking the non-Wan `constrainedFit.identical` claims
+  under the flag, was NOT done. It stays open in the 7c row.

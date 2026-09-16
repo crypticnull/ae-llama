@@ -520,7 +520,7 @@ Queued (see WORKPLAN for owners/order):
   same MiniMax H3 graph with the text encoder swapped — nvfp4 for
   Blackwell cards, int8 for everything else — and measuring both
   showed the 10.9 GB the encoders differ by is a DOWNLOAD difference
-  and not a VRAM one (26 080 vs 26 048 MiB, 253 vs 259 s), because
+  and not a VRAM one (27 814 vs 27 718 MiB, 145 vs 147 s), because
   ComfyUI evicts the encoder before it samples. The two Wan 2.2 5B
   entries are a second such pair, and a cheaper one: there is no fp8
   FILE of that model to download, so `wan22-5b-fp8` is the SAME three

@@ -397,7 +397,7 @@ shipped.forEach((t) => {
 // minimax-h3 and minimax-h3-int8 are ONE model offered with two text
 // encoders: nvfp4 (Blackwell-native) and int8 (everything else). Their
 // graphs are therefore the same fifteen nodes with one input different,
-// and measurement backs that up -- 26 080 vs 26 048 MiB, 253 vs 259 s on
+// and measurement backs that up -- 27 814 vs 27 718 MiB, 145 vs 147 s on
 // the same card at the same size and length (WORKPLAN 18 P9, 18 P10).
 //
 // The bug class this pins is drift, and it is silent in the direction
