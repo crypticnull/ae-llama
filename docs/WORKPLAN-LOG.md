@@ -24243,3 +24243,139 @@ same verdict from there and widen the new test from one script to two.
   NEXT UP 1 closed, 1a / §17q-b filed
 
 **Nothing is blocked for a human.**
+
+## 2026-09-16 (local session) - the teardown now runs on the path the owner actually takes, and the verdict had a sentence it could not read
+
+**Item:** NEXT UP 1a / WORKPLAN 17q-b - "`stop-local-agent.ps1` kills the
+loop and leaves the backend on the card".
+
+**Harness: 770/770 PASSED**, before the work and after it. Full stub suite
+green (89 suites, `tests/test-*.js`). **No version bump** - nothing under
+`extension/` changed.
+
+### What was wrong
+
+17q put the backend teardown on all three of the LOOP's exits. The owner
+takes none of them. The loop's own detach message tells him:
+
+    To stop it: powershell -ExecutionPolicy Bypass -File scripts\stop-local-agent.ps1
+
+and that script `Stop-Process`es the loop shell. A killed process runs no
+teardown - PowerShell has no `finally` on a `Stop-Process` from outside -
+so the detached ComfyUI survived with the whole card. The documented way
+to cut a night short WAS the 27,844-MiB morning of 17q, reached from the
+one path that is recommended in writing. The word `comfy` appeared zero
+times in that file's 111 lines.
+
+### What it is now
+
+`Stop-AellLoopBackend` moved out of `run-local-agent.ps1` into
+**`scripts/lib/comfy-teardown.ps1`**, dot-sourced by both scripts. Neither
+holds a copy, and the test asserts that: a copy per caller is how one of
+them ends up in the wrong branch again, which is the entire history of
+this item.
+
+Two parameters were added on the way out of the loop, because the
+function used to read the loop's own scope: `-RepoRoot` (defaults to the
+lib's own repo) and `-Log` (defaults to `Write-Host`; the loop passes
+`${function:Write-Log}` so the lines keep landing in the night's log).
+
+In `stop-local-agent.ps1` the call sits **after the kills** - a pass
+killed mid-boot is still writing the PID record `--stop` has to read -
+and **before both exits**. It is guarded by nothing except a new
+`-KeepBackend` opt-out, and the test enforces exactly that: the call may
+sit under that one condition and no other. It runs **whether or not a
+loop was found**, which is the case that matters most: the morning that
+opened 17q was a backend with no loop left to own it.
+
+### A second bug, found by moving the code
+
+The verdict filters `--stop`'s output with one `-match`, and it did not
+recognise `stopped the backend holding port N`. That is the sentence
+`comfy-managed.js` prints when the PID record is gone and the PORT
+fallback does the kill - i.e. the 2026-09-06 failure mode, the one case
+where the fallback is load-bearing. A stop that had WORKED would have
+logged **"--stop said nothing recognisable; check by hand."** All three of
+`comfy-managed.js`'s sentences are recognised now, and the test reads the
+phrases out of that file and runs them through the shipped regex, so a
+reworded message breaks the test rather than the verdict.
+
+### Measured, on the real script
+
+The real `stop-local-agent.ps1` would have killed the pass measuring it
+(this pass IS a descendant of the running loop), so the measurement ran a
+copy whose loop-finder pattern matches nothing. Everything else in it -
+the dot-source, the parameter binding, the call site, the exits - is the
+shipped file. Worth reusing: **a script that kills its own caller is
+still measurable if you neuter only its FINDER.**
+
+With a live managed backend on the card (booted with `comfy-install.js
+--boot`, pid 34576):
+
+    Backend: [info] stopped the managed backend (pid 34576).
+    GPU    : 3957 -> 3526 MiB used of 32607 (freed 431)
+    Backend: card is back -- no AE-Llama process left on the GPU.
+
+with nothing to stop:
+
+    Backend: [info] no managed backend found to stop (nothing remembered,
+             and nothing ComfyUI-shaped on port 8288).
+    GPU    : 3526 -> 3526 MiB used of 32607 (freed 0)
+    Backend: card is back -- no AE-Llama process left on the GPU.
+
+and with the opt-out:
+
+    Leaving the managed backend running (-KeepBackend).
+
+Exit code 0 on all three. The LOOP's own path was re-verified through the
+shared function the same way 17q was (`-Detached -SkipPreflight
+-NoDialogWatchdog -Iterations 0 -UntilHour -1`, which runs the whole
+script and takes zero passes, so every git call sits in a `for` body that
+never executes) - and its lines carry the loop's `[HH:mm:ss]` prefix,
+which is the proof that `-Log ${function:Write-Log}` really routes into
+the night's log rather than a stray console.
+
+### The test
+
+`tests/test-loop-teardown.js` widened from one script to three files, 46
+assertions. New properties: neither script defines its own copy; both
+dot-source the lib; neither invokes `--stop` by hand; the stop script's
+call is not nested in a branch and its only guard is `-KeepBackend`; the
+kills come first; no `exit` precedes it; and the `-match` recognises every
+sentence `comfy-managed.js` can answer with.
+
+**Mutation-checked twice**, because a placement test that passes on the
+broken shape is worth nothing:
+
+- deleting the call from `stop-local-agent.ps1` ->
+  `tears the backend down, in exactly one place (0)`;
+- moving it under `if ($loops.Count -eq 0)` instead of `if ($KeepBackend)`
+  -> `the only condition it sits under is -KeepBackend`.
+
+### One finding filed, and this pass created it
+
+**17q-c: the port fallback kills by SHAPE, not by ownership.**
+`comfy-managed.js stop()` falls back to `stopByPort`, which `taskkill`s
+whatever holds the configured port if its command line matches
+`/ComfyUI/i`. Inside an overnight loop that is nearly always ours, so the
+risk was theoretical. It is not any more: since today the same call is one
+keystroke of `stop-local-agent.ps1` away, typed by the owner, during the
+day. If he is running his OWN ComfyUI on port 8288, "stop the agent" now
+kills it and reports success. Queued as NEXT UP **1b** (§17q-c) with two
+candidate fixes - decline the fallback on the hand-stop path, or require
+the port holder's path to sit under `AE-Llama\vendor\comfy`, the fragment
+the verdict already carries. Filed by the pass that introduced the
+exposure, which is the only honest place for it.
+
+### Files
+
+- `scripts/lib/comfy-teardown.ps1` - new; the function, its parameters,
+  and the reasoning that has now been paid for three times
+- `scripts/run-local-agent.ps1` - the function removed, the lib
+  dot-sourced, three call sites passing `-RepoRoot` and `-Log`
+- `scripts/stop-local-agent.ps1` - dot-source, `-KeepBackend`, the call
+- `tests/test-loop-teardown.js` - widened to both scripts and the lib
+- `docs/WORKPLAN.md` - 17q-b closed and measured, NEXT UP 1a struck,
+  1b / §17q-c filed
+
+**Nothing is blocked for a human.**

@@ -52,7 +52,8 @@ every pass and finished work costs the same context as live work.
 | # | item | where | needs | bumps |
 |---|---|---|---|---|
 | 1 | ~~**Make the loop verify its OWN teardown; a pass cannot.**~~ **DONE 2026-09-16.** And the reason no log ever carried a `Backend:` line was worse than "the loop was already running": the 2026-09-09 fix was pasted INSIDE the `-PreflightOnly` early exit, the one path on which no pass has run and no backend can exist, so it was unreachable from a real overnight loop for a week. One `Stop-AellLoopBackend` now sits at top level and is called from all three exits, reads the card before and after `--stop`, and writes the verdict itself. Verified by running the real exit path twice (`-Iterations 0`): it killed a live backend (pid 50788, 4304 -> 3606 MiB) and then reported the empty case. Guarded by `tests/test-loop-teardown.js`. See §17q. | §17q | nothing | no |
-| 1a | **`stop-local-agent.ps1` kills the loop and leaves the backend on the card** — the same 17q symptom, reached from the path the OWNER actually uses. The loop only tears the backend down on its own exits; a `Stop-Process` has no `finally`, so the hand-stop the detach message tells him to run (`To stop it: ... scripts\stop-local-agent.ps1`) is a silent 27 GB leak. Grep confirms the word `comfy` appears ZERO times in its 111 lines. Fix: call the same `Stop-AellLoopBackend` verdict from there. Extend `tests/test-loop-teardown.js` to cover both scripts. | §17q-b | nothing | no |
+| 1a | ~~**`stop-local-agent.ps1` kills the loop and leaves the backend on the card.**~~ **DONE 2026-09-16.** `Stop-AellLoopBackend` is `scripts/lib/comfy-teardown.ps1` now, dot-sourced by BOTH scripts with no copy in either; the hand-stop the detach message recommends tears the backend down after the kills and before both exits, with a `-KeepBackend` opt-out. Runs even when no loop was found, because the 17q morning WAS a backend with no loop left to own it. Verified on the real script (a loop-finder-neutered copy, since the real one would have killed the pass measuring it): a live backend went 3957 -> 3526 MiB, and the empty case and `-KeepBackend` both read right. Found and fixed on the way past: the verdict never recognised `stopped the backend holding port N`, so a stop that WORKED through the port fallback read as "said nothing recognisable". `tests/test-loop-teardown.js` now covers both scripts and the lib. See §17q-b. | §17q-b | nothing | no |
+| 1b | **`--stop` can kill a ComfyUI the panel never booted, and that now happens on a command the OWNER types.** `comfy-managed.js stop()` falls back to `stopByPort`: if the PID record is gone it kills whatever holds port 8288 whose command line matches /ComfyUI/i. Inside the overnight loop that is nearly always ours. Since 17q-b the same call is one keystroke of `stop-local-agent.ps1` away, so the owner running his OWN ComfyUI on the configured port loses it to a command whose stated job is stopping the agent. Cheap fix: have the hand-stop path pass a flag that declines the port fallback (record-only), or name the process it is about to kill and require it to live under `AE-Llama\vendor\comfy`. Filed 2026-09-16 by the pass that introduced the exposure. | §17q-c | nothing | no |
 | 2 | ~~**Reserve VRAM for the desktop and After Effects before sizing the chat model.**~~ **DONE 2026-09-15 (0.12.18).** The reserve is in `planHandoff` and now gates `Llama.start` too (`Tiers.planChatLoad`), which had no arithmetic at all. The AMOUNT is still provisional and comes from item 3 — two constants, one line each, in `tiers.js`. What it does NOT touch: `recommendChat`/`recommendGen`, i.e. the tier table, which §16f reserves for the owner. See §16g. | §16b | AE, chat model | yes |
 | 3 | **BLOCKED 2026-09-16 on a rule conflict - see §16b BLOCKER, it needs one line from the owner.** ~~Measure the §16b reserve on the owner's four real projects~~ — copies only, originals hashed before and after, close without saving. The exact eight-step procedure is in §16b; follow it to the letter. Paths are in the git-ignored `local/real-projects.json` and must never be committed. Nothing else loaded on the card while measuring. | §16b | AE | no |
 | 4 | ~~**fp8 Wan 2.2 5B as a second entry, then MEASURE it.**~~ **DONE 2026-09-16 (0.12.19).** There is no fp8 FILE of the 5B; shipped as a load-time `weight_dtype` cast instead, zero extra download. 24 314 MiB vs 26 187 at the authored size, 16 834 vs 21 536 at 704x480. **The gate did not move - §18 P7a is still open.** Full table in §18 P7c step 1; follow-ups in step 1a. The §18 P10 pattern: the shipped Wan graph with the diffusion filename swapped and nothing else. Cheapest route to a video option under 32 GB. | §18 P7c step 1 | backend, disk | yes |
@@ -6326,9 +6327,87 @@ then widen `tests/test-loop-teardown.js` from one script to both. The
 test already knows the shape of the assertion; it just does not know
 there are two callers.
 
-**Why it is filed rather than fixed in the same pass:** one item per
-pass, and this is a second caller with its own exit paths, not a line of
-the one just verified. It is takeable with nothing but the repo.
+**DONE 2026-09-16 (local session), verified on the real script.**
+
+`Stop-AellLoopBackend` is `scripts/lib/comfy-teardown.ps1` now, dot-sourced
+by both scripts; neither holds a copy, and the test asserts that (a second
+copy is how one of them ends up in the wrong branch again). In
+`stop-local-agent.ps1` the call sits after the kills -- a pass killed
+mid-boot is still writing the PID record `--stop` has to read -- and
+before both exits, guarded by nothing except a new `-KeepBackend`
+opt-out for the one case where stopping is wrong.
+
+**It runs whether or not a loop was found.** The morning that opened 17q
+was a backend with no loop left to own it, so "no loop running" is
+precisely a case that must still check the card.
+
+Measured, by running a copy of the script whose loop-finder matches
+nothing (the real one would have killed the pass making the measurement):
+
+    Backend: [info] stopped the managed backend (pid 34576).
+    GPU    : 3957 -> 3526 MiB used of 32607 (freed 431)
+    Backend: card is back -- no AE-Llama process left on the GPU.
+
+and with nothing to stop, and with `-KeepBackend`:
+
+    Backend: [info] no managed backend found to stop (...)
+    Backend: card is back -- no AE-Llama process left on the GPU.
+    Leaving the managed backend running (-KeepBackend).
+
+The loop's three exits were re-verified through the shared function the
+same way as 17q (`-Detached -SkipPreflight -NoDialogWatchdog -Iterations 0
+-UntilHour -1`), with the lines carrying the loop's own timestamps -- so
+`-Log ${function:Write-Log}` really does land in the night's log.
+
+One thing the move fixed on the way past: the verdict's `-match` did not
+recognise `stopped the backend holding port N`, the sentence
+`comfy-managed.js` says when the PID record is gone and the port fallback
+does the kill. That answer used to fall through to "said nothing
+recognisable" on a stop that had WORKED. All three of its sentences are
+recognised now, tied to `comfy-managed.js` by the test.
+
+`tests/test-loop-teardown.js` covers both scripts and the lib (46
+assertions), mutation-checked twice: deleting the call from
+`stop-local-agent.ps1` fails it, and moving the call under any condition
+other than `-KeepBackend` fails it.
+
+## 17q-c. The port fallback kills by SHAPE, not by ownership, and the owner can now trigger it by hand (filed 2026-09-16, local session)
+
+Filed by the pass that made it reachable, which is the only honest place
+for it.
+
+`comfy-managed.js` `stop()` tries the remembered PID first and falls back
+to `stopByPort`: whatever is listening on the configured port, if its
+command line matches `/ComfyUI/i`, gets `taskkill /T /F`. That fallback
+exists for a real failure -- the PID record not surviving (2026-09-06) --
+and inside an overnight loop the thing on that port is nearly always the
+loop's own backend, so the risk was theoretical.
+
+17q-b changed who can reach it. `stop-local-agent.ps1` is a command the
+OWNER types, during the day, on his own machine. If he happens to be
+running his own ComfyUI on the configured port (8288 by default, and the
+setting is his), "stop the agent" kills it, with a message that reads like
+a success.
+
+**Two candidate fixes, both small:**
+
+1. A `--stop-record-only` mode (or a parameter on the shared teardown)
+   that declines the port fallback. The loop keeps today's behaviour,
+   where the fallback is what covers a lost PID record; the hand-stop
+   takes the conservative one.
+2. Or verify OWNERSHIP rather than shape: require the port holder's
+   executable path to sit under `AE-Llama\vendor\comfy` -- the same
+   fragment the teardown's verdict already uses -- and say what it found
+   when it declines.
+
+(2) is better if the path is reliably readable; (1) is guaranteed to be
+correct and costs a parameter. Either way the refusal has to be a
+SENTENCE, not silence: "something ComfyUI-shaped holds port N and it is
+not ours -- not killing it" is already the wording `stopByPort` uses for
+the non-ComfyUI case, so the shape exists.
+
+No backend and no GPU needed; the port branch is testable with any
+listener on the port.
 
 ## 17l-b. `comfy-node-defs.json` is a 52-class DEMAND HARVEST that reads like a full snapshot, and asking it "does node X exist" gets a false NO (filed 2026-09-16, local session)
 
