@@ -27075,3 +27075,17 @@ Rows above 18 were skipped. Owner: 5, 5a-4e, 5a-5b, 5a-5c, 5c, 6b, 17a. Backend,
 ### Needs a human eye
 
 - NEXT UP 17a is still open.
+
+## 2026-09-16 (local session) — the heartbeat clock runs backwards
+
+Observed on a healthy loop at 30-second beats: `00:30, 01:00, 02:31,
+02:01, 03:31`, where the truth is `00:30, 01:00, 01:30, 02:00, 02:30`.
+The minute carries one beat early and the reading then DECREASES.
+
+Cosmetic to the loop, which does not read it, and NOT cosmetic to the
+person who reads it to decide whether a pass is stuck. Section 20 exists
+because CPU was read twice in opposite directions and lied both times; an
+elapsed clock that goes backwards is the same failure in a smaller coat.
+Queued as item 1. Suspect `[int]` rounding where the code wants floor.
+
+No `extension/` change, so **no version bump**.

@@ -21,8 +21,9 @@
 //
 //   Clearing under a live AE. AE owns the key for its whole session and
 //   rewrites it on exit, so a clear applied while it runs is silently
-//   undone. A fix that reports success while being reverted is the
-//   section 20 preflight lesson wearing a different hat.
+//   undone. But only the AE that OWNS the key: a running 26.3 must not
+//   block clearing a stale 26.2. A fix that reports success while being
+//   reverted is the section 20 preflight lesson wearing a different hat.
 //
 //   Non-ASCII in a .ps1. CLAUDE.md requires pure ASCII; a stray escape
 //   put a BEL byte in the dot-source path during this very change, and
@@ -81,6 +82,7 @@ if (!shell) {
   console.log("SKIP - behaviour needs Windows PowerShell; shape checks only");
 } else {
   const key = "HKCU:\Software\_aell-crash-flag-test-" + process.pid;
+  const other = "HKCU:\\Software\\Adobe\\After Effects\\99.1";
   const ps = [
     ". '" + LIB.replace(/'/g, "''") + "'",
     "$k = '" + key + "'",
@@ -93,11 +95,31 @@ if (!shell) {
     // needed. A test that reads ambient machine state as fixture is the
     // same class of mistake as diagnosing a pass off CPU.
     "function Arm { New-ItemProperty -Path $k -Name CrashOccurred -Value 1 -PropertyType DWord -Force | Out-Null }",
+    // Which AEs are "running" is INJECTED by redefining the one function
+    // that asks the OS, so every branch is checked on every machine
+    // instead of whichever one the machine happens to be in.
+    "function Fake([string[]]$keys) { $script:fakeKeys = $keys; Set-Item -Path function:Get-AellRunningAeVersionKeys -Value { return @($script:fakeKeys) } }",
+    "Write-Output ('LIVEKEYS=' + (@(Get-AellRunningAeVersionKeys) -join ';'))",
+    "Write-Output ('CONVERT=' + (ConvertTo-AellAeVersionKey -ProductVersion '26.3.0.12'))",
+    "Write-Output ('CONVERTBAD=' + ($null -eq (ConvertTo-AellAeVersionKey -ProductVersion '26')))",
     "Arm",
     "Write-Output ('READ=' + (Get-AellAeCrashFlag -VersionKey $k))",
+    "Fake @($k)",
     "$refuse = Clear-AellAeCrashFlag -VersionKey $k",
-    "Write-Output ('AERUNNING=' + (Test-AellAeRunning))",
     "Write-Output ('REFUSED=' + (-not $refuse.Cleared) + '|' + $refuse.Reason)",
+    "Fake @('?')",
+    "$unk = Clear-AellAeCrashFlag -VersionKey $k",
+    "Write-Output ('UNKNOWN=' + (-not $unk.Cleared))",
+    "Fake @('" + other + "')",
+    "Write-Output ('BLIND=' + (Test-AellAeRunning))",
+    "$vers = Clear-AellAeCrashFlag -VersionKey $k",
+    "Write-Output ('OTHERVERSION=' + $vers.Cleared + '|' + $vers.Reason)",
+    "Fake @()",
+    "Write-Output ('NONE=' + (Test-AellAeRunning))",
+    "Arm",
+    "$cold = Clear-AellAeCrashFlag -VersionKey $k",
+    "Write-Output ('COLD=' + $cold.Cleared + '|' + $cold.Reason)",
+    "Fake @($k)",
     "Arm",
     "$done = Clear-AellAeCrashFlag -VersionKey $k -Force",
     "Write-Output ('CLEARED=' + $done.Cleared + '|BEFORE=' + $done.Before)",
@@ -117,19 +139,27 @@ if (!shell) {
     return m ? m[1].trim() : null;
   };
 
+  assert(field("CONVERT") === "HKCU:\\Software\\Adobe\\After Effects\\26.3",
+    "a four-part ProductVersion maps to its major.minor key");
+  assert(field("CONVERTBAD") === "True", "a one-part version maps to no key at all");
+  // The real OS read, reported not asserted on: a running AE must come
+  // back as a real key, and a '?' here means the Path read is failing.
+  console.log("      running AE version keys on this machine: [" + field("LIVEKEYS") + "]");
+  assert(!/(^|;)\?($|;)/.test(field("LIVEKEYS") || ""),
+    "every running AfterFX on this machine reports a readable version");
   assert(field("READ") === "1", "it reads a DWord CrashOccurred of 1");
-
-  // The refusal only happens while AE is up, so which branch is checked
-  // depends on the machine. Both are asserted, neither is skipped.
-  if (field("AERUNNING") === "True") {
-    assert(/^True\|/.test(field("REFUSED") || ""),
-      "it REFUSES to clear while After Effects is running");
-    assert(/rewrites it on exit/.test(field("REFUSED") || ""),
-      "and the reason says why, because that string lands in the loop log");
-  } else {
-    assert(/^False\|removed CrashOccurred/.test(field("REFUSED") || ""),
-      "with AE closed the unforced call clears it - no -Force needed on a cold machine");
-  }
+  assert(/^True\|/.test(field("REFUSED") || ""),
+    "it REFUSES to clear while the AE that owns the key is running");
+  assert(/rewrites it on exit/.test(field("REFUSED") || ""),
+    "and the reason says why, because that string lands in the loop log");
+  assert(field("UNKNOWN") === "True",
+    "an AE whose version cannot be read still blocks the clear (wrong-safe)");
+  assert(field("BLIND") === "True",
+    "without -VersionKey any running AE still counts");
+  assert(/^True\|removed CrashOccurred/.test(field("OTHERVERSION") || ""),
+    "a running AE of ANOTHER version does not block the clear (section 21: 26.3 blocked stale 26.2)");
+  assert(/^True\|removed CrashOccurred/.test(field("COLD") || ""),
+    "with no AE running the unforced call clears it - no -Force needed on a cold machine");
 
   assert(field("CLEARED") === "True|BEFORE=1",
     "with -Force it clears, and reports the value it found");

@@ -334,9 +334,10 @@ public class AellDlg {
 
   HONESTY: only the save-changes rule is written from measured strings
   (harvested 2026-08-28 off AE 2026, and confirmed by the owner's own
-  screenshot 2026-09-02). The recovery and unexpected-quit wordings on
-  AE 2026 and Premiere 26.3.2 have NOT been measured here -- their
-  fragments and button labels are candidates. That is what
+  screenshot 2026-09-02). The unexpected-quit wording on AE 2026 and
+  Premiere 26.3.2 has NOT been measured here -- its fragment and button
+  labels are candidates. The crash-recovery prompt WAS measured
+  (2026-09-08) and has no rule at all: see Test-AellCrashPromptText. That is what
   Write-AellUnknownDialogs exists for: anything unmatched gets its real
   text and every real button label into the log, and the next session
   writes an exact rule instead of a second guess.
@@ -358,12 +359,15 @@ function Get-AellDialogRules {
        # nobody can clear.
        CancelIfNoButton = $true
        Buttons  = @("Don't Save", 'Dont Save', 'No') },
-    @{ Name     = 'crash / auto-save recovery'
-       Contains = @('recover')
-       Any      = @()
-       RequiresOwned = $false
-       CancelIfNoButton = $true
-       Buttons  = @("Don't Recover", 'Dont Recover', 'No', 'Cancel') },
+    # NO crash-recovery rule, on purpose (WORKPLAN section 21). The one
+    # that sat here keyed on 'recover', a word the real prompt does not
+    # contain, so it never matched -- and read as coverage that did not
+    # exist. Written on the measured text it WOULD match, and then every
+    # rule here falls back to WM_CLOSE: a blind key on a dialog whose
+    # wrong branch is a Safe Mode session with the panel silently
+    # unloaded. Until someone measures which key opens AE normally, the
+    # prompt is PREVENTED (ae-crash-flag.ps1) and RECOGNISED
+    # (Test-AellCrashPromptText below), never answered.
     @{ Name     = 'unexpected quit notice'
        Contains = @('unexpectedly')
        Any      = @()
@@ -395,6 +399,36 @@ function Get-AellDialogRules {
        CancelIfNoButton = $true
        Buttons  = @('Cancel') }
   )
+}
+
+# AE's crash-recovery prompt, recognised by its MEASURED text (AE 26.3,
+# 2026-09-08, harvested by Write-AellUnknownDialogs):
+#
+#   We detected a crash in your last session. Crashes can potentially be
+#   caused by faulty plugins, scripts, extensions, or corrupt preferences.
+#   We recommend starting a Safe Mode session in order to diagnose the
+#   problem. ...
+#
+# Recognise, never answer. Its buttons are owner-drawn inside a single
+# OS_ViewContainer pane: no button HWND, no UIA element. The only thing
+# automation could send is a key or WM_CLOSE, and nobody has measured
+# which of those opens AE NORMALLY rather than in Safe Mode, where
+# scripts and extensions do not load and the panel is simply absent.
+# What this buys is a harness that can SAY "the crash prompt" instead of
+# a generic startup popup, and a test fixture of the real words.
+function Get-AellCrashPromptFragments {
+  return @('detected a crash', 'Safe Mode')
+}
+
+function Test-AellCrashPromptText {
+  param([string]$Text = '')
+  if (-not $Text) { return $false }
+  foreach ($f in (Get-AellCrashPromptFragments)) {
+    if ($Text.IndexOf($f, [System.StringComparison]::OrdinalIgnoreCase) -lt 0) {
+      return $false
+    }
+  }
+  return $true
 }
 
 # Try every rule against every process with these names. Returns the

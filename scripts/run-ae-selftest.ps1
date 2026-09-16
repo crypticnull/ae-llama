@@ -897,11 +897,20 @@ if (-not (Test-Path $out)) {
       "until that is dismissed AE never gets far enough to run a -r " +
       "script. Nothing to do with the scripting-file-access " +
       "preference: dismiss it and re-run.")
-    if ($midRunAnswers -eq 0) {
-      Write-Host ("  The recovery prompt is meant to be answered " +
-        "automatically (see Get-AellDialogRules). Nothing matched it, so " +
-        "its real text and buttons follow -- write a rule from these " +
-        "and it will never cost a run again.")
+    if (Test-AellCrashPromptText -Text (Get-AellDialogHarvest)) {
+      # Recognised by its measured words, and deliberately NOT answered
+      # (WORKPLAN section 21): its buttons are owner-drawn, and the only
+      # keys automation could send have an unmeasured branch into Safe
+      # Mode, where the panel silently does not load.
+      Write-Host ("  It is AE's CRASH-RECOVERY prompt ('We detected a " +
+        "crash in your last session'). No automation answers it: a " +
+        "human must choose to open AE normally, NOT in Safe Mode. The " +
+        "flag that arms it was cleared before launch unless the line " +
+        "'Crash flag:' above says otherwise.")
+    } elseif ($midRunAnswers -eq 0) {
+      Write-Host ("  Nothing in Get-AellDialogRules matched it, so its " +
+        "real text and buttons follow -- a rule can be written from " +
+        "these.")
       Write-AellUnknownDialogs -ProcessNames $script:AellHostProcesses
     }
   } else {

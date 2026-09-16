@@ -57,7 +57,17 @@ function Get-AellAeVersionKey {
     try { $pv = (Get-Item -LiteralPath $ExePath).VersionInfo.ProductVersion } catch { return $null }
     if (-not $pv) { return $null }
 
-    $parts = ($pv.Trim() -split '\.')
+    return (ConvertTo-AellAeVersionKey -ProductVersion $pv)
+}
+
+# "26.3" or "26.3.0.12" -> HKCU:\...\26.3. One conversion, shared by the
+# exe mapping above and the running-process check below, so the two can
+# never disagree about which key a version owns.
+function ConvertTo-AellAeVersionKey {
+    param([string]$ProductVersion)
+
+    if (-not $ProductVersion) { return $null }
+    $parts = ($ProductVersion.Trim() -split '\.')
     if ($parts.Count -lt 2) { return $null }
     return ('HKCU:\Software\Adobe\After Effects\' + $parts[0] + '.' + $parts[1])
 }
@@ -75,10 +85,37 @@ function Get-AellAeCrashFlag {
     return [int]$item.CrashOccurred
 }
 
-# Is any After Effects running right now? AE owns this registry key for
-# the life of its session and rewrites it on exit.
+# The version key of every running AfterFX, one entry per process. A
+# process whose version cannot be read yields '?' rather than being
+# dropped: "running, version unknown" must still block a clear.
+function Get-AellRunningAeVersionKeys {
+    $keys = @()
+    foreach ($p in @(Get-Process -Name AfterFX -ErrorAction SilentlyContinue)) {
+        $k = $null
+        try { if ($p.Path) { $k = Get-AellAeVersionKey -ExePath $p.Path } } catch { }
+        if ($k) { $keys += $k } else { $keys += '?' }
+    }
+    return $keys
+}
+
+# Is After Effects running right now? AE owns its registry key for the
+# life of its session and rewrites it on exit.
+#
+# With -VersionKey, only an AE that OWNS that key counts (WORKPLAN 21).
+# Without it this was version-blind: a running 26.3 blocked clearing a
+# stale 26.2 flag that 26.3 never touches, which is how CrashOccurred = 1
+# sat armed on 26.2 for its next launch. An AE whose version cannot be
+# read still counts -- wrong-safe, as before. Keys compare with -eq,
+# which is case-insensitive, as the registry is.
 function Test-AellAeRunning {
-    return @(Get-Process -Name AfterFX -ErrorAction SilentlyContinue).Count -gt 0
+    param([string]$VersionKey = '')
+
+    $running = @(Get-AellRunningAeVersionKeys)
+    if (-not $VersionKey) { return $running.Count -gt 0 }
+    foreach ($k in $running) {
+        if ($k -eq '?' -or $k -eq $VersionKey) { return $true }
+    }
+    return $false
 }
 
 # Clear the flag so the next launch shows no recovery prompt.
@@ -111,7 +148,7 @@ function Clear-AellAeCrashFlag {
 
     $before = Get-AellAeCrashFlag -VersionKey $VersionKey
 
-    if ((Test-AellAeRunning) -and -not $Force) {
+    if ((Test-AellAeRunning -VersionKey $VersionKey) -and -not $Force) {
         return @{ Cleared = $false; Before = $before;
                   Reason = ('After Effects is running; it owns this key and ' +
                             'rewrites it on exit, so clearing now would be ' +
