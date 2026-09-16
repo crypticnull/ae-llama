@@ -40,6 +40,7 @@ const os = require("os");
 const net = require("net");
 const path = require("path");
 const { spawnSync } = require("child_process");
+const { listFiles, ignoredAmong } = require("./lib/git-files");
 
 const ROOT = path.join(__dirname, "..");
 const EXT = path.join(ROOT, "extension");
@@ -127,14 +128,14 @@ const RAW_READ_OK = {
     "the helper that writes the field"
 };
 
-const scriptFiles = [];
-(function walk(dir) {
-  for (const name of fs.readdirSync(dir)) {
-    const p = path.join(dir, name);
-    if (fs.statSync(p).isDirectory()) walk(p);
-    else if (name.endsWith(".js")) scriptFiles.push(p);
-  }
-})(SCRIPTS);
+// What git would commit, not a readdirSync walk: `scripts/web/` holds
+// gitignored .js a node pack writes on import (tests/lib/git-files.js).
+const scriptFiles = listFiles(ROOT, { under: "scripts", exts: [".js"] });
+{
+  const ignored = scriptFiles.fromGit ? ignoredAmong(ROOT, scriptFiles) : [];
+  assert(ignored.length === 0, "the guard reads no gitignored script",
+         ignored[0]);
+}
 
 for (const f of scriptFiles) {
   const rel = path.relative(ROOT, f).replace(/\\/g, "/");

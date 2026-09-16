@@ -26735,3 +26735,27 @@ So nothing about the exit path was silent in the sense filed. The real failures 
 ### Found, filed
 
 - **NEXT UP 2b:** `test-probe-backend-url.js`, `test-probe-bundle.js` and `test-probe-reachability.js` each walk `scripts/` with `readdirSync` and read gitignored `scripts/web/` (five node-pack `.js` assets on this machine) and `scripts/__pycache__/`. All three are green today by luck, not by design.
+
+## 2026-09-16 (local session) - the three probe guards read only what git would commit; one shared helper, tests/lib/git-files.js
+
+**Item:** NEXT UP 2b. `test-probe-backend-url.js`, `test-probe-bundle.js` and `test-probe-reachability.js` walked `scripts/` with `readdirSync`, so they also read gitignored `scripts/web/` and `scripts/__pycache__/`.
+
+**Daytime pass (09:49).** Same call as 2a. CLAUDE.md makes AE, the harness, the full Node suite and the backend ask-first by day, and nobody is watching to ask. This item needs none of them. **Harness NOT run**, since nothing under `extension/` changed. **No bump.**
+
+### What changed (tests only)
+
+- New `tests/lib/git-files.js`, lifted out of 2a:
+  - `listFiles(root, {under, exts, skipDirs})` returns `git ls-files --cached --others --exclude-standard`, optionally limited to one directory. It falls back to a walk when git is unavailable, and `.fromGit` records which source was used.
+  - `ignoredAmong(root, files)` returns whatever `git check-ignore` reports as ignored.
+  - CI runs only `tests/test-*.js` at the top level, so the helper is not picked up as a test. `capability-report.js` and `test-comfy-install.js` also filter on `^test-`.
+- `test-source-control-chars.js` now uses the helper. Its behaviour is unchanged: still 3 checks.
+- The three probe guards use the helper, and each asserts that no gitignored path is in its list. `test-probe-bundle` also asserts that it found more than 5 `.ps1` files, so an empty list cannot pass vacuously.
+
+### Verified
+
+- Measured on this machine: the walk over `scripts/` found 100 files and git lists 93. The 7 extra are the five `scripts/web/extensions/dzNodes/*.js` and two `.pyc` files, exactly as filed.
+- All four tests pass: backend-url 33 ok (was 32), bundle 216 (was 214), reachability 27 (was 26), source-control-chars 3. `test-capability-doc` and `test-es3-syntax` are still green.
+- Mutation 1: I dropped `--exclude-standard` from the helper. backend-url and reachability then FAIL with `scripts/web/extensions/dzNodes/dz_comfy_shared.js`, and source-control-chars FAILS on `local/`. bundle stays green because no gitignored `.ps1` exists under `scripts/` today, so its ignore assertion is latent, not vacuous in design.
+- Mutation 2: I added an untracked, non-ignored `scripts/zz-mutation-probe.js` (reads `.comfyUrl`) and `.ps1` (`Set-Content -Encoding UTF8`). backend-url and bundle both caught them. I removed the files afterwards.
+
+Nothing blocked, and nothing new found that implies work.

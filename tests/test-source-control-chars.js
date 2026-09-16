@@ -37,7 +37,7 @@
 "use strict";
 const fs = require("fs");
 const path = require("path");
-const { execFileSync } = require("child_process");
+const { listFiles, ignoredAmong } = require("./lib/git-files");
 
 const ROOT = path.join(__dirname, "..");
 const SKIP_DIRS = new Set([".git", "node_modules", "logs", "dist", "build",
@@ -56,70 +56,22 @@ function assert(cond, msg) {
   else console.log("ok  -", msg);
 }
 
-function walk(dir, out) {
-  for (const name of fs.readdirSync(dir)) {
-    if (SKIP_DIRS.has(name)) continue;
-    const full = path.join(dir, name);
-    let st;
-    try { st = fs.statSync(full); } catch (e) { continue; }
-    if (st.isDirectory()) walk(full, out);
-    else if (EXTS.has(path.extname(name).toLowerCase())) out.push(full);
-  }
-  return out;
-}
-
-// What git would commit: tracked files plus untracked-but-not-ignored ones
-// (a new file a pass is about to add must be checked BEFORE it is added).
-// null when git is unavailable (a source zip), and then the walk stands in.
-function gitFiles() {
-  let out;
-  try {
-    out = execFileSync("git", ["ls-files", "-z", "--cached", "--others",
-                               "--exclude-standard"],
-                       { cwd: ROOT, encoding: "utf8",
-                         stdio: ["ignore", "pipe", "ignore"],
-                         maxBuffer: 64 * 1024 * 1024 });
-  } catch (e) { return null; }
-  const seen = new Set();
-  const list = [];
-  for (const rel of out.split("\0")) {
-    if (!rel || seen.has(rel)) continue;   // --cached + --others can repeat
-    seen.add(rel);
-    if (rel.split("/").some((part) => SKIP_DIRS.has(part))) continue;
-    if (!EXTS.has(path.extname(rel).toLowerCase())) continue;
-    const full = path.join(ROOT, rel);
-    if (!fs.existsSync(full)) continue;    // deleted in the worktree, not staged
-    list.push(full);
-  }
-  return list;
-}
-
-const fromGit = gitFiles();
-const files = fromGit || walk(ROOT, []);
+// What git would commit (tracked, or untracked and not ignored); a walk
+// stands in when git is unavailable. Shared with the probe guards.
+const files = listFiles(ROOT, { exts: EXTS, skipDirs: SKIP_DIRS });
 assert(files.length > 50,
-       "the " + (fromGit ? "git file list" : "walk (no git)") +
+       "the " + (files.fromGit ? "git file list" : "walk (no git)") +
        " found the repo's source files (" + files.length + ")");
 
 // The regression itself: when git answered, nothing it IGNORES may be in the
 // list. Asked of git per path, not of a hard-coded `local/`, so a new ignore
 // rule is honoured without an edit here.
-if (fromGit && files.length) {
-  let ignored = "";
-  try {
-    ignored = execFileSync("git", ["check-ignore", "--no-index", "--stdin"],
-                           { cwd: ROOT, encoding: "utf8",
-                             input: files.map((f) => path.relative(ROOT, f)
-                                                .split(path.sep).join("/"))
-                                         .join("\n") + "\n",
-                             stdio: ["pipe", "pipe", "ignore"] });
-  } catch (e) {
-    // exit 1 means "none of them is ignored" -- the answer we want
-    ignored = (e.status === 1) ? "" : String(e.stdout || "");
-  }
-  assert(ignored.trim() === "",
+if (files.fromGit) {
+  const ignored = ignoredAmong(ROOT, files);
+  assert(ignored.length === 0,
          "no gitignored path is scanned (a red test here for a file nobody " +
          "can commit is one a pass learns to ignore)" +
-         (ignored.trim() ? " -- got: " + ignored.trim().split("\n")[0] : ""));
+         (ignored.length ? " -- got: " + ignored[0] : ""));
 }
 
 // One assertion per OFFENDING file, plus one for the whole sweep: a clean

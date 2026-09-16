@@ -24,6 +24,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { execFileSync } = require("child_process");
+const { listFiles, ignoredAmong } = require("./lib/git-files");
 
 const ROOT = path.join(__dirname, "..");
 const PROBE = path.join(ROOT, "probe", "com.cptk.aellama.probe");
@@ -478,15 +479,16 @@ function hostsIn(xml) {
 
   // The write side. Every JSON file a Node/CEP reader consumes must be
   // written BOM-less, so no future script can reintroduce this.
-  const scriptsDir = path.join(ROOT, "scripts");
-  const psFiles = [];
-  (function walk(d) {
-    fs.readdirSync(d, { withFileTypes: true }).forEach(function (e) {
-      const p = path.join(d, e.name);
-      if (e.isDirectory()) { walk(p); }
-      else if (/\.ps1$/i.test(e.name)) { psFiles.push(p); }
-    });
-  })(scriptsDir);
+  // What git would commit, not a readdirSync walk, which also read the
+  // gitignored `scripts/web/` and `scripts/__pycache__/`.
+  const psFiles = listFiles(ROOT, { under: "scripts", exts: [".ps1"] });
+  const ignoredPs = psFiles.fromGit ? ignoredAmong(ROOT, psFiles) : [];
+  assert(ignoredPs.length === 0,
+         "the BOM-write guard reads no gitignored script" +
+         (ignoredPs.length ? " (" + ignoredPs[0] + ")" : ""));
+  assert(psFiles.length > 5,
+         "the BOM-write guard found the scripts' .ps1 files (" +
+         psFiles.length + ")");
 
   const offenders = [];
   psFiles.forEach(function (f) {

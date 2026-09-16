@@ -38,6 +38,7 @@ const os = require("os");
 const net = require("net");
 const path = require("path");
 const { spawnSync } = require("child_process");
+const { listFiles, ignoredAmong } = require("./lib/git-files");
 
 const ROOT = path.join(__dirname, "..");
 const SCRIPTS = path.join(ROOT, "scripts");
@@ -142,15 +143,12 @@ function fakeComfy(answer) {
 // comfy-install.js already did it right, and the four that did not all
 // looked like each other.
 {
-  const files = [];
-  (function walk(dir) {
-    for (const name of fs.readdirSync(dir)) {
-      const p = path.join(dir, name);
-      const st = fs.statSync(p);
-      if (st.isDirectory()) walk(p);
-      else if (name.endsWith(".js")) files.push(p);
-    }
-  })(SCRIPTS);
+  // What git would commit, not a readdirSync walk: `scripts/web/` holds
+  // gitignored .js a node pack writes on import (tests/lib/git-files.js).
+  const files = listFiles(ROOT, { under: "scripts", exts: [".js"] });
+  const ignored = files.fromGit ? ignoredAmong(ROOT, files) : [];
+  assert(ignored.length === 0, "the guard reads no gitignored script",
+         ignored[0]);
 
   const direct = files.filter(function (f) {
     return /Comfy\.status\s*\(/.test(fs.readFileSync(f, "utf8"));
