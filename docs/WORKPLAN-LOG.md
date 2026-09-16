@@ -25231,3 +25231,84 @@ not overflow.
   message text.
 - `docs/WORKPLAN.md` (5a-3 done, 5a-4, 5a-5, step 2f MEASURED, step 2g,
   P7a), `docs/CAPABILITIES.md` video-floor paragraph.
+
+## 2026-09-16 (local session) - the 0.10.14 grind does not reproduce for sdxl, krea2 or either Wan, and no gate moved because host RAM is the new unknown
+
+**Item:** NEXT UP 5a-4 / WORKPLAN 18 P7c step 2g - does "it does not OOM,
+it GRINDS" (the basis of sdxl 12, krea2 24, wan22-5b and -fp8 32) still
+hold on the managed backend with DynamicVRAM?
+
+**Harness: 770/770 PASSED** before the work and again after all eleven runs, so AE survived having its VRAM evicted.
+**No version bump**: nothing under `extension/` changed. Item 3 above it
+is blocked on the owner, so 5a-4 was the first takeable item.
+
+### Method
+
+Same as step 2f: `scripts/vram-ballast.py` holds real VRAM, then
+`catalog-vram-probe.js --entry X --boot --stop` boots the backend into
+what is left, with the per-second shared/dedicated sampler beside it.
+Driver kept out of the repo (`local/ballast-run.sh`). Rooms were chosen
+as card minus AE_RESIDENT_MB 3 255, and card minus that minus
+DESKTOP_FREE_MB 4 096. I measured one card further down than the item
+asked (12 GB for krea2 and Wan), because the first rooms passed with no
+time cost and going one step further was cheap.
+
+### Measured (RTX 5090, seed 12345, shipped graphs)
+
+| entry (gate) | room MiB | stands for | prompt s | output vs whole card | peak shared MiB |
+|---|---|---|---|---|---|
+| sdxl (12) | whole | ref | 6 | - | 6 919 |
+| sdxl | 5 521 | 8 GB + AE | 8 | identical | 7 251 |
+| sdxl | 870 | 8 GB + AE + floor | 10 | identical | 7 753 |
+| krea2 (24) | whole | ref | 12 | - | 17 304 |
+| krea2 | 13 129 | 16 GB + AE | 10 | identical | 17 383 |
+| krea2 | 9 033 | 12 GB + AE | 10 | identical | 17 896 |
+| krea2 | 4 937 | 12 GB + AE + floor | 10 | identical | 17 894 |
+| wan22-5b-fp8 (32) | whole | ref | 126 | - | 17 114 |
+| wan22-5b-fp8 | 13 127 | 16 GB + AE | 127 | identical | 17 768 |
+| wan22-5b-fp8 | 4 918 | 12 GB + AE + floor | 130 | identical | 17 153 |
+| wan22-5b (32) | 4 856 | 12 GB + AE + floor | 133 (127 on 09-09) | frames identical | 17 160 |
+
+Transcripts `logs/catalog-vram-probe-2026-09-16T07-37-28.md` ...
+`07-52-38.md`. PNGs are md5-identical. The fp8 mp4s are md5-identical.
+The fp16 mp4 differs from the 09-09 clip in 2 container bytes, but its
+`ffmpeg -f md5` over the decoded frames matches. (The probe overwrote
+09-09's `AELlama_Wan22_5B__00001_.mp4`; `_00002_` is the same job.)
+
+### Things I hit
+
+- **AE's VRAM was evicted.** The sdxl 870-room run filled the card to
+  32 044 MiB. The card went from 2 671 MiB in use (AE + desktop) before
+  that run to 1 149 after, and never came back. So `vram-ballast.py`,
+  which counts "before" as whatever is in use, would have handed every
+  later run ~1.5 GB too much room. I sized those ballasts by hand from
+  1 149 + 3 255 instead (card-mb 14278 / 10182 / 6086). The first krea2
+  16 GB run (15 235 room) is superseded by those and left out of the
+  table. Added to 5a-5 as evidence.
+- A python heredoc hung on stdin, left a background task and was
+  stopped; no file was touched by it.
+
+### Decision, and what I assumed
+
+**No gate moved.** The item's bar (clock under ~2x) was met everywhere,
+so this was a judgement call:
+1. Every job pins host RAM (17.9 GB for krea2 and Wan). This box has
+   62 GB, so a 16 GB-RAM buyer is the untested case where the grind may
+   simply have moved to system memory. Shipping a 12 GB gate for Wan
+   without that is the silent-grind risk CLAUDE.md forbids.
+2. Moving the gates changes the tiers.js PICKS at 8/12/16/24 GB (e.g. a
+   12 GB buyer's video default goes from ltx-small at 12 s to Wan at
+   130 s). §16f reserves that table for the owner. The ltx-small move
+   before this one only filled an empty slot; this would displace
+   defaults.
+3. Two `test-model-catalog.js` rules state the grind as their premise.
+   They need a constrained-fit reading to accept, which is a design
+   change and not something to squeeze into the end of a pass.
+
+### Filed (WORKPLAN NEXT UP)
+
+- **5a-4b** - measure the host-RAM floor (how the pinned budget is sized,
+  then a real RAM ballast at 12 GB-card VRAM room).
+- **5a-4c** - the gate move itself with its test and tier consequences,
+  needs 5a-4b.
+- **5a-5** - added the WDDM eviction evidence.
