@@ -214,14 +214,37 @@ function stopByPort(port, say, ownRoot) {
  * `ownRoot` is `managedRoot(Settings)`; see stopByPort for why the port
  * fallback needs it. Omitting it is safe in the only direction that
  * matters: the fallback then refuses rather than killing by shape.
+ *
+ * §17q-d, measured 2026-09-16: `pidIsComfy` used to be asked once, BEFORE
+ * the kill, and never again — so this function said `stopped the managed
+ * backend (pid N)` about a taskkill nobody had waited for, and the
+ * process it named was still listening 70 minutes later. The same
+ * predicate is now asked on both sides of the kill. `stopManaged()`'s own
+ * return value is deliberately NOT trusted here: one authority, asked
+ * twice, cannot disagree with itself, and an older panel build answers
+ * undefined.
  */
 function stop(Comfy, storage, port, say, ownRoot) {
   const known = storage.getItem(PID_KEY);
   if (known) {
     if (pidIsComfy(known)) {
       try { Comfy.stopManaged(); } catch (e) {}
-      if (say) say("info", "stopped the managed backend (pid " + known + ").");
-      return true;
+      if (!pidIsComfy(known)) {
+        if (say) say("info", "stopped the managed backend (pid " + known + ").");
+        return true;
+      }
+      // The PID record is deliberately LEFT in place: it is the only
+      // thing that can find this process again, and the panel's
+      // reapOrphan() reads exactly this key at init.
+      if (say) {
+        say("warn", "FAILED to stop the managed backend (pid " + known +
+                    ") - it is STILL a live ComfyUI after the kill. It is " +
+                    "holding the card and the panel will refuse to generate " +
+                    "against it. The PID record is KEPT so it can be found " +
+                    "again; stop it by hand with: taskkill /PID " + known +
+                    " /T /F");
+      }
+      return false;
     }
     if (say) {
       say("warn", "the remembered PID " + known + " is not a live ComfyUI " +

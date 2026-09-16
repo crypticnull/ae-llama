@@ -80,10 +80,15 @@ function Stop-AellLoopBackend {
 
     $before = Get-AellGpuMemoryMB
     $saidNone = $false
+    # The FAILED wording is in the filter for the same reason 17q-b put the
+    # port wording there: a stop that reported a real problem must not land
+    # in the said-nothing-recognisable bucket, where it reads as noise.
+    # comfy-managed.js gained it with 17q-d, when a kill nobody had waited
+    # for was reported as a success.
     try {
         $stopOut = & node (Join-Path $RepoRoot 'scripts\comfy-install.js') --stop 2>&1
         $said = @($stopOut) | Where-Object {
-            [string]$_ -match 'stopped the managed|stopped the backend holding|no managed backend found|NOT killing it'
+            [string]$_ -match 'stopped the managed|stopped the backend holding|no managed backend found|NOT killing it|FAILED to stop'
         }
         if ($said) {
             foreach ($line in $said) {

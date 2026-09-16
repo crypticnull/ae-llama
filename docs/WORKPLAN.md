@@ -54,7 +54,8 @@ every pass and finished work costs the same context as live work.
 | 1 | ~~**Make the loop verify its OWN teardown; a pass cannot.**~~ **DONE 2026-09-16.** And the reason no log ever carried a `Backend:` line was worse than "the loop was already running": the 2026-09-09 fix was pasted INSIDE the `-PreflightOnly` early exit, the one path on which no pass has run and no backend can exist, so it was unreachable from a real overnight loop for a week. One `Stop-AellLoopBackend` now sits at top level and is called from all three exits, reads the card before and after `--stop`, and writes the verdict itself. Verified by running the real exit path twice (`-Iterations 0`): it killed a live backend (pid 50788, 4304 -> 3606 MiB) and then reported the empty case. Guarded by `tests/test-loop-teardown.js`. See §17q. | §17q | nothing | no |
 | 1a | ~~**`stop-local-agent.ps1` kills the loop and leaves the backend on the card.**~~ **DONE 2026-09-16.** `Stop-AellLoopBackend` is `scripts/lib/comfy-teardown.ps1` now, dot-sourced by BOTH scripts with no copy in either; the hand-stop the detach message recommends tears the backend down after the kills and before both exits, with a `-KeepBackend` opt-out. Runs even when no loop was found, because the 17q morning WAS a backend with no loop left to own it. Verified on the real script (a loop-finder-neutered copy, since the real one would have killed the pass measuring it): a live backend went 3957 -> 3526 MiB, and the empty case and `-KeepBackend` both read right. Found and fixed on the way past: the verdict never recognised `stopped the backend holding port N`, so a stop that WORKED through the port fallback read as "said nothing recognisable". `tests/test-loop-teardown.js` now covers both scripts and the lib. See §17q-b. | §17q-b | nothing | no |
 | 1b | ~~**`--stop` can kill a ComfyUI the panel never booted, and that now happens on a command the OWNER types.**~~ **DONE 2026-09-16.** Fixed by OWNERSHIP (candidate 2), not by a flag: the port holder's command line must run out of `<dataRoot>\vendor\comfy`, so BOTH the loop and the hand-stop are covered and there is only one behaviour to test. `managed.managedRoot(Settings)` is spelled once in `scripts/lib/comfy-managed.js` and passed by all three `managed.stop()` call sites; `stopByPort` returns `killed|none|foreign|failed` now, because a boolean collapsed a refusal into "nothing there" and `stop()` then contradicted its own warning three lines later. Verified on the REAL machine both ways: a ComfyUI-shaped decoy outside the vendor root survived `--stop --port` with a named refusal, and a listener staged UNDER the real vendor root was still killed. `tests/test-comfy-managed-ownership.js` (26 assertions) ties the root to what the shipped `setup.js` really installs, so the guard cannot rot into one that matches nothing. See §17q-c. | §17q-c | nothing | no |
-| 1c | **`stopManaged()` reports a kill it never waited for, and tonight a backend survived one for 70 minutes.** The 06:10:59 probe logged `stopped the managed backend (pid 44324)`, deleted the PID file - and pid 44324 was still listening on 8288, still holding the card, when the 02:19 pass found it and had to `taskkill` it by hand. The panel then REFUSES to generate against it (`Something is already answering on 127.0.0.1:8288 ... and the panel did not start it`), so a stale survivor does not just waste VRAM, it bricks generation until someone kills it. Root cause is one line: `extension/js/comfy.js` `stopManaged()` fires `child_process.execFile("taskkill", ...)` with an empty callback and returns, and `scripts/lib/comfy-managed.js` `stop()` then says "stopped" and returns true **without ever checking**. It is a RACE, not a constant failure - the same path run by hand three minutes later did kill its backend - which is why it has survived §17q, §17q-b and §17q-c, all three of which verify the SCRIPTS and none of which verifies the kill. Fix: kill synchronously (or wait for the exit) and verify the pid is gone before reporting; a stop that cannot confirm must say so. Back-fill in `tests/test-loop-teardown.js`. | §17q-d | nothing | yes |
+| 1c | ~~**`stopManaged()` reports a kill it never waited for, and tonight a backend survived one for 70 minutes.**~~ **DONE 2026-09-16 (0.12.22).** It was never a slow taskkill: measured on the real machine, a SYNCHRONOUS taskkill returns in **110 ms with the process already gone** (0.2 ms of residual wait). The window the old code lost was that the ASYNC taskkill had barely been spawned when node exited, and a non-detached child dies inside the Windows job object with its parent - the same mechanism `boot()` documents from the other side. Fixed in the order that matters: kill with `execFileSync`, VERIFY with a new `pidAlive()` (`process.kill(pid,0)`, no spawn, EPERM counts as alive), and only THEN `forgetPid()` - a record outliving a failed kill is the only thing that can find the survivor. `stop()` asks `pidIsComfy` on BOTH sides now and says `FAILED to stop` with the taskkill command a human can finish with; the teardown verdict learned that wording. `reapOrphan()` had the same ordering flaw and got the same check. Verified on the real machine: a live backend (pid 8640, 3957 MiB) was stopped and pid, port, PID file and card were all confirmed clean the instant the CLI exited (3526 MiB, its own floor); the stale-record branch too. Back-filled with 22 assertions in `tests/test-loop-teardown.js`, the important half BEHAVIOURAL (a really-dead pid and a really-live one), because a race cannot be caught by reading source. See §17q-d. | §17q-d | nothing | done |
+| 1d | **The panel cannot ADOPT an orphan it finds on its own port.** `ensureRunning` correctly refuses a listener the panel did not start, and 17q-d's kept PID record now lets `reapOrphan()` find the survivor at the NEXT panel init - which closes the common case and not all of it. A buyer who loses localStorage, or whose panel is already open when the orphan appears, still gets the refusal with no way out: generation is bricked until someone kills a process by hand. The predicate is already spelled once - `managed.managedRoot` from 17q-c - so adoption is "the port holder runs out of the managed root, therefore it is ours, therefore use it". Small, and it is the last hole in this family. | §17q-e | nothing | yes |
 | 2 | ~~**Reserve VRAM for the desktop and After Effects before sizing the chat model.**~~ **DONE 2026-09-15 (0.12.18).** The reserve is in `planHandoff` and now gates `Llama.start` too (`Tiers.planChatLoad`), which had no arithmetic at all. The AMOUNT is still provisional and comes from item 3 — two constants, one line each, in `tiers.js`. What it does NOT touch: `recommendChat`/`recommendGen`, i.e. the tier table, which §16f reserves for the owner. See §16g. | §16b | AE, chat model | yes |
 | 3 | **BLOCKED 2026-09-16 on a rule conflict - see §16b BLOCKER, it needs one line from the owner.** ~~Measure the §16b reserve on the owner's four real projects~~ — copies only, originals hashed before and after, close without saving. The exact eight-step procedure is in §16b; follow it to the letter. Paths are in the git-ignored `local/real-projects.json` and must never be committed. Nothing else loaded on the card while measuring. | §16b | AE | no |
 | 4 | ~~**fp8 Wan 2.2 5B as a second entry, then MEASURE it.**~~ **DONE 2026-09-16 (0.12.19).** There is no fp8 FILE of the 5B; shipped as a load-time `weight_dtype` cast instead, zero extra download. 24 314 MiB vs 26 187 at the authored size, 16 834 vs 21 536 at 704x480. **The gate did not move - §18 P7a is still open.** Full table in §18 P7c step 1; follow-ups in step 1a. The §18 P10 pattern: the shipped Wan graph with the diffusion filename swapped and nothing else. Cheapest route to a video option under 32 GB. | §18 P7c step 1 | backend, disk | yes |
@@ -6660,6 +6661,58 @@ calling stop). Adopting an orphan that runs out of `managedRoot` -
 ownership is already spelled once, §17q-c - would close that, and it is
 the same predicate. Filed here rather than separately because the two
 share the fix site.
+
+## 17q-e. The panel cannot adopt an orphan on its own port, so a survivor bricks generation (filed 2026-09-16, local session)
+
+**Split out of 17q-d, which fixed the other half.** 17q-d stopped the
+panel from DESTROYING the PID record after a kill that did not take, so
+`reapOrphan()` now finds a survivor at the next panel init and kills it.
+That closes the common case. It does not close this one.
+
+`ensureRunning` refuses to generate against a listener on the managed
+port that the panel did not start:
+
+    Something is already answering on 127.0.0.1:8288, the port this
+    panel's own ComfyUI uses, and the panel did not start it.
+
+That is correct behaviour on a genuinely foreign listener and the right
+default. But the panel decides "did not start it" from
+`ownsManagedBackend()`, which is `managedProc || a remembered PID` - and
+both can be absent while the process on the port is unmistakably the
+panel's own:
+
+- the panel crashed with a backend up, and localStorage went with it;
+- a second panel session (the key is per-host, see the Premiere notes);
+- the record was cleared by the recycled-PID branch while the real
+  backend was booting and not yet answering `pidIsComfy`.
+
+In every one of those the buyer sees a refusal and has no path forward.
+There is no button, no message that tells them what to kill, and the
+thing holding the port is a python process they never launched. Measured
+consequence of the same state on 2026-09-16: the 02:19 pass lost its
+first probe run to exactly this and had to `taskkill` by hand.
+
+**The fix is small because the predicate already exists.** `17q-c` put
+ownership in one place: `managed.managedRoot(Settings)` plus
+`commandLineIsUnder`, i.e. "the port holder's command line runs out of
+`<dataRoot>\vendor\comfy`". That is the same question adoption asks. So:
+
+1. When `ensureRunning` finds a listener it does not think it owns, ask
+   whether the PORT HOLDER runs out of the managed root before refusing.
+2. If it does, ADOPT it - re-remember the PID and use the backend. It is
+   ours; the only thing missing was the bookkeeping.
+3. If it does not, refuse exactly as today, with today's wording. The
+   refusal is what protects the owner's own ComfyUI on his own port, and
+   17q-c is the entry that explains why that matters.
+
+Note the shape guard is not enough on its own and 17q-c is why: a
+ComfyUI-shaped process on the port is not proof it is the panel's. Root
+ownership is the test, and reusing the one spelling is the point - a
+second spelling is how the copies drift apart.
+
+Panel-side, so it BUMPS. `tests/test-comfy-managed-ownership.js` already
+owns the root predicate and its fixture builds a real portable install
+under a temp dataRoot; the adoption case belongs beside it.
 
 ## 17l-b. `comfy-node-defs.json` is a 52-class DEMAND HARVEST that reads like a full snapshot, and asking it "does node X exist" gets a false NO (filed 2026-09-16, local session)
 

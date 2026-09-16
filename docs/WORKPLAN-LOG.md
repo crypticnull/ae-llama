@@ -24807,3 +24807,132 @@ check and the clock all named as parts of the answer.
   pass that stops a backend may leave one again.
 - Step 2b (the LTXV licence) is still the one open owner question in this
   section and is unchanged.
+
+## 2026-09-16 (local session) - the stop waited for nothing, and a synchronous taskkill answers in 110 ms
+
+**Item:** NEXT UP 1c / WORKPLAN 17q-d. `stopManaged()` reported a kill it
+never waited for. Version 0.12.21 -> **0.12.22** (extension/ changed).
+
+**Harness: 770/770 passed**, before and after. Full stubbed suite green.
+
+### What was wrong
+
+`extension/js/comfy.js` `stopManaged()` was three lines in the wrong
+order:
+
+    child_process.execFile("taskkill", [...], function () {});
+    managedProc = null;
+    forgetPid();
+
+Fire and forget, and then the PID record - the only thing that could ever
+find a survivor - destroyed before the kill was known to have happened.
+`scripts/lib/comfy-managed.js` `stop()` then printed `stopped the managed
+backend (pid N)` and returned true without checking anything. It asked
+`pidIsComfy` ONCE, before the kill, and never again.
+
+The evidence is in the previous entry: the 06:10:59 probe of this morning
+logged that sentence about pid 44324 and deleted the record; pid 44324
+was still listening on 8288 and holding the card when the 02:19 pass
+found it 70 minutes later. It is not only wasted VRAM - `ensureRunning`
+correctly refuses to generate against a listener the panel did not start,
+so an orphan on the managed port BRICKS generation, and with the record
+gone there is no path in the product that recovers.
+
+### Why it survived three teardown items
+
+17q, 17q-b and 17q-c each verified the SCRIPTS around the stop: which
+exit calls it, which process it is allowed to kill. None of them verified
+that the process died. It is also a race rather than a constant failure -
+the same path run by hand three minutes later did kill its backend -
+which is why every hand-check passed.
+
+### What the race actually was, measured
+
+Not a slow taskkill. Measured on the real machine tonight against a live
+managed backend (pid 3252):
+
+    before taskkill: alive = true
+    taskkill returned after 110.4 ms; alive = false
+    gone 0.2 ms AFTER taskkill returned (0 polls)
+
+A SYNCHRONOUS taskkill costs 110 ms and the process is already gone when
+it returns. The window the old code lost was not between "taskkill
+returned" and "process gone" - it was that the async taskkill had barely
+been SPAWNED when node exited, and a non-detached child dies inside the
+Windows job object with its parent. The same mechanism `boot()` already
+documents, on the other side of the same fence.
+
+### The fix
+
+1. `stopManaged()` kills with `execFileSync`. 110 ms is affordable on the
+   panel's unload path and a CLI cannot afford not to.
+2. It VERIFIES with a new `pidAlive()` - `process.kill(pid, 0)`, the
+   documented Windows existence test, no spawn, and EPERM counts as
+   ALIVE. Only when the free check still sees the process does it pay for
+   one bounded `Wait-Process` (measured above: it never fires).
+3. `forgetPid()` runs only after that. It now returns true/false;
+   "nothing remembered" is true, not a failure.
+4. `stop()` asks `pidIsComfy` on BOTH sides of the kill and says
+   `FAILED to stop the managed backend (pid N) - it is STILL a live
+   ComfyUI after the kill`, keeps the record, and prints the taskkill
+   command a human can finish with. It deliberately does NOT trust
+   `stopManaged()`'s return: one authority asked twice cannot contradict
+   itself, and an older panel build answers undefined.
+5. `reapOrphan()` had the same ordering flaw in a milder form - it did
+   await taskkill, but forgot the record whether or not the kill took.
+   Same `pidAlive` check, async (it runs at init with a callback, so
+   waiting costs only wall time on a timer). This is the panel's ONLY
+   recovery from its own orphan, so dropping the record after a failed
+   kill is what would strand a buyer.
+6. `scripts/lib/comfy-teardown.ps1`'s verdict filter learned
+   `FAILED to stop`, so a stop that reported a real problem does not land
+   in the "said nothing recognisable" bucket. That is 17q-b's lesson
+   applied forward.
+
+### Verified on the real machine, all three branches
+
+- **Kill takes.** Booted the managed backend (pid 8640, port 8288, card
+  3957 MiB), ran the real `node scripts/comfy-install.js --stop`: 4 287 ms
+  end to end, `stopped the managed backend (pid 8640).` - and then,
+  checked immediately after the CLI exited, **pid 8640 gone, port 8288
+  free, PID file removed, card 3526 MiB**, exactly the floor it booted
+  from. That sentence is now a verified claim rather than a hope.
+- **Stale record.** After the race probe killed pid 3252 outside the
+  panel code, `--stop` took the recycled-PID branch, cleared the record
+  and said so, then reported an empty port. No contradiction in the log.
+- **Kill does not take.** Cannot be staged with a real taskkill, so it is
+  covered behaviourally in the stub (below) rather than claimed here.
+
+### Back-fill
+
+`tests/test-loop-teardown.js` gains 22 assertions. The important half is
+BEHAVIOURAL, not shape - a race cannot be caught by reading source:
+
+- The fixture builds a really-dead pid (`spawnSync` has reaped it by the
+  time it returns) and a really-live one (`process.pid`, with taskkill
+  stubbed so nothing is harmed). The real `stopManaged()` is driven
+  against both: true + record dropped for the dead one, **false + record
+  KEPT** for the live one, and the stub records that the taskkill was
+  synchronous.
+- `stop()` is driven with a stub that decides what the SECOND
+  `pidIsComfy` answers - precisely the variable the old code never read.
+  A kill that does not take must produce the FAILURE line, must not
+  produce the success line beside it, must not remove the record, and
+  must not then fall through to "nothing to stop".
+- Shape guards on top: no taskkill with an empty callback in either file
+  (comments stripped first - both files QUOTE the dead line in prose,
+  which is the same trap the `[N/A]` check in this file fell into once),
+  `stopManaged` has nothing asynchronous in it, and `reapOrphan` checks
+  before it forgets.
+
+### Left for a human / filed
+
+- Nothing blocked. The card is at 3526 MiB with the port free as this
+  pass ends.
+- Filed as **17q-e**: the panel still cannot ADOPT an orphan it finds on
+  its own port. Keeping the PID record (fix 3 above) means `reapOrphan`
+  now finds the survivor at the next panel init, which closes the common
+  case - but a buyer who loses localStorage, or whose panel is already
+  open when the orphan appears, still gets `ensureRunning`'s refusal with
+  no way out. The ownership predicate 17q-c already spells once
+  (`managedRoot`) is the same one adoption needs.

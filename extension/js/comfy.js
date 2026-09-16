@@ -2590,8 +2590,22 @@
         if (!isOurs) { forgetPid(); if (done) done(false); return; }
         child_process.execFile("taskkill",
           ["/PID", String(pid), "/T", "/F"], function () {
-            forgetPid();
-            if (done) done(true);
+            // VERIFY, then forget — never the other way round (§17q-d).
+            // This is the panel's only recovery from its own orphan: an
+            // orphan on the managed port makes ensureRunning refuse to
+            // generate, and the PID record is the only thing that can
+            // find it. Dropping the record after a kill that did not
+            // take would strand the user with no path back.
+            //
+            // Async all the way here, unlike stopManaged(): reapOrphan
+            // runs at init with a callback, so waiting costs nothing but
+            // wall time on a timer.
+            var tries = 0;
+            (function check() {
+              if (!pidAlive(pid)) { forgetPid(); if (done) done(true); return; }
+              if (++tries > 20) { if (done) done(false); return; }
+              global.setTimeout(check, 250);
+            })();
           });
       });
   }
@@ -2974,7 +2988,65 @@
     })();
   }
 
-  /** Shut the hidden backend down (panel close frees its VRAM). */
+  /*
+   * Is `pid` still a running process?
+   *
+   * `process.kill(pid, 0)` sends no signal — on Windows it is the
+   * documented existence test — and it costs no spawn, which matters on
+   * the panel's unload path. EPERM means the process EXISTS and we are
+   * not allowed to signal it, which is still ALIVE; only a real "no such
+   * process" answers false.
+   *
+   * When there is no `process` at all it answers TRUE, "cannot tell".
+   * That is the safe direction for the one thing this decides: the PID
+   * record is then KEPT, and reapOrphan() finds the survivor at the next
+   * panel init. Answering false would drop the record — which is exactly
+   * the bug this whole function exists to close (§17q-d).
+   */
+  function pidAlive(pid) {
+    var n = parseInt(pid, 10);
+    if (!(n > 0)) return false;
+    var P = (typeof process !== "undefined") ? process : null;
+    if (!P || typeof P.kill !== "function") return true;
+    try { P.kill(n, 0); return true; }
+    catch (e) { return !!(e && e.code === "EPERM"); }
+  }
+
+  /**
+   * Shut the hidden backend down (panel close frees its VRAM).
+   *
+   * Returns TRUE only when the backend is confirmed gone — including the
+   * "there was nothing to stop" case — and false when a pid was killed
+   * and is still alive. A stop that cannot confirm must say so.
+   *
+   * Measured 2026-09-16 (§17q-d). This used to be
+   *
+   *     child_process.execFile("taskkill", [...], function () {});
+   *     managedProc = null;
+   *     forgetPid();
+   *
+   * — fire and forget, with the PID record destroyed immediately
+   * afterwards. The 06:10:59 probe logged `stopped the managed backend
+   * (pid 44324)` and deleted the record; pid 44324 was still LISTENING on
+   * 8288 and holding 649 MiB of the card 70 minutes later, and with no
+   * record left nothing could find it. It is worse than wasted VRAM: the
+   * panel's own `ensureRunning` then refuses to generate ("Something is
+   * already answering on 127.0.0.1:8288 ... and the panel did not start
+   * it"), so a survivor BRICKS generation until someone kills it by hand.
+   *
+   * Three properties, and the order of the last two is the whole fix:
+   *
+   *   1. The kill is SYNCHRONOUS. A CLI exits milliseconds after this
+   *      returns and a non-detached child dies inside the Windows job
+   *      object with its parent (see setManagedDetached) — so an async
+   *      taskkill in a script is a race it usually loses. The panel can
+   *      afford the ~100 ms on unload.
+   *   2. It is VERIFIED. taskkill returns when it has ASKED Windows to
+   *      terminate, not when the process is gone.
+   *   3. forgetPid() runs only AFTER that verification. A PID record
+   *      outliving a failed kill is the only thing that can find the
+   *      survivor.
+   */
   function stopManaged() {
     ensureNode();
     var pid = managedProc ? managedProc.pid : null;
@@ -2982,14 +3054,26 @@
       try { pid = parseInt(global.localStorage.getItem(COMFY_PID_KEY), 10); }
       catch (e) {}
     }
-    if (pid) {
-      try {
-        child_process.execFile("taskkill",
-          ["/PID", String(pid), "/T", "/F"], function () {});
-      } catch (e2) {}
-    }
     managedProc = null;
+    if (!pid) { forgetPid(); return true; }
+    try {
+      child_process.execFileSync("taskkill",
+        ["/PID", String(pid), "/T", "/F"], { timeout: 30000 });
+    } catch (e2) {}
+    // Only when the free check still sees it — one bounded wait, and it
+    // is the only path here that costs a spawn.
+    if (pidAlive(pid)) {
+      try {
+        child_process.execFileSync("powershell.exe",
+          ["-NoProfile", "-NonInteractive", "-Command",
+           "Wait-Process -Id " + parseInt(pid, 10) + " -Timeout 10 " +
+           "-ErrorAction SilentlyContinue"],
+          { timeout: 20000 });
+      } catch (e3) {}
+    }
+    if (pidAlive(pid)) return false;
     forgetPid();
+    return true;
   }
 
   global.Comfy = {

@@ -318,5 +318,245 @@ for (const [name, src] of [["run-local-agent.ps1", loop],
     (bad < 0 ? "" : " -- offender at offset " + bad));
 }
 
+
+// ======================================================================
+// 17q-d: a kill nobody waited for was reported as a success
+// ======================================================================
+//
+// The three items above verify the SCRIPTS around the stop -- which exit
+// calls it, which process it is allowed to kill. None of them verified
+// that the process actually DIED, and on 2026-09-16 one did not: the
+// 06:10:59 probe logged `stopped the managed backend (pid 44324)`,
+// deleted the PID record, and pid 44324 was still LISTENING on 8288 and
+// holding the card when the next night's 02:19 pass found it 70 minutes
+// later. With the record gone, nothing could find it -- and the panel's
+// own ensureRunning then REFUSES to generate against an orphan on its
+// port, so a survivor bricks generation until a human kills it.
+//
+// It is a race (the same path run by hand three minutes later did kill
+// its backend), so a source-shape assertion is not enough on its own:
+// these drive the real functions with a kill that does not take.
+const cp = require("child_process");
+const realExecSync = cp.execFileSync;
+
+// A pid that is GONE, for real: spawnSync has already reaped it by the
+// time it returns, and a recycle inside these milliseconds is not a
+// thing. `process.pid` is the living counterpart -- taskkill is stubbed,
+// so nothing is ever actually killed here.
+const DEAD_PID = cp.spawnSync(process.execPath, ["-e", ""]).pid;
+const LIVE_PID = process.pid;
+assert(DEAD_PID > 0 && DEAD_PID !== LIVE_PID,
+  "the fixture has a really-dead pid and a really-live one");
+
+// ------------------------------------------------- comfy.js stopManaged()
+{
+  const EXT = path.join(ROOT, "extension");
+  const panel = function (pid) {
+    const calls = [];
+    const store = {};
+    if (pid) store["aell-comfy-pid"] = String(pid);
+    const stubCp = {
+      execFileSync: function (file, args) {
+        calls.push(String(file).toLowerCase() + " " + (args || []).join(" "));
+        return "";
+      },
+      execFile: function (file, args, a, b) {
+        calls.push("ASYNC " + String(file).toLowerCase());
+        const done = typeof a === "function" ? a : b;
+        if (done) done(null, "", "");
+      },
+      spawn: function () { throw new Error("not used in this test"); }
+    };
+    const win = {
+      console: { log: function () {}, error: function () {} },
+      setTimeout: setTimeout, clearTimeout: clearTimeout,
+      setInterval: setInterval, clearInterval: clearInterval,
+      localStorage: {
+        getItem: function (k) {
+          return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null;
+        },
+        setItem: function (k, v) { store[k] = String(v); },
+        removeItem: function (k) { delete store[k]; }
+      },
+      AEBridge: {
+        nodeRequire: function (m) {
+          return m === "child_process" ? stubCp : require(m);
+        },
+        getExtensionPath: function () { return EXT; },
+        evalScript: function (s, cb) { if (cb) cb("", "no AE here"); }
+      }
+    };
+    win.window = win;
+    new Function("window",
+      fs.readFileSync(path.join(EXT, "js", "comfy.js"), "utf8"))(win);
+    return { Comfy: win.Comfy, calls: calls, store: store };
+  };
+
+  // (a) the kill takes
+  {
+    const p = panel(DEAD_PID);
+    const r = p.Comfy.stopManaged();
+    assert(r === true, "stopManaged() confirms a kill that took", "got " + r);
+    assert(p.calls.some(function (c) { return /^taskkill/.test(c); }),
+      "having really run taskkill for the remembered pid");
+    assert(!p.calls.some(function (c) { return /^ASYNC/.test(c); }),
+      "SYNCHRONOUSLY -- an async taskkill is a race a CLI loses (17q-d)");
+    assert(p.store["aell-comfy-pid"] === undefined,
+      "and only then is the PID record dropped");
+  }
+
+  // (b) the kill does NOT take -- the 17q-d case itself
+  {
+    const p = panel(LIVE_PID);
+    const r = p.Comfy.stopManaged();
+    assert(r === false,
+      "stopManaged() reports FALSE when the process is still alive after " +
+      "the kill -- a stop that cannot confirm must say so", "got " + r);
+    assert(p.store["aell-comfy-pid"] === String(LIVE_PID),
+      "and KEEPS the PID record: it is the only thing that can find the " +
+      "survivor, and reapOrphan() reads exactly this key at init");
+  }
+
+  // (c) nothing to stop is not a failure
+  {
+    const p = panel(0);
+    assert(p.Comfy.stopManaged() === true,
+      "with nothing remembered, stopManaged() answers true, not a failure");
+  }
+}
+
+// ------------------------------------------- comfy-managed.js stop()
+//
+// stop() asks pidIsComfy on BOTH sides of the kill now. The stub decides
+// what the second answer is, which is precisely the variable the old code
+// never read.
+{
+  const managedLib = require(path.join(ROOT, "scripts", "lib", "comfy-managed.js"));
+  const COMFY_CMDLINE = "C:\\Users\\mr\\AppData\\Roaming\\AE-Llama\\vendor\\" +
+    "comfy\\ComfyUI_windows_portable\\python_embeded\\python.exe -s main.py";
+  const OURS = "C:\\Users\\mr\\AppData\\Roaming\\AE-Llama\\vendor\\comfy";
+
+  const runStop = function (stillComfyAfterKill) {
+    const said = [];
+    const pidQueries = [];
+    const removed = [];
+    let killed = 0;
+    cp.execFileSync = function (file, args) {
+      const f = String(file).toLowerCase();
+      if (f.indexOf("powershell") !== -1) {
+        const cmd = (args || []).join(" ");
+        if (/Get-NetTCPConnection/i.test(cmd)) return "";   // the port fallback
+        pidQueries.push(cmd);
+        // Before the kill it must look alive, or stop() never kills at all.
+        if (pidQueries.length === 1) return COMFY_CMDLINE;
+        return stillComfyAfterKill ? COMFY_CMDLINE : "";
+      }
+      if (f.indexOf("taskkill") !== -1) { killed++; return ""; }
+      return "";
+    };
+    const storage = {
+      getItem: function () { return "44324"; },
+      removeItem: function (k) { removed.push(k); }
+    };
+    const Comfy = { stopManaged: function () { killed++; } };
+    const result = managedLib.stop(Comfy, storage, 8288,
+      function (kind, msg) { said.push(kind + ": " + msg); }, OURS);
+    return { result: result, out: said.join("\n"),
+             queries: pidQueries.length, removed: removed, killed: killed };
+  };
+
+  // (a) the kill took
+  {
+    const r = runStop(false);
+    assert(r.result === true, "stop() reports a stop it verified", "got " + r.result);
+    assert(r.queries >= 2,
+      "having asked whether the pid is a live ComfyUI on BOTH sides of the " +
+      "kill (" + r.queries + " asks) -- asking once, before, IS 17q-d");
+    assert(/stopped the managed backend \(pid 44324\)/.test(r.out),
+      "in the wording the teardown verdict greps for");
+    assert(!/FAILED/.test(r.out), "and says nothing about a failure");
+  }
+
+  // (b) the kill did NOT take
+  {
+    const r = runStop(true);
+    assert(r.result === false,
+      "stop() reports FALSE when the pid is STILL a live ComfyUI after the kill",
+      "got " + r.result);
+    assert(/FAILED to stop the managed backend \(pid 44324\)/.test(r.out),
+      "with a FAILURE line, not a success line -- this is the whole of 17q-d");
+    assert(!/stopped the managed backend \(pid 44324\)\./.test(r.out),
+      "and never the success sentence beside it: the 06:10 log said exactly " +
+      "that about a process that outlived it by 70 minutes");
+    assert(r.removed.length === 0,
+      "the PID record is KEPT so the survivor can still be found");
+    assert(/taskkill \/PID 44324/.test(r.out),
+      "and the log carries the command a human can finish the job with");
+    assert(!/no managed backend found to stop/.test(r.out),
+      "it does not then fall through and claim there was nothing to stop");
+  }
+
+  cp.execFileSync = realExecSync;
+}
+
+// ------------------------------------ and the verdict can READ the failure
+//
+// 17q-b's lesson, applied forward: a stop that reported a real problem
+// must not land in the "said nothing recognisable" bucket, where it reads
+// as noise at 8am.
+{
+  assert(managed.indexOf("FAILED to stop the managed backend (pid ") >= 0,
+    "comfy-managed.js says \"FAILED to stop the managed backend (pid \"");
+  assert(matchLine && new RegExp(matchLine[1])
+           .test("FAILED to stop the managed backend (pid 1)"),
+    "and the loop's teardown verdict recognises it");
+}
+
+// ------------------------------- no fire-and-forget kill is left anywhere
+//
+// The bug was ONE line and it is the kind a tidy-up pastes back in:
+//
+//     child_process.execFile("taskkill", [...], function () {});
+//
+// An empty callback on a taskkill is never right in this codebase. Both
+// remaining kill sites are asserted by shape as well as by behaviour,
+// because the behavioural tests above can only reach the paths that
+// exist today.
+{
+  const comfySrc = fs.readFileSync(
+    path.join(ROOT, "extension", "js", "comfy.js"), "utf8");
+  const managedSrc = fs.readFileSync(
+    path.join(ROOT, "scripts", "lib", "comfy-managed.js"), "utf8");
+
+  // Nowhere: a taskkill whose callback body is empty. Comments out
+  // first -- both files QUOTE the dead line in prose to explain it, the
+  // same trap the [N/A] check above fell into.
+  const uncommentedJs = (src) => src
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split(/\r?\n/).filter((l) => !/^\s*\/\//.test(l)).join("\n");
+  for (const [name, src] of [["extension/js/comfy.js", comfySrc],
+                             ["scripts/lib/comfy-managed.js", managedSrc]]) {
+    assert(!/execFile\(\s*["']taskkill["'][\s\S]{0,120}?function \([^)]*\) \{\s*\}/
+             .test(uncommentedJs(src)),
+      name + " has no taskkill with an empty callback -- that one line IS 17q-d");
+  }
+
+  // stopManaged() specifically: a CLI exits milliseconds after it returns,
+  // so its kill cannot be async at all.
+  const sm = comfySrc.slice(comfySrc.indexOf("function stopManaged"));
+  assert(/execFileSync\(\s*["']taskkill["']/.test(sm),
+    "stopManaged() kills with execFileSync");
+  assert(!/[^c]execFile\(/.test(sm.slice(0, sm.indexOf("global.Comfy ="))),
+    "and nothing in it is asynchronous");
+
+  // reapOrphan() may be async (it runs at init with a callback), but it
+  // must still verify before it drops the record.
+  const ro = comfySrc.slice(comfySrc.indexOf("function reapOrphan"),
+                            comfySrc.indexOf("function isUp"));
+  assert(/pidAlive\(/.test(ro),
+    "reapOrphan() verifies the pid is really gone before forgetting it");
+  assert(ro.indexOf("pidAlive(") < ro.lastIndexOf("forgetPid()"),
+    "with the check ahead of the forget, which is the whole ordering");
+}
 console.log(failed ? "\n" + failed + " TEST(S) FAILED" : "\nALL TESTS PASSED");
 process.exit(failed ? 1 : 0);
