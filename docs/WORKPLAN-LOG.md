@@ -27364,3 +27364,15 @@ No `extension/` change, so **no version bump**.
 - A JSONL file under dataRoot, not localStorage. A pass or the owner can read a file off disk, and localStorage is per-host.
 
 **Needs a later pass:** 12a's real-panel check. After that, §16d's AE reserve (the idle 3,255 MB) can be re-derived from real `floor` lines. That derivation is the owner's reading/decision (§16f OWNER), not a loop item. Next daytime row: "Mid-render VRAM reading" (§16f 3) needs AE and the GPU, so it is night work. The Option A deletions and §25 need chat-probe, which is also night work. So the always-takeable list has no daytime row left.
+
+## 2026-09-16 (local session) - daytime pass with nothing to take: the daytime queue is empty (17a)
+
+**Item:** none. DAYTIME pass, started 11:24 EDT inside the `-UntilHour 17` loop.
+
+**Harness: NOT RUN, on purpose.** 17a is still unanswered, and CLAUDE.md's daytime rule is the written one, so this pass read it the same way today's other daytime passes did. AE was not touched. No backend, no GPU, no chat model, no full suite.
+
+**Why nothing was taken:** the 11:18 pass (lines 27338-27367) found no daytime row left, and this pass checked that against the queue again. Every row not struck in NEXT UP needs AE, the backend, the chat model or the owner: 12a, 15, 17, 7b/7b-2/7d, 11, 23, 24, 26a, 30 need hardware, and 5a-4e, 5a-5b, 5a-5c, 5c, 6b, 17a, 22a need the owner. Every row in the "always takeable" list is done, or needs chat-probe (Option A deletions, §25) or AE and the GPU (§16f 3, §16f 4).
+
+**Filed:** added to the 17a row. The loop keeps starting passes until 17:00 with nothing a daytime pass may do, and each one pays for a fresh session only to write this entry. Until the owner answers 17a, a daytime loop should stop once the daytime queue is empty. It should not be started for the rest of the day.
+
+**Changed:** docs only (this entry, the WORKPLAN 17a row). No bump.
