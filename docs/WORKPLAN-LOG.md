@@ -27758,3 +27758,13 @@ SUPERSEDES: 27624,27641 -- that entry's "Bar for q8_0 32K, declared before any 3
 **Found for 12a (filed in its row):** the installed panel (`%APPDATA%/Adobe/CEP/extensions/com.cptk.aellama`) ships `.debug` with `com.cptk.aellama.panel` on port **8092**. When the panel is open, that port is the Chrome DevTools remote-debugging endpoint, which gives an unattended pass a way to run `location.reload()` (26a), send a message and read the panel log without a human. At 16:48 nothing listened on 8092 (AfterFX 9580 listened only on 57140 and 60662), so **the panel was not open**. Opening it without the UI (Window > Extensions) is unmeasured.
 
 **Assumed:** (1) An unattended pass should not begin GPU work it cannot finish inside `-UntilHour`, even though the loop only checks the hour between passes. (2) The 8092 route is reasoned from CEP's documented `.debug` behaviour, not measured on this machine.
+
+## 2026-09-16 (local session) - no item taken again: 8 minutes left in the owner's loop window (NEXT UP 12a, 15, 17)
+
+**Item:** none. Pass started 16:51 EDT under `run-local-agent.ps1` PID 47376 (-UntilHour 17), four minutes after the 16:47 pass that reached the same answer (entry above). Queue unchanged since then, so its reasoning stands: 12a needs the panel opened, a chat model, sends on "all" and "auto" and a `comfy_generate`; 15 and 17 are longer still; the other open rows are owner-gated.
+
+**Harness: 770/770 PASSED** (exit 0), 16:52.
+
+**Nothing new found, nothing filed.** Nothing under extension/ changed, so **no bump**.
+
+**Assumed:** same as the 16:47 entry, starting no GPU work that cannot end by 17:00. If the loop takes another pass before 17:00, it should reach the same answer faster by reading this entry.
