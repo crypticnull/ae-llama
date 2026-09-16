@@ -140,6 +140,36 @@ if (!shell) {
          "a pass process that does not exist reads GONE, not silence");
   assert(/dirty \d+ file|dirty 0 files|dirty \? /.test(out),
          "the dirty count is present in the rendered line");
+
+  // The clock over synthetic spans (WORKPLAN NEXT UP 1). Observed on a
+  // healthy loop at 30 s beats: 00:30, 01:00, 02:31, 02:01, 03:31 -
+  // PowerShell's [int] ROUNDS, so 90.6 s carried the minute and the
+  // next beat read LESS. Beats land a fraction of a second late, which
+  // is exactly what these spans model.
+  const spans = [0, 29.9, 30.6, 59.5, 60.6, 90.6, 120.6, 150.6, 180.6,
+                 3599.5, 3600, 6000.9, -3];
+  const want = ["00:00", "00:29", "00:30", "00:59", "01:00", "01:30",
+                "02:00", "02:30", "03:00", "59:59", "60:00", "100:00",
+                "00:00"];
+  const fmt = ". '" + LIB.replace(/'/g, "''") + "'; " +
+              spans.map(function (x) {
+                return "Format-AellElapsed -Seconds " + x;
+              }).join("; ");
+  const f = spawnSync(shell, ["-NoProfile", "-NonInteractive", "-Command", fmt],
+                      { encoding: "utf8", timeout: 60000 });
+  const got = String(f.stdout || "").trim().split(/\r?\n/)
+                .map(function (l) { return l.trim(); });
+  console.log("   spans: " + got.join(" "));
+  assert(got.length === want.length,
+         "Format-AellElapsed returned one clock per span (" + got.length + ")");
+  for (let i = 0; i < want.length; i++) {
+    assert(got[i] === want[i],
+           "elapsed " + spans[i] + " s reads " + want[i] + " (got " + got[i] + ")");
+  }
+  function secs(c) { const p = String(c).split(":"); return +p[0] * 60 + +p[1]; }
+  let monotone = true;
+  for (let i = 1; i < 11; i++) if (secs(got[i]) < secs(got[i - 1])) monotone = false;
+  assert(monotone, "the clock never runs backwards over increasing spans");
 }
 
 console.log("");

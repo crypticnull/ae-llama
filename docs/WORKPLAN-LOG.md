@@ -27122,3 +27122,17 @@ No `extension/` change, so **no version bump**.
 - Delete the rule rather than correct it (reason above).
 - No bump: nothing in extension/ changed.
 - The daytime harness skip, as the previous passes did, pending 17a.
+
+## 2026-09-16 (local session) - the heartbeat clock no longer runs backwards (NEXT UP 1, §20a)
+
+**Item:** NEXT UP 1. DAYTIME pass, started 10:46 EDT, inside the `-UntilHour 17` daytime loop.
+
+**Harness: NOT RUN, on purpose**, same reading as the previous daytime passes: 17a is unanswered and CLAUDE.md's daytime rule is the written one. AE was not touched. Nothing in extension/ changed, so **no bump**.
+
+**Root cause, reproduced.** `Get-AellHeartbeatLine` did `$elapsed = [int]...TotalSeconds; $mm = [int]($elapsed / 60)`. PowerShell's `[int]` ROUNDS (banker's), it does not floor. Beats land a fraction of a second late, so fed 30.6, 60.6, 90.6, 120.6, 150.6 s the old formula prints `01:31 01:01 02:31 02:01 03:31` - the observed tail exactly: rounding the seconds adds the stray :x1, rounding the minutes carries at 1.5.
+
+**Changed.**
+- `scripts/lib/loop-heartbeat.ps1`: new pure `Format-AellElapsed -Seconds <double>`, `[Math]::Floor` at both steps, negative clamps to 00:00, minutes do not wrap past 99 (`100:00`). `Get-AellHeartbeatLine` calls it. The job in `run-local-agent.ps1` already dot-sources the whole lib, so no wiring change.
+- `tests/test-loop-heartbeat.js`: executes the real function over 13 synthetic spans (late beats, 59.5, 3599.5, 6000.9, -3) and asserts the clock is monotone. Green, plus test-powershell-syntax and test-source-control-chars.
+
+**Decision made unattended:** none beyond the harness skip.

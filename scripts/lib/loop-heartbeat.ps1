@@ -46,6 +46,19 @@ function Get-AellDirtyCount {
   }
 }
 
+# Elapsed seconds as mm:ss, FLOORED at both steps. [int] in PowerShell
+# ROUNDS (to even), so the old `[int]($elapsed / 60)` carried the minute
+# at 90 s and the clock read 00:30, 01:00, 02:31, 02:01 -- backwards
+# (WORKPLAN NEXT UP 1). Pure, so a test can feed it synthetic spans.
+function Format-AellElapsed {
+  param([double]$Seconds)
+  if ($Seconds -lt 0) { $Seconds = 0 }
+  $total = [long][Math]::Floor($Seconds)
+  $mm = [long][Math]::Floor($total / 60)
+  $ss = $total % 60
+  return ('{0:d2}:{1:d2}' -f $mm, $ss)
+}
+
 # One heartbeat line. Pure formatting plus two reads, so it can be
 # called from a background job or straight from a test.
 function Get-AellHeartbeatLine {
@@ -55,10 +68,7 @@ function Get-AellHeartbeatLine {
     [datetime]$StartedAt,
     [string]$Label = 'pass'
   )
-  $elapsed = [int]((Get-Date) - $StartedAt).TotalSeconds
-  $mm = [int]($elapsed / 60)
-  $ss = $elapsed % 60
-  $clock = ('{0:d2}:{1:d2}' -f $mm, $ss)
+  $clock = Format-AellElapsed -Seconds ((Get-Date) - $StartedAt).TotalSeconds
 
   $procs = @()
   try { $procs = @(Get-AellCliPassProcesses -RootId $RootId) } catch { }
