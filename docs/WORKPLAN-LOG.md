@@ -27228,3 +27228,19 @@ No `extension/` change, so **no version bump**.
 **Real install, read-only:** installed 0.34.0, fixture 0.34.0, no note.
 
 **Decisions made unattended.** Went with option 1 of §17l (warn when the version moves) over option 2 (re-harvest during the install check), because a re-harvest needs a booted backend and rewrites a committed file, and `--check` must not do either. It is a warning, not a FAIL, because the install itself is fine and only the test reference is stale. Limit: the panel's Settings install button does not run the check. Only the CLI does, and that is the path a pass uses to install or upgrade.
+
+## 2026-09-16 (local session) - krea2's weights carry sizes; the biggest-file rule polices every entry now (NEXT UP 28, §18 P8a)
+
+**Item:** NEXT UP 28. DAYTIME pass, started 10:59 EDT. Items above it need AE, a backend, the chat model or the owner, and 17a (does a daytime loop count as "unless he says otherwise") is still unanswered.
+
+**Harness: NOT RUN, on purpose.** Same reading as the other daytime passes: CLAUDE.md's daytime rule is the written one. AE was not touched. No backend, no GPU, no network, no full suite.
+
+**Changed.**
+- `extension/js/version.js` krea2: `fileSizesMB` = { krea2_turbo_int8_convrot 12868, qwen3vl_4b_fp8_scaled 5000, qwen_image_vae 242 }. These are byte sizes stat'ed from `C:\Users\mr\Documents\ComfyUI\models\{diffusion_models,text_encoders,vae}` (13 492 686 496 / 5 242 467 968 / 253 806 246), rounded like the other entries' sizeMB. Sum 18 110, matching the 18 109 the log has quoted since 09-09. I used a parallel map rather than objects in `files[]` because `catalogEntryFiles`, `catalog-probe.js` and `test-workflow-bundle.js` all read `files` as bare strings. No panel code reads the new field.
+- `tests/test-model-catalog.js`: the biggest-file rule prices off `urls[].sizeMB` plus `fileSizesMB[files[i]]`. There is a new both-directions check that the map's keys are exactly `files` and that every value is a whole positive MiB. `NO_FILE_SIZES_TO_CHECK` is now `[]`.
+
+**Finding: krea2 fails the rule once it can be asked.** Its gate is 12 (12 288 MiB, moved 24 -> 12 by 5a-4c) and its diffusion file is 12 868 MiB. I did NOT move the gate: the constrainedFit run (byte-identical png at 4 937 MiB of room, retaken in 7c) is the same evidence that seats wan22-5b and wan22-5b-fp8, so krea2 joins `GATE_UNDER_ITS_BIGGEST_FILE`. §18 P8a's step 3 (ltx-small keeps its seat) was already obsolete, since ltx-small left in 0.12.20.
+
+**Verified.** test-model-catalog green. Negative controls: removing one size key fails "fileSizesMB sizes exactly the files it lists", and krea2 gate 16 fails the allowlist check (and the existing constrained-card assertion). Also green: test-tiers, test-tier-ladder, test-workflow-bundle, test-gen-model-manager, test-chat-probe.
+
+**Bump: none. This is a decision.** extension/ changed, but only by a data field nothing in the panel reads, so it has no behaviour to verify in AE. It rides with 12a's overnight bump, as 25/26/15/17 do, and is added to that row's carry list.

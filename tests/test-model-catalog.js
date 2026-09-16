@@ -545,7 +545,13 @@ if (krea2) {
 // same run: gate 8 against the same 9536 MiB file, loaded WITHOUT a cast,
 // identical clip twice at 841 MiB of room in 130 / 131 s against 127.
 // A file bigger than the card is not a grind on this backend; it streams.
-const GATE_UNDER_ITS_BIGGEST_FILE = ["wan22-5b", "wan22-5b-fp8"];
+//
+// krea2 took the third seat 2026-09-16 (WORKPLAN 18 P8a) the moment its
+// files carried sizes -- the rule had never been able to ask. Gate 12
+// (12 288 MiB) against its 12 868 MiB diffusion file, and it is seated by
+// the same kind of evidence: constrainedFit, the byte-identical png at
+// 4 937 MiB of room (NEXT UP 5a-4c, retaken 7c).
+const GATE_UNDER_ITS_BIGGEST_FILE = ["krea2", "wan22-5b", "wan22-5b-fp8"];
 
 /* The entries the rule below cannot ask the question OF, named rather than
  * silently skipped (WORKPLAN 18 P8a). krea2 carries `urls: []`, so there are
@@ -560,13 +566,20 @@ const GATE_UNDER_ITS_BIGGEST_FILE = ["wan22-5b", "wan22-5b-fp8"];
  * other seat for exactly the reason the old comment gave -- "no weights
  * pinned at all" -- and pinning them is what removed it. Its biggest file is
  * now 6047 MiB against a gate the measurement set, so the rule below can ask
- * the question and does. */
-const NO_FILE_SIZES_TO_CHECK = ["krea2"];
+ * the question and does.
+ *
+ * krea2 LEFT it 2026-09-16 (WORKPLAN 18 P8a), so the list is EMPTY. Its
+ * weights are still owner-supplied (urls: []), so the sizes ride on a
+ * parallel `fileSizesMB` map keyed by the bare names in `files`; the rule
+ * reads both shapes. Stays checked in both directions, like the one above. */
+const NO_FILE_SIZES_TO_CHECK = [];
 {
   const offenders = [];
   const unaskable = [];
   window.AELL.COMFY_CATALOG.forEach((e) => {
+    const byName = e.fileSizesMB || {};
     const sizes = (e.urls || []).map((u) => u.sizeMB)
+      .concat((e.files || []).map((f) => byName[f]))
       .filter((n) => typeof n === "number" && n > 0);
     if (!sizes.length) unaskable.push(e.name);
     if (!sizes.length || typeof e.minVramGB !== "number") return;
@@ -589,6 +602,23 @@ const NO_FILE_SIZES_TO_CHECK = ["krea2"];
                   GATE_UNDER_ITS_BIGGEST_FILE.slice().sort().join(", "));
     console.error("       actual   : " + (offenders.join("; ") || "none"));
   }
+
+  // fileSizesMB must size exactly the names in files[]: a missing key would
+  // quietly drop that file out of "biggest", a stray key would price a file
+  // the graph never loads.
+  window.AELL.COMFY_CATALOG.forEach((e) => {
+    if (!e.fileSizesMB) return;
+    const keys = Object.keys(e.fileSizesMB).sort().join(",");
+    const names = (e.files || []).slice().sort().join(",");
+    assert(keys === names,
+           e.name + ": fileSizesMB sizes exactly the files it lists",
+           "keys " + keys + " vs files " + names);
+    Object.keys(e.fileSizesMB).forEach((k) => {
+      const n = e.fileSizesMB[k];
+      assert(typeof n === "number" && n > 0 && Math.round(n) === n,
+             e.name + ": fileSizesMB[" + k + "] is a whole positive MiB", n);
+    });
+  });
 
   assert(unaskable.slice().sort().join(",") ===
          NO_FILE_SIZES_TO_CHECK.slice().sort().join(","),

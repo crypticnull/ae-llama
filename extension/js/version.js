@@ -300,6 +300,14 @@
         files: ["krea2_turbo_int8_convrot.safetensors",
                 "qwen3vl_4b_fp8_scaled.safetensors",
                 "qwen_image_vae.safetensors"],
+        // Per-file MiB for the names above (WORKPLAN 18 P8a), stat'ed off
+        // the owner's disk 2026-09-16: 13 492 686 496 / 5 242 467 968 /
+        // 253 806 246 bytes. A parallel map, not objects in files[], because
+        // catalogEntryFiles and catalog-probe read files[] as bare names.
+        // No panel code reads it; test-model-catalog prices the gate off it.
+        fileSizesMB: { "krea2_turbo_int8_convrot.safetensors": 12868,
+                       "qwen3vl_4b_fp8_scaled.safetensors": 5000,
+                       "qwen_image_vae.safetensors": 242 },
         urls: [],
         note: "download links ship via the update feed once pinned; " +
               "existing files register by exact name"
