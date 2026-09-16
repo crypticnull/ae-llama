@@ -710,6 +710,31 @@ const ALLOW_UNMEASURED = [];
   }
 }
 
+// sdxl and sdxl-fp8 are the same kind of pair (18 P7c step 2g, 5a-4h): one
+// checkpoint, the fp8 entry's UNet cast at load by core UNETLoader straight
+// out of it. Same bug class as Wan -- a pass that gives the cast its own
+// urls[] makes a buyer fetch 6.6 GB twice -- plus one of its own: the cast
+// must stay cheaper AND gated lower, or it is dead weight in the picker.
+{
+  const cat = window.AELL.COMFY_CATALOG;
+  const fp16 = cat.filter((e) => e.name === "sdxl")[0];
+  const fp8 = cat.filter((e) => e.name === "sdxl-fp8")[0];
+  assert(fp16 && fp8, "both SDXL entries are in the catalog");
+  if (fp16 && fp8) {
+    assert(JSON.stringify(fp8.urls) === JSON.stringify(fp16.urls) &&
+           fp8.sizeMB === fp16.sizeMB,
+           "sdxl-fp8 downloads exactly what sdxl downloads (one checkpoint)");
+    assert(fp8.measuredVramMB < fp16.measuredVramMB &&
+           fp8.minVramGB < fp16.minVramGB,
+           "and the cast is measured cheaper (" + fp8.measuredVramMB + " vs " +
+           fp16.measuredVramMB + " MiB) and gated lower (" + fp8.minVramGB +
+           " vs " + fp16.minVramGB + " GB)");
+    assert(fp8.recommendFromGB === fp16.minVramGB,
+           "and it is not DEFAULTED below sdxl's own gate until the owner " +
+           "says so (16f)");
+  }
+}
+
 // No consumer may do decimal-MB arithmetic on the field. main.js's model
 // dropdown divided by 1000 while the downloader's status line divided by
 // 1024, so one file was quoted two sizes in the same window.

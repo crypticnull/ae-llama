@@ -527,6 +527,47 @@ shipped.forEach((t) => {
   }
 }
 
+// The SDXL pair (18 P7c step 2g, 5a-4h). Not a same-shape pair like Wan:
+// the fp8 graph ADDS node 8, a core UNETLoader reading the UNet out of the
+// same checkpoint node 1 loads, and KSampler takes its model from there.
+// Everything else must stay the sdxl basic, and node 8 must name the SAME
+// file -- there is no UNet-only sdxl download, and comfy.js maps
+// checkpoints folders as diffusion_models so the name resolves.
+{
+  const A = "AE_LLAMA_SDXL_T2I_V1", B = "AE_LLAMA_SDXL_FP8_T2I_V1";
+  const fa = path.join(BUNDLE, A + ".json"), fb = path.join(BUNDLE, B + ".json");
+  const both = fs.existsSync(fa) && fs.existsSync(fb);
+  assert(both, "both SDXL siblings are bundled", A + " + " + B);
+  if (both) {
+    const ga = JSON.parse(fs.readFileSync(fa, "utf8"));
+    const gb = JSON.parse(fs.readFileSync(fb, "utf8"));
+    const diffs = [];
+    Object.keys(gb).forEach((k) => {
+      const na = ga[k], nb = gb[k];
+      if (!na) { diffs.push(k); return; }
+      if (na.class_type !== nb.class_type) { diffs.push(k + ".class_type"); return; }
+      const ia = na.inputs || {}, ib = nb.inputs || {};
+      Object.keys(ia).concat(Object.keys(ib))
+        .filter((x, i, all) => all.indexOf(x) === i).forEach((ik) => {
+          if (JSON.stringify(ia[ik]) !== JSON.stringify(ib[ik])) diffs.push(k + "." + ik);
+        });
+    });
+    Object.keys(ga).forEach((k) => { if (!gb[k]) diffs.push("-" + k); });
+    const ALLOWED = ["5.model", "7.filename_prefix", "8"].sort();
+    assert(diffs.sort().join(", ") === ALLOWED.join(", "),
+           "the SDXL siblings differ in exactly the UNet loader, where " +
+           "KSampler takes its model, and the output prefix",
+           "found [" + diffs.join(", ") + "]");
+    const n8 = gb["8"] || {};
+    assert(n8.class_type === "UNETLoader" &&
+           n8.inputs.unet_name === ga["1"].inputs.ckpt_name &&
+           n8.inputs.weight_dtype === "fp8_e4m3fn" &&
+           JSON.stringify(gb["5"].inputs.model) === JSON.stringify(["8", 0]),
+           "node 8 casts the SAME checkpoint to fp8_e4m3fn and feeds KSampler",
+           JSON.stringify(n8.inputs));
+  }
+}
+
 // --------------------------------------------- the catalog's own side
 
 // Every entry that NAMES a template must name one that is bundled AND

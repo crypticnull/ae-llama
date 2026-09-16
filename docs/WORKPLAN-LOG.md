@@ -25644,3 +25644,99 @@ images carry no artifact to chase.
 ### Filed (WORKPLAN)
 
 - 5a-4g struck with the table in 18 P7c step 2g; **5a-4h** added.
+
+## 2026-09-16 (local session) - sdxl-fp8 ships at gate 8 through a yaml that maps checkpoints as diffusion models, and adding it would have moved the 12 GB image default
+
+**Item:** NEXT UP 5a-4h / WORKPLAN 18 P7c step 2g - ship `sdxl-fp8`.
+Version **0.12.28**.
+
+**Harness: 770/770 PASSED** at the start and again on the changed tree.
+Stubbed suite 91/91. Items above 5a-4h: 3 blocked on the owner, 5a-4e
+the owner's, the rest struck.
+
+### What changed
+
+- `extension/js/comfy.js` `applyExtraModelPaths`: new `pushModelSubs`
+  writes `diffusion_models` as a block scalar (`diffusion_models`, then
+  `checkpoints`) in every whole-tree section; a `checkpoints=path` root
+  also gets `diffusion_models: .`; and an `aellama_managed` section
+  (`diffusion_models: models/checkpoints`, relative to the yaml) is
+  written LAST, always. So the yaml is no longer deleted when every
+  setting is blank. Order matters: ComfyUI adds search paths in file
+  order and `get_full_path` takes the first hit, so a real diffusion
+  file wins a name clash. The first cut wrote the managed section FIRST;
+  the real backend's "Adding extra search path" log showed it, and it was
+  moved before measuring.
+- Checked before building, as the item asked: the managed backend's
+  `/object_info/UNETLoader` now lists every checkpoint (sd15, ltxv,
+  illustrious, the refiner...) as a UNet choice. Harmless for the panel,
+  which only posts its own graphs. The panel's presence checks read the
+  manifest's `dir: checkpoints`, which is where the file is, and
+  `catalog-vram-probe.js findWeight` matches by name in any folder, so
+  both agree the entry is runnable.
+- `AE_LLAMA_SDXL_FP8_T2I_V1.json` + manifest (the 5a-4g graph, in the
+  sdxl basic's compact style), hash history, catalog entry `sdxl-fp8`:
+  sizeMB 6617, urls identical to sdxl, `minVramGB 8`, `recommendFromGB 12`.
+- `extension/js/tiers.js better()`: see below.
+- `docs/CAPABILITIES.md` curated half: nine basics, sdxl-fp8 paragraph.
+
+### Measured through the shipped path (RTX 5090, AE up, pid 40976)
+
+Backend booted by `node scripts/comfy-install.js --boot`, i.e. the
+panel's own `bootManaged` -> `applyExtraModelPaths`, unpinned. Probe
+`scripts/catalog-vram-probe.js --entry sdxl-fp8`, seed 12345, 1024x1024.
+
+| run | room | delta MiB | wall s | backend | png md5 |
+|---|---|---|---|---|---|
+| cold | whole card | 5 050 | 6 | - | 091c71... |
+| warm | whole card | 4 672 | 4 | - | 091c71... |
+| cold | 4 936 (8 GB card minus AE) | 3 807 | 6 | 4.73 s, 9.98 it/s | 091c71... |
+
+All three byte-identical to each other AND to 5a-4g's hardlinked runs
+(the same md5), so the yaml route loads the same UNet the hardlink did.
+Ballast released; card back at 1 433 MiB, no listener on 8288, no python.
+`vram-ballast.py` reported 4 936 left rather than 4 937; `roomMB` records
+what it said.
+
+### Found on the way: the entry moved a default, and nothing noticed
+
+With `recommendFromGB 12` the 12, 16 and 20 GB IMAGE default went
+sdxl -> sdxl-fp8. At 12 the pair ties on recommend floor AND sizeMB, and
+`better()`'s last rung ("prefer the entry measured cheaper", added for the
+Wan pair) handed it to the cast - the very move the field exists to hold.
+The stubbed suite stayed green: `test-tiers.js` never asked a 12 or 16 GB
+card for an image. Fixed at the root: before the measured rung, an entry
+carrying `recommendFromGB` loses a tie to one that does not (both Wans
+carry it, so their tie is decided as before). New test: for every card
+size 4-96 GB the picks are exactly what the catalog picks WITHOUT
+sdxl-fp8, and stripping the field makes 8 GB default to sdxl-fp8 while
+12 GB keeps sdxl. It fails 3 rows on the old tiers.js.
+
+### Tests
+
+`test-comfy-backend.js` (yaml parsed as the vendor parser does: block
+order, the managed section last with and without extra roots, blank
+settings keep only that section; 7 assertions fail on the old writer),
+`test-gen-model-manager.js` (two assertions that pinned the old
+"blank settings delete the yaml"), `test-model-catalog.js` (the SDXL pair:
+same urls, cheaper, gated lower, held at sdxl's gate),
+`test-workflow-bundle.js` (the graphs differ only in node 8, `5.model` and
+`7.filename_prefix`; node 8 casts the SAME checkpoint), `test-tiers.js`.
+
+### What I assumed / decided
+
+- **PATCH, not the MINOR the row asked for.** The loop brief forbids
+  minor bumps; `wan22-5b-fp8` (0.12.19), the same kind of cast sibling,
+  shipped as a patch from a loop pass. Recorded here so the owner can
+  batch a minor at the next boundary if he wants release notes for it.
+- The 849-room case (8 GB card minus AE minus the desktop floor, 18.9 s vs
+  fp16's 16.9 in 5a-4g) was not re-run. The gate prices card-minus-AE like
+  every other constrainedFit; it is written in the entry comment.
+- Defaults held for the owner: 5a-4e now carries the sdxl-fp8 half of
+  the question (strip its field and 8 GB defaults to it).
+
+### Filed (WORKPLAN)
+
+- 5a-4h struck. **5a-4i**: on a user's OWN ComfyUI the yaml is not
+  written, so sdxl-fp8 is refused with advice ("point it at them via
+  extra_model_paths.yaml") a motion designer cannot act on.

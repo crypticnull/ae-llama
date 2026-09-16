@@ -128,11 +128,65 @@ assert(yamlPath && fs.existsSync(yamlPath) &&
 const yaml = fs.readFileSync(yamlPath, "utf8");
 assert(yaml.includes("base_path: " + modelsDir.replace(/\\/g, "/")) &&
        /checkpoints: checkpoints/.test(yaml) &&
-       /diffusion_models: diffusion_models/.test(yaml),
+       /diffusion_models: \|\r?\n    diffusion_models/.test(yaml),
        "yaml maps the external base path and model subfolders");
 assert(fs.existsSync(path.join(modelsDir, "checkpoints")) &&
        fs.existsSync(path.join(modelsDir, "loras")),
        "standard model subfolders created in the external location");
+
+// 5a. A checkpoints folder is a diffusion_models folder too (WORKPLAN 18
+// P7c step 2g). AE_LLAMA_SDXL_FP8_T2I_V1 casts sdxl's UNet with core
+// UNETLoader, which lists only diffusion_models, straight out of the whole
+// checkpoint the buyer already has. Without this mapping the backend
+// refuses the graph on a name it cannot offer, or the buyer downloads the
+// same 6.6 GB twice. Parsed the way the vendor utils/extra_config.py does:
+// a value is split on newlines, and the real folder must come FIRST so a
+// name present in both resolves to the real diffusion file.
+function yamlSections(text) {
+  const out = {};
+  let sec = null, key = null;
+  text.split(/\r?\n/).forEach((ln) => {
+    let m;
+    if ((m = /^([A-Za-z_0-9]+):\s*$/.exec(ln))) { sec = out[m[1]] = {}; key = null; }
+    else if (sec && (m = /^  ([a-z_]+): \|$/.exec(ln))) { key = m[1]; sec[key] = []; }
+    else if (sec && (m = /^  ([a-z_]+): (.+)$/.exec(ln))) { key = null; sec[m[1]] = [m[2]]; }
+    else if (sec && key && (m = /^    (.+)$/.exec(ln))) { sec[key].push(m[1]); }
+  });
+  return out;
+}
+{
+  const secs = yamlSections(yaml);
+  assert(secs.aellama && JSON.stringify(secs.aellama.diffusion_models) ===
+         JSON.stringify(["diffusion_models", "checkpoints"]),
+         "the models folder maps its checkpoints as diffusion models, " +
+         "after the real diffusion_models folder",
+         JSON.stringify(secs.aellama && secs.aellama.diffusion_models));
+  assert(secs.aellama && JSON.stringify(secs.aellama.checkpoints) ===
+         JSON.stringify(["checkpoints"]),
+         "and checkpoints stays a checkpoints folder");
+  assert(secs.aellama_managed &&
+         JSON.stringify(secs.aellama_managed.diffusion_models) ===
+         JSON.stringify(["models/checkpoints"]) &&
+         !("base_path" in secs.aellama_managed),
+         "the backend's OWN models/checkpoints is mapped too, relative to " +
+         "the yaml, because that is where the downloader puts sdxl");
+  // ComfyUI adds search paths in file order and get_full_path takes the
+  // first hit, so a checkpoints folder written above a real
+  // diffusion_models folder would win a name clash against it.
+  const names = Object.keys(secs);
+  assert(names[names.length - 1] === "aellama_managed",
+         "and it is the LAST section, so no checkpoint shadows a real " +
+         "diffusion model of the same name", names.join(", "));
+}
+{
+  window.Settings.get = () => ({ comfyModelsDir: modelsDir,
+                                 comfyModelRoots: [path.join(tmpRoot, "x")] });
+  const names = Object.keys(yamlSections(fs.readFileSync(
+    Comfy._applyExtraModelPaths({ root }), "utf8")));
+  assert(names[names.length - 1] === "aellama_managed",
+         "LAST with extra roots too", names.join(", "));
+  window.Settings.get = () => ({ comfyModelsDir: modelsDir });
+}
 
 // 5b. extra roots: veterans have models spread across drives. A bare
 // path maps the standard subfolders; "kind=path" maps ONE kind with the
@@ -154,6 +208,18 @@ assert(yaml2.includes("aellama_extra_0:") &&
 assert(yaml2.includes("aellama_extra_1:") &&
        /checkpoints: \./.test(yaml2),
        "a kind=path root maps the folder AS that kind (checkpoints: .)");
+{
+  const secs = yamlSections(yaml2);
+  assert(JSON.stringify(secs.aellama_extra_1) ===
+         JSON.stringify({ base_path: [path.join(tmpRoot, "ck")
+                            .replace(/\\/g, "/")],
+                          checkpoints: ["."], diffusion_models: ["."] }),
+         "a checkpoints=path root is a diffusion_models root as well, and " +
+         "nothing else", JSON.stringify(secs.aellama_extra_1));
+  assert(JSON.stringify(secs.aellama_extra_0.diffusion_models) ===
+         JSON.stringify(["diffusion_models", "checkpoints"]),
+         "a bare extra root maps its checkpoints as diffusion models too");
+}
 assert(!yaml2.includes("aellama_extra_2:"),
        "blank lines in the setting are ignored");
 assert(fs.readdirSync(extraRoot).length === 0,
@@ -168,12 +234,21 @@ assert(/base_path: D:\/SD\/everything/.test(
          fs.readFileSync(Comfy._applyExtraModelPaths({ root }), "utf8")),
        "a windows drive path is one root, not a kind=path split");
 
-// clearing the setting removes the mapping — when there is nothing else
-// to map. fakeProcess.env carries no LOCALAPPDATA, so no shared store.
+// clearing the setting removes the user's mapping. The yaml itself
+// stays, carrying ONLY the backend's own checkpoints-as-diffusion-models
+// line (5a) -- until 2026-09-16 a blank setting deleted the file, and the
+// sdxl-fp8 graph then could not load the checkpoint the downloader put in
+// the backend's own tree. fakeProcess.env carries no LOCALAPPDATA, so no
+// shared store.
 window.Settings.get = () => ({ comfyModelsDir: "", comfyModelRoots: [] });
-assert(Comfy._applyExtraModelPaths({ root }) === null &&
-       !fs.existsSync(yamlPath),
-       "blank settings remove a previously written mapping");
+{
+  const out = Comfy._applyExtraModelPaths({ root });
+  const secs = out ? yamlSections(fs.readFileSync(out, "utf8")) : {};
+  assert(out === yamlPath &&
+         JSON.stringify(Object.keys(secs)) === JSON.stringify(["aellama_managed"]),
+         "blank settings drop every user section and keep only the " +
+         "backend's own checkpoints mapping", JSON.stringify(Object.keys(secs)));
+}
 
 // ...but a Comfy-Desktop shared store is not the user's setting to
 // clear. It is declared in no config file, the panel finds it only
@@ -197,12 +272,17 @@ assert(yamlShared.includes("comfy_desktop_shared:") &&
 assert(!yamlShared.includes("aellama:") &&
        !yamlShared.includes("aellama_extra_"),
        "with nothing the user cleared carried along");
+assert(JSON.stringify(yamlSections(yamlShared).comfy_desktop_shared
+                        .diffusion_models) ===
+       JSON.stringify(["diffusion_models", "checkpoints"]),
+       "and the shared store's checkpoints are diffusion models too (the " +
+       "sdxl checkpoint on this machine lives there)");
 
 // A LOCALAPPDATA that names no store is the same as no store at all —
 // the panel must not write a mapping for a folder that is not there.
 fakeProcess.env.LOCALAPPDATA = path.join(tmpRoot, "no-such-localapp");
-assert(Comfy._applyExtraModelPaths({ root }) === null &&
-       !fs.existsSync(yamlPath),
+assert(!fs.readFileSync(Comfy._applyExtraModelPaths({ root }), "utf8")
+         .includes("comfy_desktop_shared:"),
        "an absent shared store maps nothing");
 delete fakeProcess.env.LOCALAPPDATA;
 

@@ -2677,11 +2677,37 @@
    * get big) via ComfyUI's own extra_model_paths.yaml mechanism. The yaml
    * lives inside OUR vendor install, so it is safe to (re)write on every
    * boot; blank setting = the backend's built-in models folder only —
-   * plus the Comfy-Desktop shared store below, when the machine has one.
+   * plus the Comfy-Desktop shared store below, when the machine has one,
+   * and the checkpoints-as-diffusion-models line (pushModelSubs).
    */
   var COMFY_MODEL_SUBS = ["checkpoints", "diffusion_models", "text_encoders",
     "clip", "clip_vision", "vae", "loras", "controlnet", "upscale_models",
     "embeddings"];
+  /**
+   * A whole-checkpoint file is ALSO a diffusion model to this backend, and
+   * one shipped graph depends on it (AE_LLAMA_SDXL_FP8_T2I_V1, WORKPLAN 18
+   * P7c step 2g). Core UNETLoader is the only node that casts weights on
+   * load, it lists only `diffusion_models`, and the vendor's
+   * load_diffusion_model_state_dict pulls the UNet out of a whole
+   * checkpoint. So every `checkpoints` folder this yaml maps is mapped as a
+   * `diffusion_models` folder too, AFTER the real one: a name found in both
+   * resolves to the real diffusion file (folder_paths.get_full_path takes
+   * the first hit). The alternative was a second 6.6 GB download of a file
+   * the buyer already has. The vendor utils/extra_config.py splits each
+   * value on newlines, hence the block scalar.
+   */
+  function pushModelSubs(lines) {
+    for (var k = 0; k < COMFY_MODEL_SUBS.length; k++) {
+      var sub = COMFY_MODEL_SUBS[k];
+      if (sub === "diffusion_models") {
+        lines.push("  diffusion_models: |");
+        lines.push("    diffusion_models");
+        lines.push("    checkpoints");
+      } else {
+        lines.push("  " + sub + ": " + sub);
+      }
+    }
+  }
   function applyExtraModelPaths(install) {
     ensureNode();
     var s = null;
@@ -2709,15 +2735,8 @@
     } catch (eP) {}
     var yamlPath = path.join(install.root, "ComfyUI",
                              "extra_model_paths.yaml");
-    if (!dir && !roots.length && !sharedStore) {
-      // Setting cleared and nothing shared to point at — remove a
-      // previously written mapping.
-      try { if (fs.existsSync(yamlPath)) fs.unlinkSync(yamlPath); }
-      catch (eU) {}
-      return null;
-    }
     try {
-      var i, k;
+      var i;
       var lines = [
         "# Managed by AE Llama — external model folders (panel settings)"
       ];
@@ -2730,10 +2749,7 @@
         }
         lines.push("aellama:");
         lines.push("  base_path: " + dir.replace(/\\/g, "/"));
-        for (i = 0; i < COMFY_MODEL_SUBS.length; i++) {
-          lines.push("  " + COMFY_MODEL_SUBS[i] + ": " +
-                     COMFY_MODEL_SUBS[i]);
-        }
+        pushModelSubs(lines);
       }
       // Extra roots are the USER's folders — read from, never restructured.
       var n = 0;
@@ -2750,22 +2766,25 @@
         lines.push("  base_path: " + root.replace(/\\/g, "/"));
         if (kind) {
           lines.push("  " + kind + ": .");
+          if (kind === "checkpoints") lines.push("  diffusion_models: .");
         } else {
-          for (k = 0; k < COMFY_MODEL_SUBS.length; k++) {
-            lines.push("  " + COMFY_MODEL_SUBS[k] + ": " +
-                       COMFY_MODEL_SUBS[k]);
-          }
+          pushModelSubs(lines);
         }
         n++;
       }
       if (sharedStore) {
         lines.push("comfy_desktop_shared:");
         lines.push("  base_path: " + sharedStore.replace(/\\/g, "/"));
-        for (k = 0; k < COMFY_MODEL_SUBS.length; k++) {
-          lines.push("  " + COMFY_MODEL_SUBS[k] + ": " +
-                     COMFY_MODEL_SUBS[k]);
-        }
+        pushModelSubs(lines);
       }
+      // Always written, even with every setting blank: the backend's OWN
+      // models/checkpoints is not a diffusion_models folder by default,
+      // and a buyer's sdxl checkpoint usually lands exactly there. LAST,
+      // because ComfyUI searches sections in file order and every real
+      // diffusion_models folder above must win a name clash. Relative, so
+      // it resolves against this yaml's own folder.
+      lines.push("aellama_managed:");
+      lines.push("  diffusion_models: models/checkpoints");
       fs.writeFileSync(yamlPath, lines.join("\n") + "\n");
       return yamlPath;
     } catch (e2) {

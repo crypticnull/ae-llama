@@ -313,6 +313,18 @@
       // rather than winning it by accident - the mirror of the sizeMB 0
       // rule above, and for the same reason: a missing number must not beat
       // a measured one.
+      //
+      // Except against an entry whose DEFAULT is held back. recommendFromGB
+      // means "gated lower, not yet picked lower" - the owner's call (16f).
+      // sdxl-fp8 carries recommendFromGB 12 so an 8 GB card is not
+      // defaulted to it, but at 12 that ties sdxl on floor and download,
+      // and "measured cheaper" would hand it the 12 and 16 GB image
+      // default anyway: the exact move the field exists to hold. So a
+      // held-back entry loses the tie to one the table already picks. The
+      // Wan pair both carry the field, so this does not decide them.
+      var aHeld = typeof a.recommendFromGB === "number";
+      var bHeld = typeof b.recommendFromGB === "number";
+      if (aHeld !== bHeld) return bHeld;
       var aMeas = typeof a.measuredVramMB === "number" ? a.measuredVramMB : Infinity;
       var bMeas = typeof b.measuredVramMB === "number" ? b.measuredVramMB : Infinity;
       return aMeas < bMeas;

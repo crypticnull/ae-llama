@@ -286,8 +286,9 @@ assert(yaml.indexOf("comfy_desktop_shared:") !== -1,
        "the Comfy-Desktop shared store is a section of its own");
 assert(yaml.indexOf(SHARED.replace(/\\/g, "/")) !== -1,
        "with its real base_path, forward slashes");
-assert(yaml.indexOf("diffusion_models: diffusion_models") !== -1,
-       "and every kind folder mapped");
+assert(/diffusion_models: \|\r?\n    diffusion_models\r?\n    checkpoints/.test(yaml) &&
+       yaml.indexOf("text_encoders: text_encoders") !== -1,
+       "and every kind folder mapped (checkpoints as diffusion models too)");
 
 SETTINGS.comfyModelsDir = MANAGED;
 Comfy._applyExtraModelPaths({ root: VENDOR });
@@ -299,8 +300,11 @@ assert(yaml.indexOf("aellama:") !== -1 &&
 delete fakeProcess.env.LOCALAPPDATA;
 SETTINGS.comfyModelsDir = "";
 Comfy._applyExtraModelPaths({ root: VENDOR });
-assert(!fs.existsSync(yamlPath),
-       "no settings and no shared store removes the yaml (old behavior)");
+assert(fs.existsSync(yamlPath) &&
+       fs.readFileSync(yamlPath, "utf8").indexOf("comfy_desktop_shared:") === -1 &&
+       fs.readFileSync(yamlPath, "utf8").indexOf("aellama:") === -1,
+       "no settings and no shared store drops both sections; the yaml " +
+       "stays for the backend's own checkpoints-as-diffusion-models line");
 fakeProcess.env.LOCALAPPDATA = LOCALAPP;
 SETTINGS.comfyModelsDir = MANAGED;
 

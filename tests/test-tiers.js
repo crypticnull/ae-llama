@@ -238,6 +238,41 @@ const T = window.Tiers;
          "without recommendFromGB a 12 GB card would default to Wan (got " +
          (flipped.video && flipped.video.name) + ")");
 
+  // sdxl-fp8 (18 P7c step 2g, 5a-4h) is gated at 8 and held at 12 like the
+  // entries above -- and at 12 it TIES sdxl on floor and download, where
+  // "measured cheaper" used to hand it the 12 and 16 GB image default.
+  // Nothing caught that on the first cut: no row here asked 12 or 16 GB
+  // for an IMAGE. So this asks every card size, and the answer must be
+  // exactly what the catalog picked before the entry existed.
+  {
+    const without = cat.filter((e) => e.name !== "sdxl-fp8");
+    const fp8 = cat.filter((e) => e.name === "sdxl-fp8")[0];
+    assert(!!fp8, "the catalog holds sdxl-fp8");
+    [4, 6, 8, 10, 12, 16, 20, 24, 32, 48, 96].forEach((g) => {
+      const gpu = { hasNvidia: true, vramGB: g, computeCap: 8.9 };
+      const a = T.recommendGen(cat, gpu, {}), b = T.recommendGen(without, gpu, {});
+      const n = (x) => (x ? x.name : null);
+      assert(n(a.image) === n(b.image) && n(a.video) === n(b.video),
+             g + " GB: adding sdxl-fp8 moves no default (" + n(a.image) +
+             "/" + n(a.video) + " vs " + n(b.image) + "/" + n(b.video) + ")");
+    });
+    // And the field is the whole lever, as for Wan: strip it and an 8 GB
+    // card defaults to the fp8 cast instead of SD 1.5, while 12 GB keeps
+    // sdxl on the floor rule.
+    const stripped = cat.map((e) => {
+      const c = Object.assign({}, e);
+      if (c.name === "sdxl-fp8") delete c.recommendFromGB;
+      return c;
+    });
+    const s8 = T.recommendGen(stripped, { hasNvidia: true, vramGB: 8, computeCap: 8.9 }, {});
+    const s12 = T.recommendGen(stripped, { hasNvidia: true, vramGB: 12, computeCap: 8.9 }, {});
+    assert(s8.image && s8.image.name === "sdxl-fp8" &&
+           s12.image && s12.image.name === "sdxl",
+           "without recommendFromGB 8 GB would default to sdxl-fp8 and 12 " +
+           "GB would keep sdxl (got " + (s8.image && s8.image.name) + ", " +
+           (s12.image && s12.image.name) + ")");
+  }
+
   const t7ada = rec(32, 8.9);
   assert(t7ada.video && t7ada.video.name === "minimax-h3-int8",
          "32 GB NON-Blackwell falls back to the int8 encoder variant " +

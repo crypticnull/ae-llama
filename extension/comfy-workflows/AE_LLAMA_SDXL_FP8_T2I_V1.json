@@ -1,0 +1,53 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": { "ckpt_name": "sd_xl_base_1.0.safetensors" },
+    "_meta": { "title": "Load Checkpoint (SDXL base 1.0: CLIP + VAE only)" }
+  },
+  "2": {
+    "class_type": "CLIPTextEncode",
+    "inputs": { "clip": ["1", 1], "text": "a red toy car on a white table in daylight" },
+    "_meta": { "title": "CLIP Text Encode (Prompt)" }
+  },
+  "3": {
+    "class_type": "CLIPTextEncode",
+    "inputs": { "clip": ["1", 1], "text": "text, watermark, low quality, blurry" },
+    "_meta": { "title": "CLIP Text Encode (Negative)" }
+  },
+  "4": {
+    "class_type": "EmptyLatentImage",
+    "inputs": { "batch_size": 1, "height": 1024, "width": 1024 },
+    "_meta": { "title": "Empty Latent Image" }
+  },
+  "5": {
+    "class_type": "KSampler",
+    "inputs": {
+      "cfg": 8,
+      "denoise": 1,
+      "latent_image": ["4", 0],
+      "model": ["8", 0],
+      "negative": ["3", 0],
+      "positive": ["2", 0],
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "seed": 12345,
+      "steps": 20
+    },
+    "_meta": { "title": "KSampler" }
+  },
+  "6": {
+    "class_type": "VAEDecode",
+    "inputs": { "samples": ["5", 0], "vae": ["1", 2] },
+    "_meta": { "title": "VAE Decode" }
+  },
+  "7": {
+    "class_type": "SaveImage",
+    "inputs": { "filename_prefix": "AE-Llama/SDXL-fp8/%date:yyyy-MM-dd%/AELlama_SDXL_fp8_", "images": ["6", 0] },
+    "_meta": { "title": "Save Image" }
+  },
+  "8": {
+    "class_type": "UNETLoader",
+    "inputs": { "unet_name": "sd_xl_base_1.0.safetensors", "weight_dtype": "fp8_e4m3fn" },
+    "_meta": { "title": "Load Diffusion Model (SDXL base 1.0 UNet, fp8 cast)" }
+  }
+}

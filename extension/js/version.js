@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.12.27",
+    VERSION: "0.12.28",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -164,6 +164,53 @@
         measuredOn: "NVIDIA GeForce RTX 5090, managed ComfyUI backend " +
                     "(torch 2.13.0+cu130), 2026-09-09",
         workflowTemplate: "AE_LLAMA_SDXL_T2I_V1",
+        urls: [{
+          url: "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors",
+          sizeMB: 6617, dir: "checkpoints"
+        }]
+      },
+      {
+        name: "sdxl-fp8",
+        label: "SDXL (fp8)",
+        // THE SAME DOWNLOAD AS sdxl, cast to fp8 at load time (WORKPLAN 18
+        // P7c step 2g, 5a-4g/5a-4h). Core UNETLoader pulls the UNet out of
+        // the whole checkpoint with weight_dtype fp8_e4m3fn; the checkpoint
+        // loader still gives CLIP and VAE. urls[] and sizeMB are sdxl's on
+        // purpose: a buyer who has one has both. It loads because comfy.js
+        // maps every checkpoints folder as a diffusion_models folder too.
+        //
+        // Why it exists: at an 8 GB card's room fp16 sdxl streams part of
+        // its 4 896 MB UNet over PCIe on EVERY step (5a-4f: 2.15 it/s,
+        // 11.61 s, flat from step 2 to 20). The fp8 UNet is 2 448 MB and
+        // fits, so it samples at full speed.
+        //
+        // MEASURED 2026-09-16 through the shipped path (managed backend
+        // booted by comfy-install.js --boot, so the yaml was the panel's
+        // own; scripts/catalog-vram-probe.js, nvidia-smi at 250 ms), seed
+        // 12345, 1024x1024: 5 050 MiB in 6 s cold and 4 672 in 4 s warm.
+        // Ballasted to 4 936 MiB of room (an 8 GB card minus AE's 3 255):
+        // 3 807 MiB delta, 6 s wall, 9.98 it/s, 4.73 s in the backend, png
+        // byte-identical to the whole-card one (md5 091c71...).
+        //
+        // NOT the same picture as sdxl at the same seed: the cast moves the
+        // denoise path (SSIM 0.77 at seed 12345, 0.87 at 777, both looked
+        // at, no artifact). A different sample, not a worse one.
+        //
+        // With AE AND the desktop floor an 8 GB card leaves 849 MiB, where
+        // this took 18.9 s against fp16's 16.9 (5a-4g). The gate prices
+        // card-minus-AE, as every constrainedFit does, so it is written down
+        // rather than treated as disqualifying. recommendFromGB 12 keeps
+        // every tier default where the owner left it (16f, 5a-4e).
+        kind: "image", sizeMB: 6617, minVramGB: 8, recommendFromGB: 12,
+        constrainedFit: { roomMB: 4936, seconds: 6, identical: true,
+                          on: "RTX 5090 ballasted to the room by scripts/vram-ballast.py, " +
+                    "managed backend --disable-pinned-memory (0.12.26), 2026-09-16" },
+        measured: true,
+        measuredVramMB: 5050, measuredSeconds: 6,
+        measuredAt: "1024x1024 (the template's authored latent), seed 12345",
+        measuredOn: "NVIDIA GeForce RTX 5090, managed ComfyUI backend " +
+                    "(ComfyUI 0.34.0, torch 2.13.0+cu130), 2026-09-16",
+        workflowTemplate: "AE_LLAMA_SDXL_FP8_T2I_V1",
         urls: [{
           url: "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0/resolve/main/sd_xl_base_1.0.safetensors",
           sizeMB: 6617, dir: "checkpoints"

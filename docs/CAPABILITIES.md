@@ -489,10 +489,11 @@ Queued (see WORKPLAN for owners/order):
   (extension/comfy-workflows/) with a dependency manifest; video repos
   are pinned (Wan 2.2, MiniMax H3); the remaining blocker is P4, which
   is every VRAM figure and catalog URL measured on real hardware.
-- Bundled ComfyUI templates: **EIGHT core-only basics, one per catalog
+- Bundled ComfyUI templates: **NINE core-only basics, one per catalog
   entry — there is no longer an entry without one** —
   `AE_LLAMA_SD15_T2I_V1`,
-  `AE_LLAMA_SDXL_T2I_V1`, `AE_LLAMA_KREA2_T2I_V1` (image),
+  `AE_LLAMA_SDXL_T2I_V1`, `AE_LLAMA_SDXL_FP8_T2I_V1`,
+  `AE_LLAMA_KREA2_T2I_V1` (image),
   `AE_LLAMA_LTXV_2B_T2V_V1`,
   `AE_LLAMA_WAN22_5B_T2V_V1`, `AE_LLAMA_WAN22_5B_FP8_T2V_V1`,
   `AE_LLAMA_H3_T2V_V1`,
@@ -539,7 +540,16 @@ Queued (see WORKPLAN for owners/order):
   under 32 GB and Krea 2 under 24, because a 12 GB buyer's default clip
   would go from 12 s to 130 s, and that is an owner call (WORKPLAN
   NEXT UP 5a-4e). SDXL stayed at 12: at an 8 GB card's room it was
-  identical but 2.8x slower. **Both of the owner's authored
+  identical but 2.8x slower, all of it the fp16 UNet streaming over PCIe
+  every step. **`sdxl-fp8` (2026-09-16) is the first image entry gated
+  at 8 GB**: the same checkpoint, its UNet cast to fp8 by core
+  `UNETLoader` straight out of the file (the panel's yaml maps every
+  checkpoints folder as a diffusion_models folder too), so it adds zero
+  bytes. 5 050 MiB in 6 s on the whole card; at an 8 GB card's room
+  beside After Effects, 6 s and a byte-identical png. A different sample
+  from fp16 sdxl at the same seed, not a worse one. Its default is held
+  at 12 like the others, so an 8 GB buyer still defaults to SD 1.5 and
+  can choose it. **Both of the owner's authored
   graphs have LEFT the bundle** (WORKPLAN §18 P8, P9) and are kept as
   test fixtures; a copy already installed under `%APPDATA%` survives.
   **Text-to-image and text-to-video only: no shipped template accepts
