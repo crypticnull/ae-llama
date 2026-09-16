@@ -529,9 +529,17 @@ Queued (see WORKPLAN for owners/order):
   16 834 against 21 536 at 704x480 — the cast really does halve the
   9 536 MiB diffusion term, but only the smaller job shows it, because
   at the authored size ComfyUI was already offloading the fp16 to fit.
-  **It does not move the gate**: both Wan entries still need 32 GB, so
-  the "no runnable video graph under 32 GB" gap (WORKPLAN §18 P7a) is
-  still open. **Both of the owner's authored
+  The cast did not move the gate; a constrained-card run did.
+  **2026-09-16: both Wan entries and Krea 2 are gated at 12 GB.** With
+  pinning off (0.12.26), a 5090 ballasted to what a 12 GB card leaves
+  after After Effects AND the desktop floor ran each of them with
+  byte-identical output and within 1.3x of the whole-card clock (Wan
+  129-132 s, Krea 2 10 s). A 12 GB buyer can now CHOOSE them. The
+  DEFAULTS did not move: `recommendFromGB` keeps Wan out of the picks
+  under 32 GB and Krea 2 under 24, because a 12 GB buyer's default clip
+  would go from 12 s to 130 s, and that is an owner call (WORKPLAN
+  NEXT UP 5a-4e). SDXL stayed at 12: at an 8 GB card's room it was
+  identical but 2.8x slower. **Both of the owner's authored
   graphs have LEFT the bundle** (WORKPLAN §18 P8, P9) and are kept as
   test fixtures; a copy already installed under `%APPDATA%` survives.
   **Text-to-image and text-to-video only: no shipped template accepts

@@ -8,7 +8,7 @@
   "use strict";
 
   global.AELL = {
-    VERSION: "0.12.26",
+    VERSION: "0.12.27",
 
     // Release channel label, shown wherever the version is displayed.
     // Purely cosmetic — update comparisons use the numeric VERSION only.
@@ -197,7 +197,21 @@
         // card down is 16 GB, which cannot hold 18.4 GiB of delta, and
         // 0.10.14 measured what this backend does when a job outgrows the
         // card -- it does not OOM, it GRINDS.
-        kind: "image", sizeMB: null, minVramGB: 24, measured: true,
+        //
+        // GATE 24 -> 12, 2026-09-16 (WORKPLAN 18 P7c step 2g, NEXT UP
+        // 5a-4c). The "it GRINDS" premise above did not reproduce on the
+        // managed backend: DynamicVRAM streams the weights instead of
+        // holding all 18 GB. Left 4 937 MiB -- a 12 GB card after After
+        // Effects AND the desktop floor -- on the shipped unpinned boot,
+        // it rendered the byte-identical png in 10 s (backend 9.96 s)
+        // against 8 s on a whole card. recommendFromGB keeps it OUT of
+        // the defaults below 24 until the owner moves the tier picks
+        // (tiers.js recommendFloor); a buyer who chooses it can run it.
+        kind: "image", sizeMB: null, minVramGB: 12, recommendFromGB: 24,
+        constrainedFit: { roomMB: 4937, seconds: 10, identical: true,
+                          on: "RTX 5090 ballasted to the room by scripts/vram-ballast.py, " +
+                    "managed backend --disable-pinned-memory (0.12.26), 2026-09-16" },
+        measured: true,
         measuredVramMB: 18848, measuredSeconds: 8,
         measuredAt: "1920x1080 (the template's authored latent), seed 12345",
         measuredOn: "NVIDIA GeForce RTX 5090, ComfyUI 0.34.0 (managed), " +
@@ -340,7 +354,23 @@
         // a 24 GB card cannot hold it even before its desktop.
         // See WORKPLAN 18 P7 and 18 P6a. The consequence for cards under
         // 32 GB is a PRODUCT question, filed as 18 P7a, not a catalog one.
-        kind: "video", sizeMB: 17304, minVramGB: 32, measured: true,
+        //
+        // GATE 32 -> 12, 2026-09-16 (WORKPLAN 18 P7c step 2g, NEXT UP
+        // 5a-4c), and the paragraphs above are the history it overturns:
+        // the resident-weights floor and the grind are both what a card
+        // WITH room shows. Left 4 937 MiB -- a 12 GB card after After
+        // Effects and the desktop floor -- on the shipped unpinned boot,
+        // the job streamed its weights and rendered frames identical to
+        // the whole-card clip (decoded md5 60f984...) in 130 s (backend
+        // 129.12 s) against 127. NOT lower: nothing under that was run.
+        // recommendFromGB holds the DEFAULT at 32 until the owner moves
+        // the tier picks: on 12-24 GB it would displace ltx-small's 12 s
+        // clip with this 130 s one, and that is his call (16f).
+        kind: "video", sizeMB: 17304, minVramGB: 12, recommendFromGB: 32,
+        constrainedFit: { roomMB: 4937, seconds: 130, identical: true,
+                          on: "RTX 5090 ballasted to the room by scripts/vram-ballast.py, " +
+                    "managed backend --disable-pinned-memory (0.12.26), 2026-09-16" },
+        measured: true,
         measuredVramMB: 26187, measuredSeconds: 127,
         measuredAt: "1280x704 x 121 frames (the template's authored " +
                     "default, 5.04 s at 24 fps), seed 12345",
@@ -396,7 +426,17 @@
         // shows the cast doing exactly what it says: 16 834 MiB against
         // the fp16 21 536, a saving of 4702 MiB. Recorded here rather
         // than published because the catalog prices the AUTHORED job.
-        kind: "video", sizeMB: 17304, minVramGB: 32, measured: true,
+        //
+        // GATE 32 -> 12 after all, 2026-09-16 (18 P7c step 2g, 5a-4c): the
+        // "does not move" above was read off a card with room. Left
+        // 4 937 MiB (12 GB card minus AE and the desktop floor), unpinned
+        // boot, identical decoded frames (md5 ab4fa5...) in 133 s (backend
+        // 132.32 s) against 129. Default held at 32 exactly as wan22-5b's.
+        kind: "video", sizeMB: 17304, minVramGB: 12, recommendFromGB: 32,
+        constrainedFit: { roomMB: 4937, seconds: 133, identical: true,
+                          on: "RTX 5090 ballasted to the room by scripts/vram-ballast.py, " +
+                    "managed backend --disable-pinned-memory (0.12.26), 2026-09-16" },
+        measured: true,
         measuredVramMB: 24314, measuredSeconds: 129,
         measuredAt: "1280x704 x 121 frames (the template authored " +
                     "default, 5.04 s at 24 fps), seed 12345",

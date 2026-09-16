@@ -196,6 +196,31 @@
   }
 
   /**
+   * Can this card RUN the entry (entryFits) AND is it offered as a DEFAULT
+   * here? Two different questions since 2026-09-16 (WORKPLAN 18 P7c step
+   * 2g, NEXT UP 5a-4c). minVramGB is the smallest card MEASURED to run the
+   * shipped graph without a grind or a changed output; recommendFromGB,
+   * when an entry carries it, is the smallest card it is picked FOR.
+   *
+   * They split because moving a measured gate also moves the defaults this
+   * file hands out (a 12 GB buyer's video default would go from a 12 s
+   * LTX clip to a 130 s Wan one), and the tier table is the owner's call
+   * (16f). So the gates carry the measurement and reach a buyer who
+   * chooses; the defaults hold where they were until he decides. Removing
+   * the field is the whole of that decision's code.
+   */
+  function recommendFloor(entry) {
+    if (typeof entry.recommendFromGB === "number") return entry.recommendFromGB;
+    return entry.minVramGB;
+  }
+  function entryRecommendable(entry, ctx) {
+    if (!entryFits(entry, ctx)) return false;
+    if (typeof entry.recommendFromGB !== "number") return true;
+    var vram = ctx && typeof ctx.vramGB === "number" ? ctx.vramGB : null;
+    return vram !== null && vram >= entry.recommendFromGB;
+  }
+
+  /**
    * Best chat model for this machine: the largest entry whose VRAM
    * floor the (effective) GPU clears; the cpuDefault entry when there
    * is no NVIDIA GPU or VRAM is unknown; the smallest entry as a last
@@ -245,7 +270,7 @@
     var demotedPick = { image: false, video: false };
     function better(a, b) {   // highest VRAM floor = the most this card can do
       if (!b) return true;
-      var af = a.minVramGB || 0, bf = b.minVramGB || 0;
+      var af = recommendFloor(a) || 0, bf = recommendFloor(b) || 0;
       if (af !== bf) return af > bf;
       // TIES ARE DECIDED, not inherited from array order. Until 2026-09-09
       // no two entries of one kind shared a floor, so a tie fell through to
@@ -294,7 +319,7 @@
     }
     for (var i = 0; i < catalog.length; i++) {
       var e = catalog[i];
-      if (!entryFits(e, ctx)) continue;
+      if (!entryRecommendable(e, ctx)) continue;
       var slot = e.kind === "video" ? "video" : "image";
       var demoted = !!e.experimental ||
         (typeof e.slowBelowGB === "number" && res.vramGB !== null &&
@@ -532,6 +557,8 @@
     tierFor: tierFor,
     resolveTier: resolveTier,
     entryFits: entryFits,
+    entryRecommendable: entryRecommendable,
+    recommendFloor: recommendFloor,
     recommendChat: recommendChat,
     recommendGen: recommendGen,
     hostReserveMB: hostReserveMB,

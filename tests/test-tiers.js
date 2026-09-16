@@ -209,6 +209,35 @@ const T = window.Tiers;
   assert(t7bl.video && t7bl.video.name === "minimax-h3",
          "32 GB Blackwell video is MiniMax H3 with the nvfp4 encoder");
 
+  // GATE vs DEFAULT, split 2026-09-16 (WORKPLAN 18 P7c step 2g, 5a-4c).
+  // krea2 and both Wans RAN on a ballasted 5090 with a 12 GB card's room
+  // after After Effects and the desktop floor, identical output, clock
+  // within 1.3x, so their gates are 12. The DEFAULTS above did not move:
+  // recommendFromGB holds them where the unconstrained readings put them,
+  // because moving a 12 GB buyer's video default from a 12 s clip to a
+  // 130 s one is the owner's tier call (16f). Both halves pinned, so the
+  // gate cannot silently fall back and the defaults cannot silently move.
+  const byName = (n) => cat.filter((e) => e.name === n)[0];
+  const c12 = { vramGB: 12, arch: "ada" };
+  ["krea2", "wan22-5b", "wan22-5b-fp8"].forEach((n) => {
+    const e = byName(n);
+    assert(e && T.entryFits(e, c12),
+           n + ": a 12 GB card CAN run it (gate " + (e && e.minVramGB) + ")");
+    assert(e && !T.entryRecommendable(e, c12),
+           n + ": but a 12 GB card is not DEFAULTED to it (recommendFromGB " +
+           (e && e.recommendFromGB) + ")");
+  });
+  // And the field is the whole lever: strip it and the 12 GB video default
+  // becomes Wan -- the change the owner is being asked about.
+  const stripped = cat.map((e) => {
+    const c = Object.assign({}, e); delete c.recommendFromGB; return c;
+  });
+  const flipped = T.recommendGen(stripped,
+    { hasNvidia: true, vramGB: 12, computeCap: 8.9 }, {});
+  assert(flipped.video && /^wan22-5b/.test(flipped.video.name),
+         "without recommendFromGB a 12 GB card would default to Wan (got " +
+         (flipped.video && flipped.video.name) + ")");
+
   const t7ada = rec(32, 8.9);
   assert(t7ada.video && t7ada.video.name === "minimax-h3-int8",
          "32 GB NON-Blackwell falls back to the int8 encoder variant " +

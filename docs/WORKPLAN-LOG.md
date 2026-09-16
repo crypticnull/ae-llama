@@ -25452,3 +25452,80 @@ Backend stopped by port after every run; card back at 1 815 MiB after.
 
 - 5a-4d struck with the table in §18 P7c step 2g; 5a-4c marked
   takeable. No new work found.
+
+## 2026-09-16 (local session) - krea2 and both Wans are gated at 12 GB on unpinned constrained runs, and the defaults stay where they were for the owner
+
+SUPERSEDES: 23714,23875 - that entry held wan22-5b-fp8 at 32 ("the gate does not move") from a card with room; a 12 GB card's room on the shipped unpinned boot runs it identically, gate 12
+
+**Item:** NEXT UP 5a-4c / WORKPLAN 18 P7c step 2g - move the gates 5a-4
+measured.
+
+**Harness: 770/770 PASSED** before the work and again after it.
+**Bumped 0.12.26 -> 0.12.27**: `extension/js/tiers.js` and
+`extension/js/version.js` changed. Items above it: 3 blocked on the owner,
+5a-4/4b/4d done, so 5a-4c was the first takeable item.
+
+### Why I measured again before moving anything
+
+5a-4's constrained runs were taken with pinned staging ON, and 0.12.26 ships
+the managed backend with `--disable-pinned-memory`. A gate earned on a boot
+nobody gets is the same defect as a measured block describing a graph that
+no longer ships. So each candidate was rerun at its TIGHTEST room on the
+shipped boot (flag confirmed on the live backend command line). Driver
+`local/gate-run.sh` over `local/ballast-run.sh`, seed 12345.
+
+| entry | room MiB | backend s | output | decision |
+|---|---|---|---|---|
+| sdxl | 849 (8 GB - AE - floor) | 16.89 | identical png (72bfc2...) | - |
+| sdxl | 4 937 (8 GB - AE), twice | 11.85 / 11.29 | identical png | **stays 12**: 2.8x the 4.12 s whole-card unpinned |
+| krea2 | 4 937 (12 GB - AE - floor) | 9.96 | identical png (18f456...) | **24 -> 12** |
+| wan22-5b-fp8 | 4 937 | 132.32 | identical frames (ab4fa5...) | **32 -> 12** |
+| wan22-5b | 4 937 | 129.12 | identical frames (60f984...) | **32 -> 12** |
+
+Transcripts `logs/catalog-vram-probe-2026-09-16T08-52-05.md` to `08-59-09`.
+The 849 MiB sdxl run evicted AE's VRAM again (card 1 846 -> 866 MiB); AE
+stayed up and the harness was green afterwards.
+
+### Changed
+
+- `version.js`: krea2 `minVramGB 12, recommendFromGB 24`; wan22-5b and
+  wan22-5b-fp8 `minVramGB 12, recommendFromGB 32`; each carries a
+  `constrainedFit {roomMB, seconds, identical, on}` block and a comment.
+- `tiers.js`: `recommendFloor(entry)` and `entryRecommendable(entry, ctx)`.
+  `recommendGen` picks with them; `entryFits` (the "can it run" gate used
+  by the Settings rows and the nameless-template resolver) is unchanged.
+- `test-model-catalog.js`: a gate under `measuredVramMB` now REQUIRES a
+  `constrainedFit` with room <= card minus AE_RESIDENT_MB, seconds <= 2x
+  measuredSeconds, identical true, and an `on` naming the unpinned boot;
+  `recommendFromGB` is only legal beside one, at or above the gate and
+  covering the unconstrained reading. krea2's pinned block rewritten to
+  say the same.
+- `test-tiers.js`: the split is pinned both ways, plus a test that
+  stripping `recommendFromGB` flips the 12 GB video default to Wan. Red
+  against the old tiers.js (the 12/16/24 GB rows go to wan22-5b-fp8).
+- `test-tier-ladder.js` / `scripts/tier-ladder-probe.js`: "demoted only
+  when nothing solid fits" and "picks never shrink" read the recommend
+  floor, since they are about picks.
+- `docs/CAPABILITIES.md` curated paragraph.
+- Full stubbed suite: 91/91 files pass.
+
+### Decision, and what I assumed
+
+The item asked me to decide whether this is a catalog fix or a default
+change the owner must see. **It is both, so I split it.** The gate answers
+"can this card run it", which is a measured fact and a reach gain: a 12 GB
+buyer's Settings row stops saying "needs 32+ GB" for Wan and they can pick
+it. The DEFAULT answers "what do we hand a buyer who chose nothing", and
+moving it swaps a 12 s LTX clip for a 130 s Wan one on 12-24 GB cards. §16f
+reserves the tier table for the owner, and ltx-small's licence question
+(5c) is the same decision from the other side, so the defaults are held
+and filed as 5a-4e. I judged sdxl against 4.12 s (whole card, unpinned,
+5a-4d), not the older cold 6 s it would have passed against: picking the
+reference that makes a gate pass is loosening the test.
+
+### Filed (WORKPLAN NEXT UP)
+
+- **5a-4e** (owner): should the defaults follow the gates? One field on
+  three entries is the whole change.
+- **5a-4f**: where sdxl's 2.8x goes unpinned at 8 GB rooms.
+- 5a-4c struck; §18 P7c step 2g carries the table.

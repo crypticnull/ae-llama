@@ -346,7 +346,7 @@ function checkLadder(rows, gpu) {
       if (demoted) {
         const solid = genCat.filter((e) =>
           (e.kind === "video" ? "video" : "image") === kind &&
-          Tiers.entryFits(e, { vramGB: gb, arch: row.arch }) &&
+          Tiers.entryRecommendable(e, { vramGB: gb, arch: row.arch }) &&
           !e.experimental &&
           !(typeof e.slowBelowGB === "number" && gb < e.slowBelowGB));
         verdict(solid.length === 0,
@@ -426,7 +426,7 @@ function checkLadder(rows, gpu) {
     for (const kind of ["image", "video"]) {
       const a = lo.rec.gen[kind], b = hi.rec.gen[kind];
       if (!a || !b) continue;
-      verdict((b.minVramGB || 0) >= (a.minVramGB || 0),
+      verdict((Tiers.recommendFloor(b) || 0) >= (Tiers.recommendFloor(a) || 0),
               kind + " pick never shrinks as the budget grows (" + lo.budget +
               " -> " + hi.budget + " GB)",
               a.name + " -> " + b.name);

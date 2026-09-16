@@ -108,7 +108,7 @@ function rung(gb, pause, chatMB, needMB) {
       if (demoted) {
         const solid = GEN.filter(e =>
           (e.kind === "video" ? "video" : "image") === kind &&
-          Tiers.entryFits(e, { vramGB: gb, arch: r.arch }) &&
+          Tiers.entryRecommendable(e, { vramGB: gb, arch: r.arch }) &&
           !e.experimental &&
           !(typeof e.slowBelowGB === "number" && gb < e.slowBelowGB));
         assert(solid.length === 0,
@@ -117,7 +117,7 @@ function rung(gb, pause, chatMB, needMB) {
                solid.map(e => e.name).join(", ") + ")");
       }
       const prev = prevGen[kind];
-      assert(!prev || (pick.minVramGB || 0) >= (prev.minVramGB || 0),
+      assert(!prev || (Tiers.recommendFloor(pick) || 0) >= (Tiers.recommendFloor(prev) || 0),
              gb + " GB: the " + kind + " pick never shrinks as the budget " +
              "grows (" + (prev && prev.name) + " -> " + pick.name + ")");
       prevGen[kind] = pick;

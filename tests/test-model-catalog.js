@@ -404,9 +404,66 @@ window.AELL.COMFY_CATALOG.forEach((e) => {
   }
   assert(typeof e.minVramGB === "number",
          e.name + ": a measured entry still has a gate");
-  assert(e.minVramGB * 1024 >= e.measuredVramMB,
-         e.name + ": minVramGB " + e.minVramGB + " (" + (e.minVramGB * 1024) +
-         " MiB) covers the measured " + e.measuredVramMB + " MiB");
+  /* A gate BELOW the unconstrained reading is allowed on exactly one kind
+   * of evidence, added 2026-09-16 (WORKPLAN 18 P7c step 2g, NEXT UP 5a-4c).
+   * The old premise -- "0.10.14 measured that a job outgrowing the card
+   * GRINDS" -- did not reproduce on the managed backend: DynamicVRAM
+   * streams weights, so on a 5090 ballasted down to a small card's room the
+   * job shrinks to fit. A card with room cannot show that, so
+   * measuredVramMB (taken WITH room) overstates what the job needs.
+   *
+   * This is not a looser check, it is a different measurement with its
+   * own bar, and every part of it is required:
+   *   roomMB     what the backend was left, no more than the gate's card
+   *              minus After Effects' resident footprint (tiers.js)
+   *   seconds    within 2x the unconstrained measuredSeconds -- a grind
+   *              is the thing this replaces, so the clock is the evidence
+   *   identical  the output matches the unconstrained run byte for byte
+   *              (png md5 / decoded-frame md5); a quietly different
+   *              picture is worse than a slow one (5a-4b)
+   *   on         where and with which boot flags, because a reading taken
+   *              on a backend that no longer ships describes nothing */
+  const AE_MB = window.Tiers.hostReserveMB() - window.Tiers.desktopFreeMB();
+  const cf = e.constrainedFit;
+  if (e.minVramGB * 1024 < e.measuredVramMB) {
+    assert(!!cf && typeof cf === "object",
+           e.name + ": minVramGB " + e.minVramGB + " (" + (e.minVramGB * 1024) +
+           " MiB) is under the measured " + e.measuredVramMB + " MiB, so it " +
+           "carries a constrainedFit reading");
+  } else {
+    assert(e.minVramGB * 1024 >= e.measuredVramMB,
+           e.name + ": minVramGB " + e.minVramGB + " (" + (e.minVramGB * 1024) +
+           " MiB) covers the measured " + e.measuredVramMB + " MiB");
+  }
+  if (cf) {
+    assert(typeof cf.roomMB === "number" && cf.roomMB > 0 &&
+           cf.roomMB <= e.minVramGB * 1024 - AE_MB,
+           e.name + ": constrainedFit.roomMB " + cf.roomMB + " is no more " +
+           "than a " + e.minVramGB + " GB card leaves after After Effects (" +
+           (e.minVramGB * 1024 - AE_MB) + " MiB)");
+    assert(typeof cf.seconds === "number" &&
+           cf.seconds <= 2 * e.measuredSeconds,
+           e.name + ": constrainedFit.seconds " + cf.seconds + " is within " +
+           "2x the unconstrained " + e.measuredSeconds + " s -- over that is " +
+           "the grind the gate exists to refuse");
+    assert(cf.identical === true,
+           e.name + ": constrainedFit output is identical to the " +
+           "unconstrained run");
+    assert(typeof cf.on === "string" && /disable-pinned-memory/.test(cf.on),
+           e.name + ": constrainedFit names the boot it was taken on, and " +
+           "it is the shipped unpinned one (0.12.26)");
+  }
+  // recommendFromGB holds a DEFAULT where the unconstrained reading put it
+  // while the gate moves (tiers.js recommendFloor). It exists only beside a
+  // constrained fit, never as a free knob, and never below the gate.
+  if ("recommendFromGB" in e) {
+    assert(!!cf, e.name + ": recommendFromGB only beside a constrainedFit");
+    assert(typeof e.recommendFromGB === "number" &&
+           e.recommendFromGB >= e.minVramGB &&
+           e.recommendFromGB * 1024 >= e.measuredVramMB,
+           e.name + ": recommendFromGB " + e.recommendFromGB + " is at or " +
+           "above the gate and covers the unconstrained reading");
+  }
 });
 assert(measuredEntries >= 1,
        "at least one catalog entry has had its VRAM figure measured");
@@ -417,13 +474,16 @@ assert(!!krea2, "the catalog still holds krea2");
 if (krea2) {
   assert(krea2.measured === true,
          "krea2: measured on real hardware 2026-08-30");
-  assert(krea2.minVramGB === 24,
-         "krea2: the 12 GB floor was disproved by measurement -> 24");
-  // The weights are the floor and they are knowable without a GPU: the
-  // entry's own file list is 18 109 MiB, so any gate under 18 GB is wrong
-  // whatever the activations cost.
-  assert(krea2.minVramGB * 1024 >= 18109,
-         "krea2: the gate at least holds the weights it names");
+  // 24 -> 12 on 2026-09-16 (18 P7c step 2g). The weights are 18 109 MiB
+  // and the old rule was "the gate holds them", because 0.10.14 said a job
+  // outgrowing the card grinds. On the managed backend it does not: run
+  // with a 12 GB card's room it streamed the weights and rendered the same
+  // png. So the 12 is pinned WITH the reading that earned it, and the
+  // default stays at 24 until the owner moves it.
+  assert(krea2.minVramGB === 12 && !!krea2.constrainedFit,
+         "krea2: gate 12, earned by a constrained-card run, not by arithmetic");
+  assert(krea2.recommendFromGB * 1024 >= 18109,
+         "krea2: it is only RECOMMENDED on a card that holds its weights");
 }
 
 // ---------------------------------------------------------------------
