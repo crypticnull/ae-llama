@@ -23,6 +23,7 @@
  *   node scripts/catalog-vram-probe.js --entry krea2
  *   node scripts/catalog-vram-probe.js --entry minimax-h3 --duration 2
  *   node scripts/catalog-vram-probe.js --entry sdxl-fp8 --repeat 4   # max of 4
+ *   node scripts/catalog-vram-probe.js --entry minimax-h3 --workflows-dir local/h3c-b  # variant graph
  *   node scripts/catalog-vram-probe.js                 # every measurable one
  *
  * Three things it does deliberately, each learned from an earlier pass:
@@ -94,7 +95,10 @@ const OPT = {
   // How long to wait for the card to stop moving, and how still is still.
   settleSec: parseInt(argValue("--settle", "45"), 10),
   settleTolMB: parseInt(argValue("--settle-tolerance", "64"), 10),
-  list: argv.indexOf("--list") !== -1
+  list: argv.indexOf("--list") !== -1,
+  // A/B a variant graph without touching extension/ (§13c): a directory
+  // holding <workflowTemplate>.json (+ manifest) that replaces the shipped one.
+  workflowsDir: argValue("--workflows-dir", null)
 };
 
 // -------------------------------------------------------- the panel, in Node
@@ -162,7 +166,7 @@ const Tools = window.Tools;
  * rather than failed on. */
 const OUT_DIR = path.join(ROOT, "logs", "catalog-vram");
 const OVERRIDE = {
-  comfyWorkflowsDir: path.join(EXT, "comfy-workflows"),
+  comfyWorkflowsDir: OPT.workflowsDir ? path.resolve(OPT.workflowsDir) : path.join(EXT, "comfy-workflows"),
   comfyOutDir: OUT_DIR,
   comfyTimeoutSec: OPT.timeout
 };
@@ -357,7 +361,7 @@ function findWeight(file) {
  * what the shipped template names are two different lists, and the one that
  * decides what lands on the card is the graph. */
 function templateWeights(name) {
-  const file = path.join(EXT, "comfy-workflows", name + ".json");
+  const file = path.join(OVERRIDE.comfyWorkflowsDir, name + ".json");
   if (!fs.existsSync(file)) return null;
   const src = fs.readFileSync(file, "utf8");
   const out = [];

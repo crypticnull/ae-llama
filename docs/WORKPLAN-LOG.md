@@ -27842,3 +27842,25 @@ So the blocker he remembers may not apply to the i2v/t2v path at all. The
 missing input is that other variant; ask for it rather than rebuild it.
 
 No `extension/` change, so **no version bump**.
+
+## 2026-09-17 (local session) - H3 speed patches measured: FirstBlockCache is the whole win, the attention patches are not; gate stays 32 (NEXT UP 1, §13c)
+
+**Item:** NEXT UP 1, the first row with its needs met. The pass started 00:49 EDT under `run-local-agent.ps1` PID 35752 (-UntilHour 9), so the owner's loop is the permission (17a). AfterFX was not running at pass start; the harness launched it and it was left running.
+
+**Harness: 770/770 PASSED** (exit 0) at the start. It was not rerun, because nothing in `extension/` changed.
+
+**Did:** `catalog-vram-probe.js` gained `--workflows-dir <dir>`, which A/Bs a variant graph without touching `extension/` (a scripts-only change; four probe stub suites pass). Four arms on minimax-h3, seed 12345, 124 frames, whole card, shipped boot flags. Arm A ran on the managed interpreter. Arms B-D ran on a deleted-afterwards COPY with triton-windows + sageattention + kjnodes deps, with the owner's three packs copied into gitignored `local/h3packs` and loaded via `--extra-model-paths-config`:
+- A shipped basic: **153 s**, peak 31 771 MiB
+- B + Sage patch + Sol patch: **147 s**, 29 435, SSIM 0.80 vs A
+- C + FBC + Sage + Sol (the authored chain): **123 s**, 31 767, SSIM 0.81
+- D + FirstBlockCache ("H3 Safe") only: **124 s**, 30 651, **SSIM 0.978**
+
+**Verdict:** the owner's remembered speed is the CACHE. It skips 5 of 20 transformer passes (every other step from 6 to 16) and leaves the clip nearly unchanged. The Sage patch runs at CK's exact pace (it agrees with 7b-2), and Sol engages only for the last 4 steps. No arm lowers the peak, so H3's gate does not move. Frame 60 of A/B/C is a correct picture in all three. Table: `docs/measured/h3-patches-2026-09-17.md`.
+
+**Found:** the first B run failed at step 17. Triton's tcc could not build `cuda_utils.c` because the portable embedded python has no `Include/Python.h` / `libs/python313.lib`. Adding them from the official `python` 3.13.14 NuGet package fixed it (smoke kernel correct). Any install of sol-attn onto the managed backend must carry that step. The failed run's 16 dense steps matched A's pace, which was the first sign the Sage patch adds nothing.
+
+**Filed:** NEXT UP 1a, an OWNER decision on how FirstBlockCache reaches buyers: §22d opt-in, a named §22a exemption for one pure-Python MIT pack (duckyshell, 338 lines), or not at all. §13c carries a MEASURED note. This also answers most of §13d, because the patches the owner wanted in the basic are mostly the cache.
+
+**Assumed:** (1) Packs copied from the owner's own install are the versions he runs. (2) n = 1 per arm is enough for the seconds (step times stable to 0.01 s/it), not for the peaks. (3) Cleanup: `python_h3c` deleted, managed interpreter checked clean, nothing on :8288, card back to 1 990 MiB.
+
+Nothing under extension/ changed, so **no bump**.
