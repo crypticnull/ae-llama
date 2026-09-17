@@ -3063,12 +3063,20 @@
     } catch (eP) {}
     var yamlPath = path.join(install.root, "ComfyUI",
                              "extra_model_paths.yaml");
+    // A root already written, by kind + folder, so a tree reached two
+    // ways (settings AND a config file) is one section.
+    var written = {};
+    function rootSig(kind, p) {
+      return String(kind) + "|" +
+        String(p).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    }
     try {
       var i;
       var lines = [
         "# Managed by AE Llama — external model folders (panel settings)"
       ];
       if (dir) {
+        written[rootSig(null, dir)] = true;
         // The primary folder is ours to manage: create the layout so
         // downloads have somewhere to land.
         for (i = 0; i < COMFY_MODEL_SUBS.length; i++) {
@@ -3090,6 +3098,7 @@
         var kind = m ? m[1] : null;
         var root = (m ? m[2] : raw).replace(/^\s+|\s+$/g, "");
         if (!root) continue;
+        written[rootSig(kind, root)] = true;
         lines.push("aellama_extra_" + n + ":");
         lines.push("  base_path: " + root.replace(/\\/g, "/"));
         if (kind) {
@@ -3104,6 +3113,43 @@
         lines.push("comfy_desktop_shared:");
         lines.push("  base_path: " + sharedStore.replace(/\\/g, "/"));
         pushModelSubs(lines);
+        written[rootSig(null, sharedStore)] = true;
+      }
+      // Every OTHER root the panel prices from (Tools.comfyModelRoots):
+      // the user's own ComfyUI's models tree and the roots its config
+      // files declare. Without these a weight found only there is counted
+      // present, priced, and skipped by the downloader, yet this backend
+      // cannot load it (measured 2026-09-17, WORKPLAN NEXT UP 31: a
+      // sentinel in Documents/ComfyUI/models/checkpoints was found by
+      // findWeightFile and missing from CheckpointLoaderSimple). The
+      // backend's own tree is its default already; a folder that does not
+      // exist is skipped.
+      var ownTree = rootSig(null, path.join(install.root, "ComfyUI", "models"));
+      var known = [];
+      try {
+        known = global.Tools && global.Tools.comfyModelRoots
+          ? global.Tools.comfyModelRoots(s) || [] : [];
+      } catch (eT) { known = []; }
+      var c = 0;
+      for (i = 0; i < known.length; i++) {
+        var kr = known[i] || {};
+        if (!kr.path) continue;
+        var kk = kr.kind === null || kr.kind === undefined ? null
+          : String(kr.kind);
+        if (kk !== null && !/^[a-z_]+$/.test(kk)) continue;
+        var sig = rootSig(kk, kr.path);
+        if (written[sig] || sig === ownTree) continue;
+        if (!fs.existsSync(kr.path)) continue;
+        written[sig] = true;
+        lines.push("aellama_found_" + c + ":");
+        lines.push("  base_path: " + String(kr.path).replace(/\\/g, "/"));
+        if (kk) {
+          lines.push("  " + kk + ": .");
+          if (kk === "checkpoints") lines.push("  diffusion_models: .");
+        } else {
+          pushModelSubs(lines);
+        }
+        c++;
       }
       // Always written, even with every setting blank: the backend's OWN
       // models/checkpoints is not a diffusion_models folder by default,

@@ -367,6 +367,44 @@ assert(fs.existsSync(yamlPath) &&
 fakeProcess.env.LOCALAPPDATA = LOCALAPP;
 SETTINGS.comfyModelsDir = MANAGED;
 
+// NEXT UP 31, measured 2026-09-17: every root the panel PRICES from must
+// reach the backend's yaml too. A sentinel checkpoint under the user's
+// own ComfyUI (comfyDir/models, and roots its config files declare) was
+// found by findWeightFile and missing from the managed backend's
+// CheckpointLoaderSimple list, because this yaml never named that tree.
+const OWN = path.join(TMP, "owncomfy");
+const DECLARED = path.join(TMP, "otherdrive", "ckpts");
+fs.mkdirSync(path.join(OWN, "models", "checkpoints"), { recursive: true });
+fs.mkdirSync(DECLARED, { recursive: true });
+fs.writeFileSync(path.join(OWN, "extra_model_paths.yaml"),
+  "mine:\n  base_path: " + path.dirname(DECLARED) + "\n  checkpoints: ckpts\n" +
+  "gone:\n  base_path: " + path.join(TMP, "nowhere") + "\n  loras: loras\n");
+fs.writeFileSync(path.join(OWN, "models", "checkpoints", "only-here.safetensors"), "x");
+const savedRoots = SETTINGS.comfyModelRoots;
+SETTINGS.comfyDir = OWN;
+SETTINGS.comfyModelRoots = [];
+assert(Tools.findWeightFile("only-here.safetensors", "checkpoints", SETTINGS),
+       "the panel finds a weight under comfyDir/models (the premise)");
+Comfy._applyExtraModelPaths({ root: VENDOR });
+yaml = fs.readFileSync(yamlPath, "utf8");
+const fwd = (p) => p.replace(/\\/g, "/");
+assert(yaml.indexOf("base_path: " + fwd(path.join(OWN, "models")) + "\n") !== -1,
+       "comfyDir/models is a section of the backend's yaml");
+assert(yaml.indexOf("base_path: " + fwd(DECLARED) + "\n  checkpoints: .\n" +
+                    "  diffusion_models: .") !== -1,
+       "a per-kind root from comfyDir's own config maps that kind only");
+assert(yaml.indexOf("nowhere") === -1,
+       "a declared folder that does not exist is left out");
+assert(yaml.indexOf("aellama_managed:") > yaml.indexOf("aellama_found_"),
+       "the backend's own diffusion_models line still comes last");
+SETTINGS.comfyModelRoots = [path.join(OWN, "models")];
+Comfy._applyExtraModelPaths({ root: VENDOR });
+yaml = fs.readFileSync(yamlPath, "utf8");
+eq(yaml.split(fwd(path.join(OWN, "models")) + "\n").length - 1, 1,
+   "a tree named in settings AND found via comfyDir is written once");
+SETTINGS.comfyModelRoots = savedRoots;
+SETTINGS.comfyDir = "";
+
 // ------------------------------------------------ anti-drift checks
 
 const mainSrc = fs.readFileSync(

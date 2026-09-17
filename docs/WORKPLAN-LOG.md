@@ -28585,3 +28585,21 @@ After the CLI exited, the reap selected nothing and the runner kept going. That 
 **Assumed:** a visible "not exercised" is enough for 45a; measuring the auto handoff itself needs the probe to start its own server, which is how the 2026-09-02 runs did it. Not filed as new work: nothing currently depends on a reused-server run to judge pausing.
 
 **Needs a human eye:** none.
+
+## 2026-09-17 (local session) - the managed backend now loads every model root the panel prices from, 0.12.49 (NEXT UP 31)
+
+**Item:** NEXT UP 31, taken as the first open row whose needs fit this pass. Skipped above it: 1a, 8, 5a-4e, 5a-5b/c, 5c, 6b (owner calls), 11d (owner-conditional), 40d (minor bump), 22a (owner eye), and **28** ("the managed backend dies silently within the half hour"): it needs a 30-minute watch, and this pass started ~08:27 EDT under the owner's loop with `-UntilHour 9`, so it could not finish inside the window. Not attempted, not blocked. AfterFX was left running.
+
+**Harness:** 777/777 at the start, 777/777 after the change.
+
+**Measured, before the fix (managed backend, sentinel):** a 1-byte `aell-roots31-sentinel.safetensors` in `C:\Users\mr\Documents\ComfyUI\models\checkpoints` (comfyDir/models, also what `%APPDATA%\ComfyUI\extra_models_config.yaml`'s `download_model_base` declares), boot through `scripts/lib/comfy-managed.js` with `comfyModelRoots` overridden to `[]` in the script only (settings.json untouched; on this machine the owner had added that tree to settings by hand, which hid the gap). `Tools.findWeightFile` found it; `/object_info/CheckpointLoaderSimple` did NOT list it (7 ckpts). The written yaml had only `comfy_desktop_shared` and `aellama_managed`. So the 2026-09-16 reading holds: a weight found only under comfyDir/models or a root from ComfyUI's own config files is priced, counted present and skipped by the downloader, and the managed backend cannot load it.
+
+**Changed:** `extension/js/comfy.js applyExtraModelPaths` appends an `aellama_found_N` section for every root `Tools.comfyModelRoots(s)` returns that is not already written (settings folder, settings roots, shared store; compared by kind + normalised lower-case path), is not the backend's own `ComfyUI/models`, and exists on disk. A null kind maps every kind folder (`pushModelSubs`); a per-kind root maps that kind as `.` (plus `diffusion_models: .` for checkpoints), the same shapes the settings roots use. Written before `aellama_managed`, which stays last. Chose "write them into the yaml" over "narrow the search": narrowing would re-download weights the buyer already has.
+
+**After the fix, same sentinel run:** listed, 15 ckpts (the Documents tree's real checkpoints appear too); yaml carries `aellama_found_0: base_path C:/Users/mr/Documents/ComfyUI/models`, the Desktop config's identical tree deduped. Backend stopped by the probe; the managed yaml was then rewritten from the real settings; sentinel deleted; nothing left on 8188/8288.
+
+**Stubs:** `tests/test-gen-model-manager.js`, a comfyDir fixture with its own `extra_model_paths.yaml`: comfyDir/models becomes a section, a declared per-kind root maps that kind only, a declared non-existent folder is left out, `aellama_managed` stays last, a tree named in settings and found via comfyDir is written once. The new block fails 2 checks against the old comfy.js. Full stubbed suite: 0 failing files.
+
+**Assumed:** the probe scripts were throwaway (`local/`, gitignored); the one-shot sentinel check did not seem worth a committed probe. The panel rewrites the yaml on every boot, so no migration is needed.
+
+**Needs a human eye:** none.
