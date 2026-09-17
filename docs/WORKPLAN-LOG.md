@@ -28658,3 +28658,15 @@ After the CLI exited, the reap selected nothing and the runner kept going. That 
 **No bump.** AfterFX left running as found; no backend or chat model started.
 
 **For the loop:** passes 32-34 are identical no-ops. The queue holds no unattended work until the owner answers the (a) decisions; the loop's remaining minutes to 09:00 should produce no further passes of value.
+
+## 2026-09-17 (local session) - no item taken: queue unchanged since loop pass 34; filed NEXT UP 46 (loop does not stop on an empty queue) (loop pass 35)
+
+**Item:** none. Pass started 08:49 EDT under the same loop (`-UntilHour 9`), with no commit since pass 34 (8576b6d), so pass 32's triage holds: open NEXT UP rows are owner calls (1a, 8, 5a-4e, 5a-5b, 5a-5c, 5c, 6b, 22a, 40d), long backend/chat-model measurements (28, 29, 11d, §15 Option A, §25 `outputPath`, §16f 3-4), or 26b (rides with the next bump).
+
+**Filed:** NEXT UP 46. Four identical no-op passes in four minutes is a loop defect, not a queue state: `run-local-agent.ps1` only stops on no-commit fast-fails, usage limits or denied permissions, and a pass that commits its "nothing to do" log resets nothing, so an empty queue keeps producing passes until `-UntilHour`. CLAUDE.md (§17a) says such a loop should stop. Not fixed in this pass: the script is running this very pass, and the window closes at 09:00.
+
+**Harness:** NOT run; no extension/ change since the 08:35 run (777/777).
+
+**No bump.** AfterFX left running as found; no backend or chat model started.
+
+**Needs a human eye:** the owner decisions in pass 32's list (a).
