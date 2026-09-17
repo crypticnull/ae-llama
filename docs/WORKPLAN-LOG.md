@@ -28013,3 +28013,30 @@ No extension/ change, so **no bump**.
 **Assumed:** (1) One token per wide char rather than a tuned 0.75: the ratios above are one tokenizer family, and the constant's rule is "wrong in the survivable direction". (2) Reloading the panel was acceptable; its chat was the scratch state of 37. The chat was cleared at the end, and the model left running on routing "all", as found.
 
 **Bumped** 0.12.39 -> 0.12.40: extension/ changed (tools.js, main.js), with the harness green and both arms measured in the real panel.
+
+## 2026-09-17 (local session) - comfy_generate drops a video size nobody asked for: no comp open and no size in the user's turns (NEXT UP 39), 0.12.41
+
+**Item:** NEXT UP 39, the first row with its needs met (1a, 5a-4e, 5a-5b, 5a-5c and 5c are owner-gated, 6b and 11d wait on owner calls, 8 is blocked). The pass started 02:27 EDT under the owner's `run-local-agent.ps1` loop (PID 35752, -UntilHour 9), so the loop is the permission (17a). AfterFX (PID 37832) was running and was left running.
+
+**Harness:** 775/775 PASSED at the start and **775/775** after the change.
+
+**Change (tools.js, main.js, chat-probe.js):**
+- `executeCommands` opts take `userTexts`. `callTool` passes `{userTexts}` as a third argument to panel tools, and the others ignore it. `main.js` and `scripts/chat-probe.js` pass `Tools.userTurnTexts(history)`. That is every role-"user" turn except `TOOL RESULTS:` and `SYSTEM:` entries, so a size named earlier in the chat still counts.
+- `comfy_generate(args, cb, ctx)`: when ctx is given, `inventedSizeNote` runs first. It drops width/height only when all of these hold: a size was sent, no `image`, no user turn matches `SIZE_WORDS_RE` or contains a non-Latin script letter, and `get_project_info {limit:1}` reads `activeComp` null. An unreadable project keeps the size. The call then re-enters without ctx, and on a success `applied` opens with "width/height dropped: 1920x1080 was not asked for (no comp is open and the request names no size), so the template renders at its authored size; pass width/height only when the user names one". The model's args object is never mutated.
+- It applies to every template, not only H3. On a graph with no size node, width/height did nothing anyway.
+- The prompt is byte-identical, so no sha re-pin.
+
+**Real panel** (32B, ctx 16384, routing "all", no comp active, project 7 items). `Llama.stop()`, page reload onto the repo code, model restarted with the Start button (running in 8 s). Driver: gitignored `local/size39/arm.js`. The OLD doc sentence ("Match width/height to the target comp when it makes sense") was swapped back into `buildSystemPrompt` to provoke invention. `Tools._panelTools.comfy_generate` was wrapped: the outer call (with ctx) ran the REAL guard and host read, and the inner re-entry was recorded and answered without booting or rendering anything.
+- Run 1, intercept answering an error: 3 boat sends plus 1 control.
+  - Send 1: 3/3 calls invented 1920x1080, and 3/3 were sent with no size.
+  - Send 2: 1 dropped. The model then built "Main Comp" 1920x1080 plus a null itself, the comp went active, and the rest were KEPT as designed.
+  - The control "Generate a 1280x720 video ..." was sent as 1280x720.
+- Run 2, intercept answering a success (`armOk.js`): 2 sends. 6/6 invented calls with no comp were dropped, and the applied note reached the model's TOOL RESULTS. On the 7th call the model had built "RedBoatOnPond" and the size was kept.
+- Totals: **every invented size with no comp active dropped (10/10); every call with a comp active or a named size kept.** The comps the model built are an artifact of a generation that returned no files. They are not filed.
+- Cleanup: removed "Main Comp", "Null 1" and "RedBoatOnPond" by id. The project is back to the 7 items it had (Pond, Solids, Box x5), active item none. Chat cleared, both wraps restored, model left running on "all", as found.
+
+**Tests:** new `tests/test-comfy-invented-size.js`: the detector (sizes, shapes, aspect ratios, CJK and Cyrillic count as named; the boat sentence, a camera move and curly quotes/em dash/emoji do not), `userTurnTexts` filtering, and end to end through `executeCommands`: drop plus note, kept with an active comp, kept for a named size (no host call), unchanged with no userTexts, kept with an image, kept when the host fails, no-size is a no-op, args not mutated. **9 asserts FAIL** on the 0.12.40 tools.js with the helpers shimmed. `tests/test-chat-probe.js` caught the new main.js helper, and the probe now mirrors it. Full stubbed suite green.
+
+**Assumed:** (1) "Any user turn" rather than the row's "LAST message", so refer-back ("again, but blue" after "1080p") keeps the size. That is the survivable direction. (2) The word list is English. Other Latin-script languages keep the model's size (the guard just does not fire), and non-Latin text disables it deliberately. (3) Scripting the old sentence back in to provoke invention is a valid proof of the guard. The new sentence's invention rate (1/5) would have needed ~25 sends for the same coverage.
+
+**Bumped** 0.12.40 -> 0.12.41: extension/ changed (tools.js, main.js), with the harness green and the guard exercised in the real panel.

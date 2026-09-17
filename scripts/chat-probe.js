@@ -793,7 +793,8 @@ function sendMessage(text, done) {
         round.toolRounds++;
 
         Tools.executeCommands(commands,
-          { dryRun: false, allowRollback: rollbackBudget > 0 },
+          { dryRun: false, allowRollback: rollbackBudget > 0,
+            userTexts: Tools.userTurnTexts(history) },
           function (i, cmd, result) {
             const head = cmd.tool + " " + JSON.stringify(cmd.args || {});
             if (result.rolledBack) {

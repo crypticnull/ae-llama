@@ -3258,6 +3258,69 @@
     });
   }
 
+  /* NEXT UP 39. The model invents a video size ~1 time in 5 with no comp
+   * open (the doc sentence alone took it from 3/3 to 1/5), and 1920x1080
+   * on H3 is 442 s against the authored 1344x768's 153 s. Only the USER's
+   * words can tell a size asked for from one made up, so this reads them.
+   * A detector, not a judgement: anything that could name a size or a
+   * shape counts, because a false "named" just leaves the model's size
+   * alone, while a false "not named" renders the wrong shape. */
+  var SIZE_WORDS_RE = /\d{3,4}\s*[x\u00d7*]\s*\d{3,4}|\b\d{3,4}\s*p\b|\b\d+\s*k\b|\b(?:u?hd|fhd|qhd|resolution|res|pixels?|px|vertical|portrait|landscape|square|widescreen|tall|aspect|ratio|reels?|shorts|tiktok|instagram|stor(?:y|ies)|size[ds]?|dimensions?)\b|\d+(?:\.\d+)?\s*:\s*\d+/i;
+
+  /* Letters of scripts the pattern above cannot read (Greek through CJK,
+   * Hangul, fullwidth forms). General punctuation, symbols and emoji are
+   * outside it, so an English request with a curly quote still counts. */
+  var OTHER_SCRIPT_RE = /[\u0370-\u1fff\u2e80-\ud7ff\uf900-\ufaff\uff00-\uffef]/;
+
+  /** True when these user turns could name a size. Text in a script the
+   *  pattern cannot read counts as named. */
+  function userNamesSize(texts) {
+    for (var i = 0; i < texts.length; i++) {
+      var t = String(texts[i] || "");
+      if (SIZE_WORDS_RE.test(t) || OTHER_SCRIPT_RE.test(t)) return true;
+    }
+    return false;
+  }
+
+  /** The turns the USER typed, out of the chat history the panel keeps:
+   *  tool results and the panel's own SYSTEM notes ride as role "user"
+   *  too, and a tool result full of comp sizes is not the user asking. */
+  function userTurnTexts(history) {
+    var out = [];
+    for (var i = 0; history && i < history.length; i++) {
+      var h = history[i];
+      if (!h || h.role !== "user" || typeof h.content !== "string") continue;
+      if (/^(?:TOOL RESULTS:|SYSTEM:)/.test(h.content)) continue;
+      out.push(h.content);
+    }
+    return out;
+  }
+
+  /**
+   * Decide whether comfy_generate drops a width/height. cb(null) keeps the
+   * args; cb(note) drops both and `note` goes into applied. Only when the
+   * caller handed over the user's turns (a direct call, a probe, a test
+   * without them changes nothing), no reference image is involved (a size
+   * matched to a picture is reasoning, not invention), no comp is active
+   * (a comp is a size the doc lets the model match), and no turn names one.
+   */
+  function inventedSizeNote(args, ctx, cb) {
+    var w = Number(args.width) > 0, h = Number(args.height) > 0;
+    if (!(w || h) || !ctx || !(ctx.userTexts instanceof Array) ||
+        args.image || userNamesSize(ctx.userTexts)) {
+      cb(null);
+      return;
+    }
+    callHostTool("get_project_info", { limit: 1 }, function (r) {
+      // Unreadable project: keep the model's size rather than guess.
+      if (!r || !r.ok || !r.data || r.data.activeComp) { cb(null); return; }
+      cb("width/height dropped: " + (w ? args.width : "?") + "x" +
+         (h ? args.height : "?") + " was not asked for (no comp is open " +
+         "and the request names no size), so the template renders at its " +
+         "authored size; pass width/height only when the user names one");
+    });
+  }
+
   var PANEL_TOOLS = {
 
     comfy_status: function (args, cb) {
@@ -3290,12 +3353,33 @@
       cb({ ok: true, data: { workflows: names } });
     },
 
-    comfy_generate: function (args, cb) {
-      var s = global.Settings.get();
+    comfy_generate: function (args, cb, ctx) {
       if (!args || typeof args.prompt !== "string" || !args.prompt) {
         cb({ ok: false, error: "'prompt' is required" });
         return;
       }
+      // An invented size is dropped first (NEXT UP 39); the call then
+      // re-enters with no ctx, so the check runs once.
+      if (ctx) {
+        inventedSizeNote(args, ctx, function (note) {
+          if (!note) { PANEL_TOOLS.comfy_generate(args, cb); return; }
+          var kept = {};
+          for (var k in args) {
+            if (args.hasOwnProperty(k) && k !== "width" && k !== "height") {
+              kept[k] = args[k];
+            }
+          }
+          PANEL_TOOLS.comfy_generate(kept, function (result) {
+            if (result && result.ok && result.data &&
+                result.data.applied instanceof Array) {
+              result.data.applied.unshift(note);
+            }
+            cb(result);
+          });
+        });
+        return;
+      }
+      var s = global.Settings.get();
       var all = global.Comfy.listWorkflows(s.comfyWorkflowsDir);
       // A template holding the shipped placeholder renders nothing, so it
       // is never the default and never silently chosen. Naming one is
@@ -4578,13 +4662,17 @@
         onResult({ ok: true, dryRun: true, note: "Dry run — not applied" });
         return;
       }
-      callTool(cmd.tool, cmd.args, onResult);
+      // The user's own turns ride along for tools that must tell what the
+      // user asked from what the model chose (comfy_generate, NEXT UP 39).
+      callTool(cmd.tool, cmd.args, onResult,
+               opts.userTexts instanceof Array
+                 ? { userTexts: opts.userTexts } : undefined);
     }
     step(0);
   }
 
   /** Route a command to a panel-side implementation or the AE host. */
-  function callTool(tool, args, cb) {
+  function callTool(tool, args, cb, ctx) {
     if (Object.prototype.hasOwnProperty.call(PANEL_TOOLS, tool)) {
       var delivered = false;
       var once = function (r) {
@@ -4593,7 +4681,7 @@
         cb(r);
       };
       try {
-        PANEL_TOOLS[tool](args || {}, once);
+        PANEL_TOOLS[tool](args || {}, once, ctx);
       } catch (e) {
         // If cb already ran, this throw came from downstream of the tool —
         // don't re-deliver, just surface it in the console.
@@ -4924,6 +5012,8 @@
     callHostTool: callHostTool,
     callHostBatch: callHostBatch,
     executeCommands: executeCommands,
+    userTurnTexts: userTurnTexts,     // main.js: what the USER typed (39)
+    _userNamesSize: userNamesSize,    // exposed for tests
     setGpuInfo: setGpuInfo,
     planChatLoad: planChatLoad,               // the gate before Llama.start
     checkVramAfterChatLoad: checkVramAfterChatLoad,

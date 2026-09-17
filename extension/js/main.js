@@ -828,6 +828,7 @@
             commands,
             { dryRun: s.dryRun,
               allowRollback: rollbackBudget > 0,
+              userTexts: global.Tools.userTurnTexts(history),
               shouldStop: function () { return cancelRequested; } },
             function (i, cmd, result) {
               if (result.rolledBack) {
