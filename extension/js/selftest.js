@@ -1494,6 +1494,60 @@
         },
         check: function () { return true; } },
 
+      // Measured AE 26.3 (2026-09-17): setValue(50) on Scale THROWS "Value
+      // is not an array." although the doc promises value: number, and
+      // [null, 120] is ACCEPTED with the null written as 0. Both are read
+      // back here, then the rig's [80, 120] is put back for the steps below.
+      { name: "set_transform: a lone number on scale is uniform",
+        tool: "set_transform",
+        args: function (ctx) {
+          return { comp: ctx.apComp, layer: "ST AP Parent",
+                   property: "scale", value: 90 };
+        },
+        check: function (d) {
+          return (d.value[0] === 90 && d.value[1] === 90) ||
+                 "wrote " + JSON.stringify(d.value);
+        } },
+
+      { name: "set_transform: a null axis keeps its value, not 0",
+        tool: "set_transform",
+        args: function (ctx) {
+          return { comp: ctx.apComp, layer: "ST AP Parent",
+                   property: "scale", value: [null, 120] };
+        },
+        check: function () { return true; } },
+
+      { name: "…read back: scale is [90, 120]",
+        tool: "get_property",
+        args: function (ctx) {
+          return { comp: ctx.apComp, layer: "ST AP Parent",
+                   property: "Scale" };
+        },
+        check: function (d) {
+          return (d.value[0] === 90 && d.value[1] === 120) ||
+                 "scale reads " + JSON.stringify(d.value);
+        } },
+
+      { name: "set_transform: a lone number on position is refused",
+        tool: "set_transform",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.apComp, layer: "ST AP Parent",
+                   property: "position", value: 300 };
+        },
+        check: function (err) {
+          return (/\[x, y\]/.test(err) && /holds \[/.test(err)) ||
+                 "refusal does not name the shape and value: " + err;
+        } },
+
+      { name: "…and the rig's scale is put back",
+        tool: "set_transform",
+        args: function (ctx) {
+          return { comp: ctx.apComp, layer: "ST AP Parent",
+                   property: "scale", value: [80, 120] };
+        },
+        check: function () { return true; } },
+
       // Text, not a solid: a solid's anchor already sits at its centre,
       // so centring it is a no-op and would prove nothing.
       { name: "anchor rig: text layer (content bounds are off-centre)",

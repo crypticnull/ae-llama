@@ -215,8 +215,28 @@ function aeSetValue(prop, v) {
       (Array.isArray(prop._value) ? "Value is not an array."
                                   : bad + " is not a number."));
   }
+  // Shape, measured AE 26.3 by a set_transform probe on a 2D solid
+  // (2026-09-17): a lone number on an array-valued property throws "Value
+  // is not an array."; a one-element array throws the element-count
+  // sentence; a null ELEMENT is accepted and written as 0 (the silent
+  // one); a one-dimensional property takes [45] as 45.
+  if (Array.isArray(prop._value) && !Array.isArray(v)) {
+    throw new Error("After Effects error: Unable to call “setValue” " +
+      "because of parameter 1. Value is not an array.");
+  }
+  if (Array.isArray(prop._value) && v.length < 2) {
+    throw new Error("After Effects error: Unable to call “setValue” " +
+      "because of parameter 1. Value array does not have between 2 and " +
+      "3 elements.");
+  }
   if (Array.isArray(v)) {
-    return v.map((el) => (typeof el === "string" ? Number(el) : el));
+    const out = v.map((el) => (typeof el === "string" ? Number(el)
+                               : el === null ? 0 : el));
+    if (!Array.isArray(prop._value)) return out[0];
+    for (let i = out.length; i < prop._value.length; i++) {
+      out.push(prop._value[i]);
+    }
+    return out;
   }
   return typeof v === "string" ? Number(v) : v;
 }
@@ -681,10 +701,11 @@ assert(r.ok &&
        A.property("Effects").property("Gaussian Blur")
         .property("Blurriness").value === 25,
        "set_property writes an effect param");
+// The scripting API pads a 2D write to 3 components (measured, CLAUDE.md).
 r = call("set_property", { layer: "A", property: "position",
                            value: [300, 400] });
 assert(r.ok && JSON.stringify(
-         A.property("Transform").property("Position").value) === "[300,400]",
+         A.property("Transform").property("Position").value) === "[300,400,0]",
        "friendly names still resolve");
 
 // 5. keyframing: atTime, batch set, remove
@@ -1415,6 +1436,52 @@ assert(!r.ok && /'position' takes an array of \d numbers/.test(r.error) &&
 r = call("set_transform", { layer: "A", property: "position",
                             value: ["120", "140"] });
 assert(r.ok, "an array of numeric strings still writes: " + (r.error || ""));
+
+// A lone number and a null axis, measured AE 26.3 (2026-09-17): the doc
+// promises value: number, yet "scale it to 50 percent" reached setValue as
+// 50 and AE threw "Value is not an array." mid-round, rolling the round
+// back in a real panel; and [null, 50] was ACCEPTED with the null written
+// as 0, so the tool said ok on a layer squashed to nothing.
+aT.property("ADBE Scale").setValue([100, 100, 100]);
+r = call("set_transform", { layer: "A", property: "scale", value: 50 });
+assert(r.ok && aT.property("ADBE Scale").value[0] === 50 &&
+       aT.property("ADBE Scale").value[1] === 50,
+       "a lone number on scale is uniform: " + (r.error || ""));
+r = call("set_transform", { layer: "A", property: "scale", value: [70] });
+assert(r.ok && aT.property("ADBE Scale").value[1] === 70,
+       "so is a one-element array: " + (r.error || ""));
+r = call("set_transform", { layer: "A", property: "scale",
+                            value: [null, 30] });
+assert(r.ok && aT.property("ADBE Scale").value[0] === 70 &&
+       aT.property("ADBE Scale").value[1] === 30,
+       "a null axis keeps its value instead of becoming 0: " +
+       JSON.stringify(aT.property("ADBE Scale").value));
+r = call("set_transform", { layer: "A", property: "scale",
+                            value: [null, 200], relative: true });
+assert(r.ok && aT.property("ADBE Scale").value[0] === 70 &&
+       aT.property("ADBE Scale").value[1] === 60,
+       "relative scale with a null axis keeps it too: " +
+       JSON.stringify(aT.property("ADBE Scale").value));
+const posBefore = aT.property("ADBE Position").value.slice();
+r = call("set_transform", { layer: "A", property: "position", value: 300 });
+assert(!r.ok && /takes \[x, y\]/.test(r.error) && /holds \[/.test(r.error) &&
+       /\[null, 300\]/.test(r.error),
+       "a lone number on position is refused with what it holds: " +
+       (r.error || ""));
+assert(JSON.stringify(aT.property("ADBE Position").value) ===
+       JSON.stringify(posBefore), "and nothing moved");
+r = call("set_transform", { layer: "A", property: "position",
+                            value: [null, 250] });
+assert(r.ok && aT.property("ADBE Position").value[0] ===
+       posBefore[0] && aT.property("ADBE Position").value[1] === 250,
+       "position [null, y] keeps x: " +
+       JSON.stringify(aT.property("ADBE Position").value));
+r = call("set_transform", { layer: "A", property: "rotation", value: [45] });
+assert(r.ok && r.data.value === 45, "rotation [45] is 45");
+r = call("set_transform", { layer: "A", property: "rotation", value: [1, 2] });
+assert(!r.ok && /ONE number/.test(r.error), "rotation [1, 2] is refused");
+call("set_transform", { layer: "A", property: "rotation", value: 0 });
+call("set_transform", { layer: "A", property: "scale", value: [100, 100] });
 
 // ------------------------------- set_track_matte wraps AE's raw message
 // AE's throw alone ("Object is invalid" and friends) tells the model

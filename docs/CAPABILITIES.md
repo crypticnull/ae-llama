@@ -57,7 +57,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `get_bounds` | MEASURE a layer's rendered content without touching it — how wide the text actually is, where the shape sits in the frame, whether anything overflows | no | host | 1 | 32 |
 | `get_comp_details` | Layers of a comp with index, name, type, timing, effects, track matte | no | host | 4 | 36 |
 | `get_project_info` | List project items (comps/footage/folders) and the active comp | no | host | 2 | 16 |
-| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 102 |
+| `get_property` | Read ANY property by path: value, keyframes, expression | no | host | 3 | 103 |
 | `grid_layout` | Arrange layers into a grid rigged to a control null: its 'Grid X Spacing'/'Grid Y Spacing'/'Grid Columns' sliders drive spacing AND column count live, and the grid centers on the null's position (all expressions generated host-side) | yes | host | 1 | 4 |
 | `import_as_layer` | Import a file AND place it in a comp as a layer, scaled to the comp | yes | host | 1 | 8 |
 | `import_file` | Import a footage/image/video file into the PROJECT PANEL only — it does not appear in any comp | yes | host | 1 | 2 |
@@ -90,7 +90,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `set_solid_color` | Change a SOLID layer's colour (this is the ONLY way — a solid's colour is not a property you can set_property) | yes | host | 1 | 5 |
 | `set_text_style` | Restyle an existing text layer (any subset of fields) | yes | host | 1 | 2 |
 | `set_track_matte` | Use one layer as another's track matte (alpha or luma, optionally inverted), or remove it with mode 'none' | yes | host | 1 | 8 |
-| `set_transform` | Set a transform property | yes | host | 2 | 39 |
+| `set_transform` | Set a transform property | yes | host | 2 | 43 |
 | `snapshot_frame` | Write one frame of a comp to a PNG on disk | yes | host | 1 | 7 |
 | `split_layer_into_chunks` | Cut a layer into chunks, each on its own layer trimmed to its own window — ONE call does the whole edit | yes | host | 1 | 2 |
 | `stagger_layers` | Distribute layer START TIMES | yes | host | 1 | 8 |

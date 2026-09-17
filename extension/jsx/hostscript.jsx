@@ -3746,6 +3746,64 @@ AELL_TOOLS.set_solid_color = function (args) {
   return AELL_okay(data);
 };
 
+/*
+ * Shape an ABSOLUTE set_transform value to the property it lands on.
+ * Measured AE 2026 (26.3), setValue on a 2D solid:
+ *   - Scale 50, Position 300, Anchor Point 10: THROW "Value is not an
+ *     array." The doc promises value: number, and "scale it to 50
+ *     percent" is the commonest way a model says it.
+ *   - Scale [50]: THROWS "Value array does not have between 2 and 3
+ *     elements."
+ *   - Scale [null, 50], Position [null, 250]: ACCEPTED, and the null is
+ *     written as 0. The tool reported ok on a layer squashed to 0 %
+ *     wide / moved to x 0.
+ *   - Rotation [45], Opacity [50]: accepted.
+ * So: a lone number (or one-element array) is uniform on Scale and
+ * refused on Position/Anchor Point, where it has no single meaning; a
+ * null element keeps that axis's current value. Strings are left to
+ * AELL_badValueMsg, which already words them.
+ */
+function AELL_fitTransformValue(prop, propName, value) {
+  var cur, i;
+  try { cur = prop.value; } catch (eC) { return { value: value }; }
+  var isArr = AELLJSON.isArray(value);
+  if (value === null || typeof value === "undefined") {
+    return { error: "'value' is required for " + propName + " (it holds " +
+      AELL_showValue(cur) + " now)." };
+  }
+  if (!AELLJSON.isArray(cur)) {
+    if (!isArr) return { value: value };
+    if (value.length === 1 && value[0] !== null &&
+        typeof value[0] !== "undefined") {
+      return { value: value[0] };
+    }
+    return { error: "'" + propName + "' takes ONE number, not " +
+      AELLJSON.stringify(value) + " (it holds " + AELL_showValue(cur) +
+      " now)." };
+  }
+  var lone = isArr ? (value.length === 1 ? value[0] : undefined) : value;
+  if (typeof lone !== "undefined") {
+    if (typeof lone === "string" && AELL_numArg(lone) === null) {
+      return { value: value };          // AELL_badValueMsg words it
+    }
+    if (propName === "scale" && AELL_numArg(lone) !== null) {
+      var uni = [];
+      for (i = 0; i < cur.length; i++) uni.push(AELL_numArg(lone));
+      return { value: uni };
+    }
+    return { error: "'" + propName + "' takes [x, y] pixels, not " +
+      AELLJSON.stringify(value) + " — it holds " + AELL_showValue(cur) +
+      " now. To change one axis pass null for the other ([null, 300] " +
+      "keeps x), or use relative:true with an offset like [0, 300]." };
+  }
+  var out = [];
+  for (i = 0; i < value.length && i < cur.length; i++) {
+    out.push(value[i] === null || typeof value[i] === "undefined"
+      ? cur[i] : value[i]);
+  }
+  return { value: out };
+}
+
 AELL_TOOLS.set_transform = function (args) {
   var comp = AELL_resolveComp(args.comp);
   var layer = AELL_resolveLayer(comp, args.layer);
@@ -3770,6 +3828,8 @@ AELL_TOOLS.set_transform = function (args) {
         var out = [];
         for (i = 0; i < cur.length; i++) {
           var f = factors ? factors[Math.min(i, factors.length - 1)] : value;
+          // null = leave this axis; Number(null) is 0 and zeroed it.
+          if (f === null || typeof f === "undefined") f = 100;
           out.push(cur[i] * (Number(f) / 100));
         }
         value = out;
@@ -3789,6 +3849,10 @@ AELL_TOOLS.set_transform = function (args) {
       }
       value = moved;
     }
+  } else {
+    var fit = AELL_fitTransformValue(prop, propName, value);
+    if (fit.error) return AELL_err(fit.error);
+    value = fit.value;
   }
 
   var drivenWarn;

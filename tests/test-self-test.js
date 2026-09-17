@@ -1755,6 +1755,8 @@ function singularLayerGate(tool, args) {
   return null;
 }
 
+// What set_transform last wrote, per "layer|property" (scale reads back).
+const xfState = {};
 function cannedOk(tool, args) {
   noteLayerNames(args);
   const gated = singularLayerGate(tool, args);
@@ -2712,6 +2714,12 @@ function cannedOk(tool, args) {
       return out;
     }
     case "get_property": {
+      if (args && /^scale$/i.test(String(args.property || "")) &&
+          xfState[String(args.layer) + "|scale"]) {
+        return { layer: args.layer, property: "Scale",
+                 matchName: "ADBE Scale",
+                 value: xfState[String(args.layer) + "|scale"], numKeys: 0 };
+      }
       // A gridded layer's Position carries the rig expression; a layer
       // the grid left OUT carries none. Reading that back is the only
       // proof the backdrop was really spared.
@@ -4236,6 +4244,34 @@ function cannedOk(tool, args) {
                value: Number(args && args.value) };
     }
     case "set_transform": {
+      // AELL_fitTransformValue, mirrored: a lone number is uniform on
+      // scale and refused on position/anchorPoint; a null axis keeps its
+      // value (real AE writes it as 0, measured 2026-09-17).
+      const xfKey = String((args && args.layer) || "") + "|" +
+                    String((args && args.property) || "");
+      const xfCur = xfState[xfKey] ||
+        (args && args.property === "scale" ? [100, 100, 100]
+         : [0, 0, 0]);
+      if (args && ["scale", "position", "anchorPoint"]
+            .indexOf(args.property) !== -1 && !args.relative &&
+          (typeof args.value === "number" ||
+           (Array.isArray(args.value) && args.value.length === 1))) {
+        const lone = Array.isArray(args.value) ? args.value[0] : args.value;
+        if (args.property !== "scale") {
+          return { __err: "'" + args.property + "' takes [x, y] pixels, " +
+            "not " + JSON.stringify(args.value) + " -- it holds [" +
+            xfCur.join(", ") + "] now." };
+        }
+        args = Object.assign({}, args,
+                             { value: [lone, lone, lone] });
+      } else if (args && Array.isArray(args.value) && !args.relative &&
+                 args.value.indexOf(null) !== -1) {
+        args = Object.assign({}, args, { value: args.value.map(
+          (el, i) => (el === null ? xfCur[i] : el)) });
+      }
+      if (args && Array.isArray(args.value)) {
+        xfState[xfKey] = args.value.concat(xfCur.slice(args.value.length));
+      }
       const badT = badValueRefusal(args && args.value,
         String((args && args.property) || ""),
         args && args.property === "position" ? "array" : "number",
@@ -4280,6 +4316,10 @@ function cannedOk(tool, args) {
                                 cvThreeD[args.layer] ? (v[2] || 0) : 0];
         return { layer: args.layer, property: args.property,
                  value: cvAnchor[args.layer].slice() };
+      }
+      if (args && Array.isArray(args.value)) {
+        return { layer: args.layer, property: args.property,
+                 value: args.value };
       }
       return { done: true };
     }
