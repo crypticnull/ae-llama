@@ -28068,3 +28068,38 @@ work survives a kill.
 Queued as item 1. Nothing was changed in the running loop.
 
 No `extension/` change, so **no version bump**.
+
+## 2026-09-17 (local session) - routing matrix graded from a killed pass: routed 16K GREEN on every mean, 12K RED on three canonicals, default stays "all" (NEXT UP 20, §24d)
+
+**Item:** NEXT UP 20, the first row with its needs met after 39. The pass started 03:24 EDT under the owner's `run-local-agent.ps1` loop (PID 35752, -UntilHour 9), so the loop is the permission (17a). AfterFX was running and was left running. The panel's own 32B server on 8737 was not touched.
+
+**Harness: 775/775 PASSED** at the start. Nothing under `extension/` changed, so it was not re-run and **no bump**.
+
+**Not a retry.** Loop pass 10 took this item at 02:39, ran all six matrices (02:48-03:29), and was killed at 45:00 before it logged or committed. Its probe edits were salvaged to stash `loop-salvage-20260917-032443`. This pass did not re-run anything. It graded pass 10's six transcripts and recovered the stash:
+- `chat-probe.js --port <n>`: an in-memory port override like `--ctx`, so a matrix can use a server BESIDE the panel's open model. I added a spawned exit-2 test for bad values (`abc`, `70000`, `87.5`).
+- The step-19 judge: the TOP band ignored the mask mode, so a subtract band over the top half (which shows only the bottom) scored pass. Now `hides = subtract XOR inverted`, with pass 10's three asserts. `node tests/test-chat-probe.js` is green.
+
+**Measured** (7B Q4_K_M, KV q8_0, T=0, 99 runs per matrix). Means are pass/miss/HARM/canonical not passing:
+- 16K all: 54/10.5/34.5/14
+- 16K auto: 69/9/21/10
+- 12K auto: 69/11.5/18.5/12
+
+Table, transcripts and the row detail are in `docs/measured/prompt-routing-2026-09-17.md`.
+
+**Grading:** §24d's letter bar is RED for all-vs-all (5 new HARM) and auto-vs-auto (4) on their own, so it grades noise. I used the 11b-2 method: means, plus a row that fails in both candidate runs and neither base run.
+- **16K GREEN.** Every mean improves. One row fails 2/2: `hide half a layer with a mask / casual`, a subtract `[50,50,50,50]` after `center_anchor_point`. "All" carried the "context nearly filled (~11 800 tokens)" notice on 63 and 95 of its 99 runs.
+- **12K RED** against the same night's 16K auto. Three canonicals fail 2/2:
+  - the text pivot: `preservePosition:false`, the same call that 16K auto made and that was graded pass there (judge gap, filed 41);
+  - the mask: comp-space bounds, a grounded error, then "Failed to chop off...";
+  - the track matte: layer = matteLayer, "cannot matte itself", then it gave up.
+
+**Filed:**
+- **NEXT UP 40:** routed prompts give up after a grounded error 2-4x as often ("Failed/Could not/Unable" replies: all 3/8, 16K auto 11/24, 12K auto 22/15), although the retry rule is core. Row 20 now needs 40, then a fresh 12K-vs-16K auto pair.
+- **NEXT UP 41:** the step-18 judge skips its jump check whenever rotation is non-zero, 360 included.
+
+**Assumed:**
+1. Grading another pass's transcripts is recovery, not the second attempt the brief forbids. The 2026-09-16 pass 24/25 precedent did the same.
+2. The per-row clause is the 11b-2 clause, applied without an owner.
+3. The six transcripts were graded by the OLD step-19 judge, and a pass row records no mask state, so step-19 passes stand as graded.
+4. The flip is a MINOR bump and is not this pass's to take whatever the verdict.
+5. The transcript headers name the 32B from settings, but `server (reused)` names the 7B that actually answered. I trust the latter.

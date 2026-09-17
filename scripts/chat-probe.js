@@ -33,6 +33,8 @@
  *   node scripts/chat-probe.js --reuse-server --label "q8_0 16K"
  *                                  # name a server this probe did not start
  *   node scripts/chat-probe.js --temperature 0  # override, in memory only
+ *   node scripts/chat-probe.js --reuse-server --port 8791
+ *                                  # a server beside the panel's own (§24d)
  *
  * VARIANTS. --variants runs each selected step's canonical sentence AND
  * every paraphrase it declares (casual / vague / typo'd), each as its own
@@ -115,6 +117,7 @@ const OPT = {
   steps: argValue("--steps"),
   model: argValue("--model"),
   ctx: argValue("--ctx"),
+  port: argValue("--port"),
   route: argValue("--route"),
   // "compact" | "full" | null (the window decides, as in the panel).
   promptMode: argValue("--prompt-mode"),
@@ -454,6 +457,19 @@ if (OPT.ctx) {
     process.exit(2);
   }
   Settings.get().ctxSize = want;
+}
+
+// --port: in-memory like --ctx. The panel's own llama-server holds the
+// settings port whenever it is open with a model loaded, and stopping it
+// to measure would reconfigure the product under the owner (§24d). A
+// second server on another port leaves it alone.
+if (OPT.port) {
+  const p = parseInt(OPT.port, 10);
+  if (!(p > 0 && p < 65536) || String(p) !== String(OPT.port)) {
+    console.error("--port wants an integer 1..65535, got " + OPT.port);
+    process.exit(2);
+  }
+  Settings.get().port = p;
 }
 
 // --temperature: in-memory like --ctx. A/B gates (NEXT UP 11b) run at 0:
@@ -2707,15 +2723,18 @@ const STEPS = [
                  JSON.stringify(boxes) + ") — it hides nothing";
         }
         // A band the full width of the layer and half its height: over
-        // the TOP half (add mode keeps what it covers), or over the
-        // BOTTOM half when the mask subtracts or is inverted. A dot, a
-        // sliver or a band in the wrong place hides the wrong thing.
+        // the TOP half when it KEEPS what it covers, or over the BOTTOM
+        // half when it hides what it covers (subtract, or inverted, not
+        // both). A dot, a sliver or a band in the wrong place hides the
+        // wrong thing. Measured 2026-09-17 (NEXT UP 20): a subtract band
+        // over the TOP half scored pass here, and it shows only the
+        // bottom, the opposite of every sentence in this step.
         const band = boxes.some((bx, i) => {
           const fullWide = bx[2] >= 0.9 * W;
           const half = Math.abs(bx[3] - H / 2) <= 0.15 * H;
-          const top = Math.abs(bx[1]) <= 0.1 * H;
-          const bottom = Math.abs(bx[1] - H / 2) <= 0.1 * H &&
-            (modes[i] === "subtract" || inv[i] === true);
+          const hides = (modes[i] === "subtract") !== (inv[i] === true);
+          const top = Math.abs(bx[1]) <= 0.1 * H && !hides;
+          const bottom = Math.abs(bx[1] - H / 2) <= 0.1 * H && hides;
           return fullWide && half && (top || bottom);
         });
         if (!band) {

@@ -1527,6 +1527,23 @@ function everySquare(state, fn) {
     const v = s.check(wrongHalf, { before });
     assert(v && /not a band across the top half/.test(v),
            "an add mask over the BOTTOM half hides the top and fails: " + v);
+    // Measured 2026-09-17 (NEXT UP 20): the model copied the host's
+    // worked example [0,0,100,50] with mode subtract, which cuts the TOP
+    // away, and the judge scored it pass because "top" ignored the mode.
+    const cutTop = after(before, c => { const b = find(c, "Beta");
+      b.masks = 1; b.maskBoxes = [[0, 0, 100, 50]];
+      b.maskModes = ["subtract"]; b.maskInverted = [false]; });
+    const vt = s.check(cutTop, { before });
+    assert(vt && /not a band across the top half/.test(vt),
+           "a SUBTRACT band over the top half hides the top and fails: " + vt);
+    const invTop = after(masked, c => { find(c, "Beta").maskInverted = [true]; });
+    const vi = s.check(invTop, { before });
+    assert(vi && /not a band across the top half/.test(vi),
+           "and so does an inverted add band over the top half: " + vi);
+    const bothBottom = after(cut, c => { find(c, "Beta").maskInverted = [true]; });
+    const vb = s.check(bothBottom, { before });
+    assert(vb && /not a band across the top half/.test(vb),
+           "an inverted SUBTRACT over the bottom half keeps the bottom: " + vb);
   }
   {
     const dot = after(before, c => { const b = find(c, "Beta");
@@ -3744,6 +3761,16 @@ function icons(state) {
       { encoding: "utf8", timeout: 20000 });
     assert(r.status === 2 && /--prompt-mode wants compact or full/.test(r.stderr),
            "a bad --prompt-mode is refused with exit 2 before touching AE (" +
+           bad.join(" ") + ": status " + r.status + ", stderr " + r.stderr + ")");
+  }
+  // --port (§24d): a server beside the panel's own. A bad value is refused
+  // before anything touches AE, never silently parsed to a prefix.
+  for (const bad of [["--port", "abc"], ["--port", "70000"], ["--port", "87.5"]]) {
+    const r = cp.spawnSync(process.execPath,
+      [require("path").join(__dirname, "../scripts/chat-probe.js")].concat(bad),
+      { encoding: "utf8", timeout: 20000 });
+    assert(r.status === 2 && /--port wants an integer 1\.\.65535/.test(r.stderr),
+           "a bad --port is refused with exit 2 before touching AE (" +
            bad.join(" ") + ": status " + r.status + ", stderr " + r.stderr + ")");
   }
 }
