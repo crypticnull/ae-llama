@@ -43,6 +43,7 @@ new Function("window", fs.readFileSync(
 const FILE = "C:/out/AELL/apple_00001_.png";
 const COMPS = ["Main", "Probe Room"];
 let hostLog = [];
+let lastParams = null;
 const window = {
   AEBridge: {
     nodeRequire: require,
@@ -56,7 +57,13 @@ const window = {
       const tool = m[1];
       const args = JSON.parse(JSON.parse(m[2]));
       hostLog.push({ tool, args });
-      if (tool === "import_file") {
+      if (tool === "get_project_info") {
+        cb(JSON.stringify({ ok: true, data: { activeComp: null, items: [
+          { name: "Main", id: 1, type: "comp", width: 1920, height: 1080 },
+          { name: "Probe Room", id: 2, type: "comp", width: 1080,
+            height: 1920 },
+          { name: "apple_00001_.png", id: 41, type: "footage" }] } }));
+      } else if (tool === "import_file") {
         cb(JSON.stringify({ ok: true, data: { name: "apple_00001_.png",
           id: 41, width: 1024, height: 1024 } }));
       } else if (tool === "import_as_layer") {
@@ -92,6 +99,7 @@ const window = {
     ensureRunning: (url, st, cb) => cb(null),
     freeVram: (url, cb) => cb(null),
     generate: (opts, prog, cb) => {
+      lastParams = opts.params;
       cb(null, { files: [FILE], applied: ["prompt -> node 1"] });
     }
   }
@@ -107,10 +115,15 @@ Tools.setGpuInfo({ hasNvidia: true, vramGB: 32, computeCap: 8.9 });
 const APPLE = { prompt: "a single red apple on a white plate",
                 workflow: "AE_LLAMA_SDXL_T2I_V1" };
 
+// Placement calls only; the size lookup (get_project_info) is its own step.
 function run(args, cb) {
   hostLog = [];
+  lastParams = null;
   Tools.executeCommands([{ tool: "comfy_generate", args }], {}, null,
-    function (results) { cb(results[0], hostLog.slice()); });
+    function (results) {
+      cb(results[0], hostLog.filter(c => c.tool !== "get_project_info"),
+         hostLog.slice());
+    });
 }
 
 const pending = [];
@@ -205,6 +218,46 @@ step(function (done) {
              "import:false wins over comp: nothing touches the project");
       done();
     });
+});
+
+// --------------------------------------- 3. the comp sets the size (§23c)
+
+step(function (done) {
+  run(Object.assign({ comp: "Probe Room" }, APPLE), function (r, calls, all) {
+    const cs = lastParams && lastParams.compSize;
+    assert(cs && cs.name === "Probe Room" && cs.width === 1080 &&
+           cs.height === 1920 && all[0].tool === "get_project_info" &&
+           all[0].args.limit === 0,
+           "a named comp hands its size to generate: " + JSON.stringify(cs));
+    done();
+  });
+});
+
+step(function (done) {
+  run(Object.assign({ comp: "Main", width: 512, height: 512 }, APPLE),
+    function (r, calls, all) {
+      assert(lastParams && lastParams.compSize === null &&
+             lastParams.width === 512 &&
+             !all.some(c => c.tool === "get_project_info"),
+             "a named width/height wins: no comp lookup, no compSize");
+      done();
+    });
+});
+
+step(function (done) {
+  run(Object.assign({ comp: "Mian" }, APPLE), function (r) {
+    assert(lastParams && lastParams.compSize === null,
+           "a comp that does not exist sizes nothing");
+    done();
+  });
+});
+
+step(function (done) {
+  run(APPLE, function (r, calls, all) {
+    assert(lastParams && lastParams.compSize === null && all.length === 1,
+           "no comp: no lookup (" + all.map(c => c.tool).join() + ")");
+    done();
+  });
 });
 
 step(function (done) {

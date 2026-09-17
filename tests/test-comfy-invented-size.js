@@ -228,4 +228,30 @@ step(function (done) {
   });
 });
 
+step(function (done) {
+  // NEXT UP 22: a named comp is the size source, so an invented size
+  // gives way to it even while a comp is active.
+  activeComp = "Main";
+  run(Object.assign({}, INVENTED, { comp: "Main" }), { userTexts: [BOAT] },
+    function (r, params) {
+      assert(r.ok && !(params.width > 0) && !(params.height > 0) &&
+             /1920x1080 was not asked for, and comp 'Main' sets the size/
+               .test(r.data.applied[0]),
+             "comp named, no size named: the invented size is dropped for " +
+             "the comp's: " + JSON.stringify(r.data && r.data.applied[0]));
+      activeComp = null;
+      done();
+    });
+});
+
+step(function (done) {
+  run(Object.assign({}, INVENTED, { comp: "Main" }),
+      { userTexts: ["Make a 1920x1080 video of a boat"] },
+    function (r, params) {
+      assert(params.width === 1920 && params.height === 1080,
+             "comp named AND a size named: the named size wins");
+      done();
+    });
+});
+
 next(0);

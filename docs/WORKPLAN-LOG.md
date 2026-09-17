@@ -28497,3 +28497,27 @@ After the CLI exited, the reap selected nothing and the runner kept going. That 
 3. The generated PNGs (`AELlama_SD15__00001_`, `AELlama_SDXL__00001_/00002_`) stay in `%APPDATA%\AE-Llama\generated` as the probe's evidence. The managed backend was left up for the loop's teardown to stop (§17q).
 
 **Needs a human eye:** none.
+
+## 2026-09-17 (local session) - a render placed in a comp takes the comp's size; images capped at the authored pixel count (NEXT UP 22, second half), 0.12.47
+
+**Item:** NEXT UP 22, second half (§23c bullets 2-3). First open row whose needs were met; 1a, 8, 5a-4e, 5a-5b/c, 5c, 6b are owner calls, 11d is owner-gated, 40d is a minor bump. Pass started ~07:53 EDT under the owner's `run-local-agent.ps1` loop (-UntilHour 9), so AE, the chat model and the backend were in scope. AfterFX was running and was left running.
+
+**Harness:** 777/777 at the start; **777/777** after the change.
+
+**Changed:**
+- `extension/js/comfy.js`: `sizeForComp` (pure, exported) and `applyCompSize`, run in `generate()` between `loadWorkflow` and `injectParams`. With `params.compSize` and no width/height: find the graph's ONE width/height node, read that class's `width`/`height` INT spec (`step`, `min`, `max`) from the live `/object_info`, set params.width/height, and put one line at the top of `applied`. VIDEO: authored pixel count at the comp's aspect. IMAGE: the comp's size divided by `outputScaleFrom`'s factor, capped at the authored pixel count. Any size-node count other than 1, an unreadable scale, or an undeclared step keeps the authored size and says why.
+- `extension/js/tools.js`: `compArg`, `compSizeFor` (the named comp's size from `get_project_info {limit: 0}`, exact name, or null) and a re-entry through `comfy_generate`'s new 4th argument, so the lookup runs once. `inventedSizeNote`: with a comp named, an invented width/height (no size in the user's turns, no image) is dropped and the note says the comp sets the size.
+- `docs/CAPABILITIES.md` curated paragraph; WORKPLAN row 22 struck, §23c marked done.
+
+**Tests:** new `tests/test-comfy-comp-size.js` (the rule, including min/max bounds, plus `Comfy.generate` against a local stub HTTP backend that declares steps and captures the queued graph: image, video, a named size wins, no comp, undeclared step). `test-comfy-comp-placement.js` now expects the lookup and checks compSize is passed, skipped when a size is named, null for an unknown comp, and absent with no comp. `test-comfy-invented-size.js` covers comp named with no size named (dropped) and comp named with a size named (kept). Whole Node suite green.
+
+**Real backend (managed, booted by a scratch script and stopped after; the loaded 32B on 8737 left alone):** all 10 shipped templates declare their step. EmptyLatentImage step 8 / min 16, EmptyLTXVLatentVideo 32 / min 64, Wan22ImageToVideoLatent 32 / 32, MiniMaxH3ImageToVideo 32 / 32, all max 16384. KREA2_T2I's size chain has factor 1 (no upscale in the T2I build). Size for a 1920x1080 / 1080x1920 comp: SD 1.5 680x384 / 384x680, SDXL(+fp8) 1368x768 / 768x1368, KREA2 1920x1080 / 1080x1920, LTX(+distilled) 832x480 / 480x832, Wan(+fp8) 1280x704 / 704x1280, H3(+int8) 1344x768 / 768x1344. Two real renders, compSize 1080x1920, seed 12345: sdxl-fp8 wrote a 768x1368 PNG in 6.1 s; ltx-small-distilled wrote a 480x832 mp4 (ffprobe) in 10.0 s.
+
+**Real AE, `chat-probe --reuse-server --steps 1,13`: 2/2.** The model sent `comfy_generate {workflow: AE_LLAMA_SD15_T2I_V1, width 1920, height 1080, comp "Probe Room"}` (its first call again invented the name "Stable Diffusion 1.5", row 44). `applied` opened with "width/height dropped: 1920x1080 was not asked for, and comp 'Probe Room' sets the size", then the comp size line. It rendered 680x384 and placed it in Probe Room. Transcript `logs/chat-probe-2026-09-17T12-01-32.md`.
+
+**Assumed:**
+1. IMAGE templates are capped at the authored pixel count instead of taking the comp's full size, which §23c as written asked for. The VRAM gates and measured seconds were all taken at the authored size, and SD 1.5 at 1920x1080 is out of its training. `import_as_layer` fits the result to the comp either way. Revert = drop the `if (w * h > area)` block in `sizeForComp`.
+2. When a comp is named, the user named no size, and the model sent one anyway, the comp wins (the model's size is dropped). If the model deliberately matched the comp, the only change is the image cap from assumption 1.
+3. Comp names are matched exactly, as `import_as_layer` matches them. An unknown comp sizes nothing, and the placement refusal still reports it.
+
+**Needs a human eye:** assumption 1 goes against the letter of §23c.

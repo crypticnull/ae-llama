@@ -3310,6 +3310,15 @@
       cb(null);
       return;
     }
+    // A named comp is the size source (NEXT UP 22): the render is sized
+    // from it, so a size the user never asked for gives way to it.
+    if (compArg(args) !== null) {
+      cb("width/height dropped: " + (w ? args.width : "?") + "x" +
+         (h ? args.height : "?") + " was not asked for, and comp '" +
+         compArg(args) + "' sets the size; pass width/height only when " +
+         "the user names one");
+      return;
+    }
     callHostTool("get_project_info", { limit: 1 }, function (r) {
       // Unreadable project: keep the model's size rather than guess.
       if (!r || !r.ok || !r.data || r.data.activeComp) { cb(null); return; }
@@ -3325,6 +3334,36 @@
    * height), so outputSize, the probe's cleanup and every reader of
    * `imported` keep working, plus where the layer landed.
    */
+  function compArg(args) {
+    return (args && args.comp !== null && typeof args.comp !== "undefined" &&
+            args.comp !== "") ? String(args.comp) : null;
+  }
+
+  /**
+   * The named comp's {name, width, height} for comfy_generate's size, or
+   * null: no comp named, a size named, or no such comp (the placement
+   * then refuses with the grounded list, and the render keeps its
+   * authored size).
+   */
+  function compSizeFor(args, cb) {
+    var name = compArg(args);
+    if (name === null || Number(args.width) > 0 || Number(args.height) > 0) {
+      cb(null);
+      return;
+    }
+    callHostTool("get_project_info", { limit: 0 }, function (r) {
+      var items = (r && r.ok && r.data && r.data.items) || [];
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].type === "comp" && items[i].name === name &&
+            items[i].width > 0 && items[i].height > 0) {
+          cb({ name: name, width: items[i].width, height: items[i].height });
+          return;
+        }
+      }
+      cb(null);
+    });
+  }
+
   function placedItem(d) {
     d = d || {};
     var out = { name: d.source, id: d.itemId, comp: d.comp, layer: d.layer };
@@ -3365,7 +3404,7 @@
       cb({ ok: true, data: { workflows: names } });
     },
 
-    comfy_generate: function (args, cb, ctx) {
+    comfy_generate: function (args, cb, ctx, compSize) {
       if (!args || typeof args.prompt !== "string" || !args.prompt) {
         cb({ ok: false, error: "'prompt' is required" });
         return;
@@ -3388,6 +3427,14 @@
             }
             cb(result);
           });
+        });
+        return;
+      }
+      // The comp to place into sizes the render (§23c); looked up once,
+      // then the call re-enters with the answer (null = none).
+      if (typeof compSize === "undefined") {
+        compSizeFor(args, function (cs) {
+          PANEL_TOOLS.comfy_generate(args, cb, null, cs);
         });
         return;
       }
@@ -3483,7 +3530,8 @@
           seed: args.seed,
           frames: args.frames,
           durationSeconds: args.durationSeconds,
-          image: args.image
+          image: args.image,
+          compSize: compSize
         }
       }, function (elapsed, progress) {
         var limit = s.comfyTimeoutSec > 0 ? s.comfyTimeoutSec : 600;
@@ -3500,8 +3548,7 @@
         }
         // Import each rendered file into the AE project.
         var imported = [];
-        var placeIn = (args.comp !== null && typeof args.comp !== "undefined" &&
-                       args.comp !== "") ? String(args.comp) : null;
+        var placeIn = compArg(args);
         (function next(i) {
           if (i >= result.files.length) {
             // The size that was REQUESTED is not always the size that was

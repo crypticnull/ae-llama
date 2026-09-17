@@ -452,6 +452,10 @@ Queued (see WORKPLAN for owners/order):
   through this same tool, so "make a picture of X and put it in Main"
   lands on the timeline in one call; a comp name AE does not know still
   imports the file and returns the grounded refusal beside it.
+  Since 0.12.47 the named comp also sets the SIZE when no width/height
+  is given: an image takes the comp's size at most at its template's
+  authored pixel count, a video keeps its authored pixel count at the
+  comp's aspect, both snapped to the size node's step from the backend.
 - Two comp settings AE keeps to itself became reachable 2026-08-29:
   `set_comp_setting` now writes the WORK AREA and the preview
   RESOLUTION, and `get_comp_details` reads both back. AE does not treat

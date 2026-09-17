@@ -1126,6 +1126,123 @@
     return Math.round(px * factor);
   }
 
+  // ------------------------------------------- size from the comp (§23c)
+
+  /**
+   * The size a render takes when it is placed in a comp and the caller
+   * named none (WORKPLAN §23c bullet 2, NEXT UP 22). Pure.
+   *
+   * o: {kind, authoredW, authoredH, compW, compH, factor, step: {w, h},
+   *     min: {w, h}, max: {w, h}}. `factor` is what the template enlarges
+   * by before it saves (outputScaleFrom), so a picture's FILE lands near
+   * the comp's size rather than its generation size.
+   *
+   * VIDEO keeps the authored pixel count at the comp's aspect: every
+   * measured second and VRAM gate was taken at that count. IMAGE takes
+   * the comp's size, but never more pixels than the template was authored
+   * (and measured) at - an SD 1.5 graph asked for 1920x1080 is both out of
+   * its training and over its gate, and import_as_layer fits the result to
+   * the comp either way. Snapped to the node's own declared step.
+   */
+  function sizeForComp(o) {
+    var f = o.factor > 0 ? o.factor : 1;
+    var area = o.authoredW * o.authoredH;
+    var aspect = o.compW / o.compH;
+    var w, h;
+    if (o.kind === "video") {
+      w = Math.sqrt(area * aspect);
+      h = Math.sqrt(area / aspect);
+    } else {
+      w = o.compW / f;
+      h = o.compH / f;
+      if (w * h > area) {
+        w = Math.sqrt(area * aspect);
+        h = Math.sqrt(area / aspect);
+      }
+    }
+    function snap(v, step, min, max) {
+      step = step > 0 ? step : 1;
+      var s = Math.max(step, Math.round(v / step) * step);
+      if (max > 0 && s > max) s = Math.floor(max / step) * step;
+      if (min > 0 && s < min) s = Math.ceil(min / step) * step;
+      return s;
+    }
+    var st = o.step || {}, mn = o.min || {}, mx = o.max || {};
+    return { width: snap(w, st.w, mn.w, mx.w),
+             height: snap(h, st.h, mn.h, mx.h) };
+  }
+
+  /** {step, min, max} of one INT input in an /object_info class, or null. */
+  function intSpec(info, name) {
+    var inp = info && info.input;
+    if (!inp) return null;
+    var d = (inp.required && inp.required[name]) ||
+            (inp.optional && inp.optional[name]);
+    if (!(d instanceof Array) || d[0] !== "INT" || !d[1]) return null;
+    return { step: Number(d[1].step) || 1, min: Number(d[1].min) || 0,
+             max: Number(d[1].max) || 0 };
+  }
+
+  /**
+   * When params.compSize is set and no width/height is, write the comp-
+   * derived size into params before injectParams. cb(note) - note is the
+   * applied line, or null when nothing was changed. Never guesses: no
+   * single size node, an unaccountable output scale, or a step the backend
+   * will not declare leaves the authored size and says why.
+   */
+  function applyCompSize(base, graph, params, manifest, cb) {
+    var cs = params.compSize;
+    if (!cs || !(cs.width > 0) || !(cs.height > 0) ||
+        params.width > 0 || params.height > 0) { cb(null); return; }
+    var id = null, count = 0;
+    for (var k in graph) {
+      if (!graph.hasOwnProperty(k)) continue;
+      var n = graph[k];
+      if (n && n.inputs && typeof n.inputs.width === "number" &&
+          typeof n.inputs.height === "number") { id = k; count++; }
+    }
+    var from = "comp '" + cs.name + "' is " + cs.width + "x" + cs.height;
+    if (count !== 1) {
+      cb(from + ", but this template has " + (count ? count : "no") +
+         " size nodes, so it renders at its authored size");
+      return;
+    }
+    var node = graph[id];
+    var kind = (manifest && manifest.kind === "video") ? "video" : "image";
+    var sc = kind === "image" ? outputScaleFrom(graph, id) : { factor: 1 };
+    if (!sc) {
+      cb(from + ", but this template's output scale cannot be read, so " +
+         "it renders at its authored size");
+      return;
+    }
+    var cls = String(node.class_type || "");
+    requestJson(base, "GET", "/object_info/" + encodeURIComponent(cls),
+      null, 10000, function (err, statusCode, json) {
+        var info = (!err && statusCode === 200 && json) ? json[cls] : null;
+        var sw = intSpec(info, "width"), sh = intSpec(info, "height");
+        if (!sw || !sh) {
+          cb(from + ", but ComfyUI did not declare " + cls + "'s width/" +
+             "height step, so it renders at its authored size");
+          return;
+        }
+        var aw = node.inputs.width, ah = node.inputs.height;
+        var size = sizeForComp({
+          kind: kind, authoredW: aw, authoredH: ah,
+          compW: cs.width, compH: cs.height, factor: sc.factor,
+          step: { w: sw.step, h: sh.step }, min: { w: sw.min, h: sh.min },
+          max: { w: sw.max, h: sh.max } });
+        params.width = size.width;
+        params.height = size.height;
+        cb("size " + size.width + "x" + size.height + " from " + from +
+           " (" + (kind === "video"
+             ? "video keeps the authored " + aw + "x" + ah + " pixel count"
+             : "image at the comp's size, at most the authored " + aw +
+               "x" + ah + " pixel count") +
+           ", comp aspect, snapped to " + sw.step +
+           "; pass width/height to override)");
+      });
+  }
+
   /**
    * The line that closes the gap: for every node whose size was just set,
    * say what that size turns into on disk. Silent when nothing enlarges it
@@ -2305,17 +2422,28 @@
     function start() {
       try {
         graph = loadWorkflow(opts.workflowFile);
-        applied = injectParams(graph, params, manifest);
       } catch (e) {
         cb(e);
         return;
       }
-      // Optional nodes are resolved against the LIVE server, so this has to
-      // happen after grafting and before queueing — it is the only step that
-      // can tell whether a pack the template names exists on THIS machine.
-      resolveOptionalNodes(base, graph, manifest, applied, function (oErr) {
-        if (oErr) { cb(oErr); return; }
-        queueIt();
+      // A comp to place into sets the size when the caller named none;
+      // it reads the node's step from the live server, so it is async.
+      applyCompSize(base, graph, params, manifest, function (sizeNote) {
+        try {
+          applied = injectParams(graph, params, manifest);
+        } catch (e) {
+          cb(e);
+          return;
+        }
+        if (sizeNote) applied.unshift(sizeNote);
+        // Optional nodes are resolved against the LIVE server, so this has
+        // to happen after grafting and before queueing — it is the only
+        // step that can tell whether a pack the template names exists on
+        // THIS machine.
+        resolveOptionalNodes(base, graph, manifest, applied, function (oErr) {
+          if (oErr) { cb(oErr); return; }
+          queueIt();
+        });
       });
     }
 
@@ -3466,6 +3594,7 @@
     injectParams: injectParams,
     formatH3Prompt: formatH3Prompt,
     outputScaleFrom: outputScaleFrom,
+    sizeForComp: sizeForComp,
     uploadImage: uploadImage,
     generate: generate,
     status: status,
