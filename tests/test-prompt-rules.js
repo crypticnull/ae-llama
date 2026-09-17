@@ -51,12 +51,18 @@ const sha = (s) => crypto.createHash("sha256").update(s).digest("hex");
 // drops the glosses the args now carry. 7B at 12K routed, step 27 x4
 // phrasings: 7/16 pass before, 24/24 after. 39801 -> 39797 / 58931 ->
 // 58927 chars.
+// Re-pinned 2026-09-17 (NEXT UP 42b/42c): the rolled-back rule "resend
+// the commands that CAN succeed (without the one that failed)" ->
+// "resend what CAN succeed (swap the failed one for any call its error
+// names)". 7B routed step 34 x10 at 12K: 23 -> 31 of 40; paired 16K
+// matrix B/D r1+r2 same night: mean pass 69 vs 68.5, no pass/pass row
+// HARM/HARM. Lengths unchanged (39797 / 58927 chars).
 const compact = Tools.buildSystemPrompt("", { compact: true });
 const full = Tools.buildSystemPrompt("");
 const COMPACT_SHA =
-  "d7c7c2f301a8ff0845ca2fae0f74e0209fac357fa9a4d22127134c6581191642";
+  "2ea5dd6e92fce795eed00807788f4f2b78ca2c058a8b4f05693e62cedc512374";
 const FULL_SHA =
-  "6e5b9dac9cd30692b5e11a84526152eeb91b769e5128aaf742cb7aa2e778ef1e";
+  "dc605648cc7ec84fd197f635b52f341c907d2e10aae88c4144001b204bfa2146";
 assert(sha(compact) === COMPACT_SHA,
        "compact prompt is byte-identical to the pre-split one (" +
        compact.length + " chars, sha " + sha(compact).slice(0, 12) + ")");

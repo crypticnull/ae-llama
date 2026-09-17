@@ -28390,3 +28390,31 @@ Gate MET (canonical >= 6, total >= B+4, typo HARM <= B). B reproduces 42a's B (2
 2. The 40c pair is the matrix baseline, as BAR.md declared, although it predates 0.12.44 (42) and 42a's judge. A same-night B matrix would have been cleaner; there was no time in a 45-minute pass for eight matrices.
 
 **Needs a human eye:** none new. `loop-salvage-20260917-*` stashes still in `git stash list`.
+
+## 2026-09-17 (local session) - 42b's 16K drop was noise: paired B/D 16K matrices tie, the "swap the failed call" rule ships (NEXT UP 42c), 0.12.45
+
+**Item:** NEXT UP 42c, the first open row whose needs were met (1a, 8, 5a-4e, 5a-5b/c, 5c, 6b need the owner; 11d is optional; 40d needs owner/interactive). Loop pass started ~06:38 EDT under the owner's `run-local-agent.ps1` loop (-UntilHour 9). AfterFX was running and was left running. Every long job ran in the FOREGROUND of this pass (NEXT UP 43), and `extension/js/tools.js` was restored to shipped B after each arm before D was applied on purpose.
+
+**Harness:** 777/777 at the start; **777/777** again after the change and the bump. Stub suite: every `tests/test-*.js` passes (only `test-prompt-rules.js` needed its sha pins moved).
+
+**Step 1 (read, before any run):** both 16K D `21 un-animate the squares / casual` HARMs (logs 10-23-33, 10-37-09) were one first-round `remove_keyframes {layers:[9,10,11,12], property:"opacity"}`: ok, no rollback. The rolled-back rule never fired in that row. The only way D could have affected it is prompt perturbation at T=0. Bar written to `local/q42c/BAR.md` before the paired run.
+
+**Step 2, paired 16K** (7B Q4_K_M, q8_0 KV, --route auto, T=0, steps 1-11,15-36, interleaved B r1, D r1, B r2, D r2; `local/q42c/run1.sh`). pass/miss/HARM:
+
+| arm | r1 | r2 | mean |
+|---|---|---|---|
+| B shipped | 70/10/19 | 68/13/18 | 69/11.5/18.5 |
+| D swap | 71/12/16 | 66/13/20 | 68.5/12.5/18 |
+
+- Gate: D mean 68.5 >= B 69 - 1. MET. No row pass/pass in B is HARM/HARM in D. MET.
+- `21 casual` is P in all four runs, so 42b's HARM/HARM did not reproduce under D. `34` (every phrasing) and `11` (replan) are identical across all four.
+- Rows that differ between arms swap in both directions (for example 18 canonical B HH -> D PP, 33 canonical B PP -> D MM). That spread is what run-to-run noise looks like here.
+- Transcripts: logs/chat-probe-2026-09-17T10-46-51 (B r1), 10-53-53 (D r1), 11-00-39 (B r2), 11-07-23 (D r2). Grader: `local/q42c/grade.js`.
+
+**Shipped:** the rolled-back rule in `tools.js` now reads "resend what CAN succeed (swap the failed one for any call its error names), and say in 'reply' what you could not do." Prompt lengths are unchanged (39797 / 58927). The shas are re-pinned in `tests/test-prompt-rules.js` with the reason. 0.12.45. The case for shipping is 12K: step 34 went from 23 to 31 of 40 (42b), and the 12K matrix mean from 71 to 73.5 against 40c. 16K is neutral.
+
+**Assumed:**
+1. The shipped-B tools.js (`local/q42b/tools-B.js`) was byte-identical to HEAD's before the runs (cmp checked), so D = HEAD plus the two rule lines (diff checked).
+2. The 42b 12K numbers stand without a same-night 12K B rerun. 42c's bar only asked for 16K.
+
+**Needs a human eye:** none new. NEXT UP 43 (background runners surviving the reap) is still open.

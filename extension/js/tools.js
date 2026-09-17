@@ -905,8 +905,8 @@
         "- A result marked \"ROLLED BACK\" means the WHOLE round was undone",
         "  because one of its commands failed: nothing from it exists, not",
         "  even the commands that reported ok. Your NEXT reply must do two",
-        "  things — resend the commands that CAN succeed (without the one",
-        "  that failed), and say plainly in 'reply' what you could not do.",
+        "  things — resend what CAN succeed (swap the failed one for any call",
+        "  its error names), and say in 'reply' what you could not do.",
         "  Never report a rolled-back command as created/added/applied, and",
         "  never stop just because one part is impossible: do the rest."
       ] },
