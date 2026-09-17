@@ -562,6 +562,30 @@ function applyStepSettings(patch) {
   return function restore() { for (const k in saved) s[k] = saved[k]; };
 }
 
+// Under --reuse-server the probe's Llama never started anything, so it
+// reads "stopped" and the VRAM arbiter sees no chat model at all: every
+// planHandoff answers "concurrent". NEXT UP 45 (2026-09-17): step 14's
+// 8 GB / pause-never refusal "failed" that way, SDXL rendering beside a
+// 32B the arbiter could not see. Adopting the reused server is only safe
+// when the step turns pausing OFF: a "never" plan cannot hand off, so
+// nothing calls Llama.stop on a server this process does not own (a
+// no-op) and then Llama.start on a port that is still taken. Pure over
+// its arguments; returns the restore.
+function adoptReusedServer(llama, reuse, props, patch) {
+  const modelPath = props && props.model_path;
+  if (!reuse || !modelPath || !patch || patch.comfyPauseLlm !== "never" ||
+      llama.getState() === "running") {
+    return function () {};
+  }
+  const getState = llama.getState, getCurrentModel = llama.getCurrentModel;
+  llama.getState = function () { return "running"; };
+  llama.getCurrentModel = function () { return modelPath; };
+  return function restore() {
+    llama.getState = getState;
+    llama.getCurrentModel = getCurrentModel;
+  };
+}
+
 // The panel shows the arbiter's pause/resume and ComfyUI's progress in
 // its status line; here they belong in the transcript, or a step that
 // spends two minutes looks like a hang.
@@ -2484,6 +2508,7 @@ const STEPS = [
         "\\b(?:can(?:no|')?t|cannot|could\\s?n['o]t|unable|" +
         "did\\s?n['o]t|was\\s?n['o]t|is\\s?n['o]t|not able|no room|" +
         "not enough|insufficient|refus\\w*|blocked|skipped|" +
+        "more (?:vram|gpu memory|memory) than (?:is )?(?:currently )?available|" +
         "nothing was (?:started|generated)|" +
         "did not (?:start|generate|run))\\b", "i");
       const claimed = new RegExp(
@@ -4057,7 +4082,13 @@ function main() {
     aeRead(READ_COMP, function (before) {
       aeRead(SIG_FN + " return sig();", function (sigBefore) {
         const runsBefore = probeRuns;
-        const restoreSettings = applyStepSettings(step.settings);
+        const restoreStepSettings = applyStepSettings(step.settings);
+        const restoreLlama = adoptReusedServer(Llama, OPT.reuseServer,
+                                               SERVER_PROPS, step.settings);
+        const restoreSettings = function () {
+          restoreLlama();
+          restoreStepSettings();
+        };
         sendMessage(run.say, function (round) {
           aeRead(READ_COMP, function (state, readErr) {
             const ctx = { before: before && before.found ? before : null,
@@ -4278,7 +4309,7 @@ function main() {
 if (require.main === module) {
   main();
 } else {
-  module.exports = { STEPS, parseSteps, squares, transcriptHeader, probePromptOpts, toolDocsLabel, describeServerProps, undoProbe, SIG_FN, READ_COMP,
+  module.exports = { STEPS, parseSteps, squares, transcriptHeader, adoptReusedServer, probePromptOpts, toolDocsLabel, describeServerProps, undoProbe, SIG_FN, READ_COMP,
                      bridgeWrapper, sweepImports, samePath, rememberGenerated,
                      generated, runPrepare, sweepScript, rememberPrecomp,
                      precomps, toolEntry, rigPlan, rigScript, resetHistory,

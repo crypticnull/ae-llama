@@ -893,6 +893,13 @@ assert(refused.check({}, refusalCtx()) === null,
   assert(v && /impersonated card size/.test(v),
          "an unlabelled fictional card size fails: " + v);
 }
+// NEXT UP 45 field capture (2026-09-17, 32B, reused server): an honest
+// decline worded as a shortage, after an opening "Generating ..." line.
+assert(refused.check({}, refusalCtx({ replies: [
+  "Generating a blue ceramic mug on a wooden table...",
+  "The generation requires more VRAM than currently available. Please " +
+  "pause the chat during generation or stop the chat server and try again."
+] })) === null, "a shortage worded as more VRAM than available is a decline");
 {
   const v = refused.check({}, refusalCtx({ chatState: "stopped" }));
   assert(v && /cost the chat model/.test(v),
@@ -3918,6 +3925,36 @@ function icons(state) {
            bad.join(" ") + ": status " + r.status + ", stderr " + r.stderr + ")");
   }
   fsR.rmSync(tmp, { recursive: true, force: true });
+}
+
+// NEXT UP 45: under --reuse-server the probe's Llama reads "stopped", so the
+// arbiter saw no chat model and step 14 let SDXL run beside a 32B. The
+// probe adopts the reused server only for a pause-"never" step.
+{
+  const mk = function () {
+    return { getState: function () { return "stopped"; },
+             getCurrentModel: function () { return ""; } };
+  };
+  const props = { model_path: "C:/m/Qwen2.5-32B.gguf" };
+  const never = { vramOverrideGB: 8, comfyPauseLlm: "never" };
+  let L = mk();
+  const restore = probe.adoptReusedServer(L, true, props, never);
+  assert(L.getState() === "running" &&
+         L.getCurrentModel() === "C:/m/Qwen2.5-32B.gguf",
+         "a pause-never step on a reused server shows the arbiter the loaded model");
+  restore();
+  assert(L.getState() === "stopped" && L.getCurrentModel() === "",
+         "the adoption is undone after the step");
+  const cases = [[false, props, never, "no --reuse-server"],
+                 [true, null, never, "no /props answer"],
+                 [true, props, { comfyPauseLlm: "auto" },
+                  "pause auto (a handoff would stop/start a server the probe does not own)"],
+                 [true, props, null, "a step with no settings"]];
+  for (const c of cases) {
+    L = mk();
+    probe.adoptReusedServer(L, c[0], c[1], c[2]);
+    assert(L.getState() === "stopped", "not adopted: " + c[3]);
+  }
 }
 
 console.log(failed ? "\n" + failed + " assertion(s) failed"

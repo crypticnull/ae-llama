@@ -28545,3 +28545,24 @@ After the CLI exited, the reap selected nothing and the runner kept going. That 
 3. The doc still says `workflow: string` (required), which is probably WHY the model invents one. Making it `workflow?:` is +1 char but a prompt change needing a matrix; not taken, since the code now absorbs the invented names. Not filed: the rounds it would save are already saved.
 
 **Needs a human eye:** none.
+
+## 2026-09-17 (local session) - step 14's "arbiter ran the job" was the probe's --reuse-server hiding the chat model; the arbiter was right (NEXT UP 45)
+
+**Item:** NEXT UP 45, the first open row whose needs were met (1a, 8, 5a-4e, 5a-5b/c, 5c, 6b are owner calls; 11d is marked "only if the owner wants more headroom"; 40d is a minor bump). Pass started ~08:18 EDT under the owner's `run-local-agent.ps1` loop (-UntilHour 9), so AE and the chat model were in scope. AfterFX was running and was left running; the 32B llama-server on 8737 (up since 02:36) was reused and left up.
+
+**Harness:** 777/777 at the start. Nothing in `extension/` changed, so it was not re-run and there is **no bump**.
+
+**Cause, from the code and the transcript header:** the failing run (`logs/chat-probe-2026-09-17T11-42-50.md`) was `server (reused)`. Under `--reuse-server` the probe's `Llama` never starts anything, so `Llama.getState()` is "stopped". `VramArbiter.planFor` -> `chatLoadedMBNow` -> `running: false` -> `Tiers.planHandoff` returns "concurrent" ("the chat model is not loaded") before it even looks at the pause mode. The 2026-09-02 run that DID refuse (`06-44-54`) started its own server. So neither of 45's two guesses was right: SDXL was not about to fit (20 GB chat + 6.5 GB + 7.2 GB reserve vs an 8 GB override refuses), and the arbiter is not stale. The probe could not show it a chat model.
+
+**Changed (scripts/tests only):**
+- `scripts/chat-probe.js adoptReusedServer(llama, reuse, props, patch)`: for the length of one step, with `--reuse-server`, a `/props` model_path, and the step setting `comfyPauseLlm: "never"`, `Llama.getState` answers "running" and `getCurrentModel` answers the server's own model path. Restored with the step settings. Pausing must be OFF for this: a "never" plan can only be concurrent or refuse, so nothing calls `Llama.stop` on a server this process does not own, or `Llama.start` on a port that is still taken.
+- Step 14's `declined` phrase list gains "more (vram|gpu memory|memory) than (is) (currently) available". With the arbiter fixed, the 32B's real relay was "The generation requires more VRAM than currently available. Please pause the chat during generation or stop the chat server and try again." That is an honest decline, and the judge failed it.
+- `tests/test-chat-probe.js`: adoption on/off cases (no reuse, no props, pause auto, no settings) + restore; the field relay is a pass case. 755 ok.
+
+**Real AE, `chat-probe --reuse-server --port 8737 --steps 14`:** the first run after the adoption refused correctly ("needs ~2 GB and the chat model holds ~20 GB of the card's 8 GB (VRAM override), with ~7.2 GB held back...") and failed only on the phrase list (`12-21-52`). After the phrase: **3/3 pass** (`12-22-37`, `12-22-46`, `12-23-07`). The refused workflows were "Stable Diffusion" -> SD15 (~2 GB), "img2img" -> unknown, then SDXL (~6.5 GB), and "stable_diffusion" -> SD15. The chat model stayed loaded each time.
+
+**Assumed:**
+1. Adopting the server only for pause-"never" steps is enough for 45. Steps that generate under "auto" (13, and others) still see no chat model under `--reuse-server`, so they always run concurrently and never exercise the handoff. On the 32 GB card that has been harmless, but those runs say nothing about pausing. Filed as NEXT UP 45a, not fixed here: an auto handoff would stop a server the probe does not own.
+2. Widening the phrase list is not loosening the test. The bar has always been a real 32B sentence, and this is one.
+
+**Needs a human eye:** none.
