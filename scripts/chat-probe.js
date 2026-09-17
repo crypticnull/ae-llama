@@ -35,6 +35,18 @@
  *   node scripts/chat-probe.js --temperature 0  # override, in memory only
  *   node scripts/chat-probe.js --reuse-server --port 8791
  *                                  # a server beside the panel's own (§24d)
+ *   node scripts/chat-probe.js --variants --resume logs/chat-probe-X.partial.jsonl
+ *                                  # carry on after a killed run (NEXT UP 1)
+ *
+ * RESUME. Every finished run is appended to logs/chat-probe-<stamp>
+ * .partial.jsonl the moment it is judged, so a pass the loop kills at its
+ * 45-minute bound leaves the runs it finished. --resume <that file>, with
+ * the SAME flags, skips them and writes one transcript covering both.
+ * Flags that change the measurement (model, window, routing, steps...)
+ * must match the file, or it is refused: two configurations in one table
+ * is a result nobody can grade. A run that inherits the comp or the
+ * conversation from the run before it cannot start from a fresh sweep, so
+ * the resume backs up to the last run that rebuilds its own world.
  *
  * VARIANTS. --variants runs each selected step's canonical sentence AND
  * every paraphrase it declares (casual / vague / typo'd), each as its own
@@ -139,6 +151,9 @@ const OPT = {
   isolate: argv.indexOf("--isolate") !== -1,
   carryHistory: argv.indexOf("--carry-history") !== -1,
   variants: argv.indexOf("--variants") !== -1,
+  // A .partial.jsonl a killed run left behind: carry on from it.
+  resume: argv.indexOf("--resume") === -1 ? null
+    : (argValue("--resume") || ""),
   // Measure the SHIPPED DEFAULTS on purpose, when no settings file is
   // findable. Never a convenience: without it a probe that cannot see
   // this machine's settings refuses rather than reporting defaults as
@@ -492,6 +507,26 @@ if (argv.indexOf("--prompt-mode") !== -1 &&
     OPT.promptMode !== "compact" && OPT.promptMode !== "full") {
   console.error("--prompt-mode wants compact or full, got " + OPT.promptMode);
   process.exit(2);
+}
+
+// --resume <file>: refused before AE or a model is touched when there is
+// nothing readable to resume from.
+if (require.main === module && OPT.resume !== null) {
+  let problem = null;
+  if (!OPT.resume) problem = "no file given";
+  else if (!fs.existsSync(OPT.resume)) problem = "no such file: " + OPT.resume;
+  else {
+    const parsed = readPartial(fs.readFileSync(OPT.resume, "utf8"));
+    if (parsed.error) problem = parsed.error;
+  }
+  if (problem) {
+    const logs = path.join(ROOT, "logs");
+    const found = fs.existsSync(logs) ? fs.readdirSync(logs)
+      .filter(f => /\.partial\.jsonl$/.test(f)) : [];
+    console.error("--resume wants a chat-probe .partial.jsonl — " + problem +
+                  "; partial files in logs/: " + (found.join(", ") || "none"));
+    process.exit(2);
+  }
 }
 
 // --route auto|all: in-memory like --ctx, so a probe never rewrites the
@@ -3711,6 +3746,89 @@ function transcriptHeader(stamp, s, opt, serverProps) {
   return out;
 }
 
+/*
+ * RESUME (NEXT UP 1). Pure, so tests/test-chat-probe.js pins them.
+ *
+ * A run's key is its POSITION in the expanded selection plus what it
+ * says: a paraphrase edited between the kill and the resume is a
+ * different measurement and is run again, not reused.
+ */
+function runKey(run, position) {
+  return position + "|" + (run.index + 1) + "|" + run.phrasing + "|" + run.say;
+}
+
+// What must be equal for two runs to belong in one table.
+function partialHeader(opt, s) {
+  return { model: opt.model || s.modelPath, ctx: s.ctxSize,
+           temperature: s.temperature, maxRounds: s.maxRounds,
+           routing: s.promptRouting || "all",
+           promptMode: opt.promptMode || null, steps: opt.steps || null,
+           variants: !!opt.variants, isolate: !!opt.isolate,
+           carryHistory: !!opt.carryHistory, port: opt.port || null,
+           label: opt.label || null };
+}
+
+/** Field-by-field differences, each naming both values. */
+function headerMismatch(saved, now) {
+  const out = [];
+  for (const k of Object.keys(now)) {
+    if (JSON.stringify(saved[k]) !== JSON.stringify(now[k])) {
+      out.push(k + ": file " + JSON.stringify(saved[k]) + ", now " +
+               JSON.stringify(now[k]));
+    }
+  }
+  return out;
+}
+
+/**
+ * A partial file: one {"header"} line, then one {"row"} line per judged
+ * run. A torn LAST line is what a kill mid-write leaves and is dropped;
+ * a bad line anywhere else means the file is not what it claims.
+ */
+function readPartial(text) {
+  const lines = String(text).split(/\r?\n/).filter(l => l.trim());
+  let header = null;
+  const rows = [];
+  for (let i = 0; i < lines.length; i++) {
+    let obj;
+    try { obj = JSON.parse(lines[i]); } catch (e) {
+      if (i === lines.length - 1 && header) break;
+      return { error: "line " + (i + 1) + " is not JSON" };
+    }
+    if (i === 0) {
+      if (!obj || !obj.header) return { error: "line 1 is not a probe header" };
+      header = obj.header;
+    } else if (obj && obj.row && typeof obj.row.key === "string") {
+      rows.push(obj.row);
+    } else {
+      return { error: "line " + (i + 1) + " is not a probe row" };
+    }
+  }
+  if (!header) return { error: "the file is empty" };
+  return { header: header, rows: rows };
+}
+
+/**
+ * Where a resumed selection starts. The first run with no saved row is
+ * the gap; a run there that does not rebuild its own world (not an
+ * --isolate fromRig step, or a `carry` step that needs the turn before
+ * it) inherited state a fresh sweep has erased, so back up to the last
+ * run that does. Saved rows before that point are kept, the rest re-run.
+ */
+function resumePoint(chosen, savedKeys, isolate) {
+  const have = new Set(savedKeys);
+  let gap = chosen.length;
+  for (let p = 0; p < chosen.length; p++) {
+    if (!have.has(runKey(chosen[p], p))) { gap = p; break; }
+  }
+  let start = gap;
+  while (start > 0 && start < chosen.length &&
+         !(isolate && chosen[start].step.fromRig && !chosen[start].step.carry)) {
+    start--;
+  }
+  return { gap: gap, start: start };
+}
+
 function writeTranscript(rows) {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const dir = path.join(ROOT, "logs");
@@ -3845,6 +3963,38 @@ function main() {
 
   const chosen = variantRuns(pickSteps(), OPT.variants);
   const rows = [];
+  // Every judged run goes to the partial file as it lands (see RESUME).
+  const header = partialHeader(OPT, Settings.get());
+  let first = 0, partialFile = OPT.resume;
+  if (OPT.resume) {
+    const saved = readPartial(fs.readFileSync(OPT.resume, "utf8"));
+    const diff = headerMismatch(saved.header, header);
+    if (diff.length) {
+      console.error("!! --resume " + OPT.resume + " was measured with " +
+                    "different flags — " + diff.join("; "));
+      process.exit(2);
+    }
+    const byKey = {};
+    for (const r of saved.rows) byKey[r.key] = r;
+    const pt = resumePoint(chosen, Object.keys(byKey), OPT.isolate);
+    for (let p = 0; p < pt.start; p++) rows.push(byKey[runKey(chosen[p], p)]);
+    first = pt.start;
+    console.log("-- resuming " + OPT.resume + ": " + rows.length + " of " +
+                chosen.length + " run(s) kept" +
+                (pt.start < pt.gap ? ", backing up " + (pt.gap - pt.start) +
+                  " run(s) to one that rebuilds its own world" : ""));
+  } else {
+    const dir = path.join(ROOT, "logs");
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    partialFile = path.join(dir, "chat-probe-" + new Date().toISOString()
+      .replace(/[:.]/g, "-").slice(0, 19) + ".partial.jsonl");
+  }
+  // Rewritten, not appended: saved rows past the resume point are stale.
+  fs.writeFileSync(partialFile, [{ header: header }].concat(
+    rows.map(r => ({ row: r }))).map(o => JSON.stringify(o) + "\n").join(""),
+    "utf8");
+  console.log("-- partial results: " + partialFile +
+              " (a killed run continues with --resume <that file>)");
   if (OPT.variants) {
     const stepCount = new Set(chosen.map(r => r.index)).size;
     console.log("-- variants: " + chosen.length + " run(s) over " +
@@ -3867,7 +4017,7 @@ function main() {
     aeRead(sweepScript(), function (res) {
       console.log("-- cleared " + ((res && res.removed) || 0) +
                   " leftover item(s)\n");
-      next(0);
+      next(first);
     });
   });
 
@@ -3959,11 +4109,15 @@ function main() {
               say("info", "nothing in the comp moved — harmless");
             }
           } else say("verdict", "pass (" + summary(ctx) + ")");
-          rows.push({ index: idx, title: step.title, verdict: verdict,
-                      phrasing: run.phrasing, say: run.say, grade: grade,
-                      changes: changes,
-                      tools: (ctx.tools || []).map(t => t.tool),
-                      lines: transcript.slice(mark) });
+          const row = { key: runKey(run, k),
+                        index: idx, title: step.title, verdict: verdict,
+                        phrasing: run.phrasing, say: run.say, grade: grade,
+                        changes: changes,
+                        tools: (ctx.tools || []).map(t => t.tool),
+                        lines: transcript.slice(mark) };
+          rows.push(row);
+          fs.appendFileSync(partialFile, JSON.stringify({ row: row }) + "\n",
+                            "utf8");
           next(k + 1);
         }
         function summary(ctx) {
@@ -4122,6 +4276,9 @@ if (require.main === module) {
                      // the acceptance gate — all pure, all testable with
                      // neither AE nor a model.
                      compDiff, gradeRun, variantRuns, gradeMatrix,
+                     // Resume after a killed run (NEXT UP 1).
+                     runKey, partialHeader, headerMismatch, readPartial,
+                     resumePoint,
                      // For scripts/context-budget-probe.js: the REAL round
                      // loop, the REAL panel modules and the REAL AE bridge,
                      // so the context measurements are taken on the product

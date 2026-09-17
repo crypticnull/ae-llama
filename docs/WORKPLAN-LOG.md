@@ -28103,3 +28103,30 @@ Table, transcripts and the row detail are in `docs/measured/prompt-routing-2026-
 3. The six transcripts were graded by the OLD step-19 judge, and a pass row records no mask state, so step-19 passes stand as graded.
 4. The flip is a MINOR bump and is not this pass's to take whatever the verdict.
 5. The transcript headers name the 32B from settings, but `server (reused)` names the 7B that actually answered. I trust the latter.
+
+## 2026-09-17 (local session) - chat-probe survives the 45-minute bound: each run lands in a .partial.jsonl, --resume carries on (NEXT UP 1, §20b)
+
+**Item:** NEXT UP 1, the first row with its needs met ("nothing"). The pass started 03:30 EDT. AfterFX was running and was left running. The panel's own server on 8737 was not touched.
+
+**Harness: 775/775 PASSED** at the start. Nothing under `extension/` changed, so it was not re-run and **no bump**.
+
+**The problem:** two measurement passes (2026-09-16 pass 24, the KV accuracy gate; 2026-09-17 pass 10, the routing matrix) were killed at 45:00 and lost every run they had finished. Both instruments are `chat-probe.js --variants` matrices, so one change covers both.
+
+**Changed** (`scripts/chat-probe.js`):
+- Every judged run is appended to `logs/chat-probe-<stamp>.partial.jsonl` as soon as it lands. The first line is a header of the flags that change the measurement: model, ctx, temperature, maxRounds, routing, prompt mode, steps, variants, isolate, carry-history, port and label. The path is printed before the first run.
+- `--resume <file>` with the same flags skips the saved runs. The final transcript still covers every run.
+  - A header mismatch refuses with exit 2 and names both values.
+  - A missing, empty or corrupt file refuses before AE is touched and lists the partial files in `logs/`.
+  - A torn LAST line, which is what a kill mid-write leaves, is dropped.
+- Run key = position + step + phrasing + sentence, so a paraphrase edited since the kill is run again.
+- **Resume point:** a run that inherits the comp (not an `--isolate` fromRig step) or the conversation (`carry`) cannot start from the probe's opening sweep. The resume backs up to the last run that rebuilds its own world, and saved rows from there on are re-run. Without `--isolate`, it starts over.
+
+**Tests:** 19 new asserts in `tests/test-chat-probe.js`: resume point (5 shapes), key identity, readPartial (torn, corrupt, empty, headerless), header match and mismatch, and three spawned exit-2 refusals. The suite is green.
+
+**Real-path check:** a mismatched partial file given to `--variants --steps 15 --resume` refused with exit 2 inside `main()`, after settings and store resolution and before any model start. A kill-and-resume of a REAL matrix was NOT run: it needs a chat server beside the panel's, and the only one up was the panel's own. The first long measurement pass to use it is the live proof. If its resumed transcript is wrong, that is a new row.
+
+**Filed:** row 1 is struck, with its usage: one matrix per pass; resume the newest matching partial after a kill; record finished transcripts in the item's `docs/measured/` file as they land.
+
+**Assumed:**
+1. "Split them" meant a resumable instrument, not rewording rows 20 and 40. Their commands work unchanged and now leave partial files.
+2. Backing up to a self-contained run is better than refusing, because it costs a few runs rather than the whole resume.

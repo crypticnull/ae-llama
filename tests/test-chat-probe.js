@@ -3775,5 +3775,87 @@ function icons(state) {
   }
 }
 
+// ---------------------------------------------- resume after a kill (NEXT UP 1)
+//
+// Two measurement passes died on the loop's 45-minute bound and took every
+// finished run with them. The probe now appends each judged run to a
+// .partial.jsonl and --resume carries on. What must hold: a torn last line
+// (the kill) is survivable, flags that change the measurement refuse, and a
+// run that inherited the comp or the conversation is never started cold.
+{
+  const fsR = require("fs"), pathR = require("path"), osR = require("os");
+  const cpR = require("child_process");
+  const run = (i, ph, say, step) => ({ index: i, phrasing: ph, say: say,
+                                       step: step });
+  const rig = { fromRig: true }, built = {}, carry = { fromRig: true, carry: true };
+  const chosen = [run(0, "canonical", "a", rig), run(0, "casual", "a2", rig),
+                  run(1, "canonical", "b", built), run(2, "canonical", "c", built),
+                  run(3, "canonical", "d", rig), run(4, "canonical", "e", carry)];
+  const keys = n => chosen.slice(0, n).map((r, p) => probe.runKey(r, p));
+
+  let pt = probe.resumePoint(chosen, keys(2), true);
+  assert(pt.gap === 2 && pt.start === 1,
+         "a gap at a run that inherits the comp backs up to the last rig " +
+         "rebuild (got " + JSON.stringify(pt) + ")");
+  pt = probe.resumePoint(chosen, keys(4), true);
+  assert(pt.gap === 4 && pt.start === 4,
+         "a gap at a fromRig run starts right there (got " + JSON.stringify(pt) + ")");
+  pt = probe.resumePoint(chosen, keys(5), true);
+  assert(pt.start === 4,
+         "a carry run backs up to the turn it refers to (got " + JSON.stringify(pt) + ")");
+  pt = probe.resumePoint(chosen, keys(6), true);
+  assert(pt.gap === 6 && pt.start === 6, "a finished file resumes nothing");
+  pt = probe.resumePoint(chosen, keys(4), false);
+  assert(pt.start === 0,
+         "without --isolate every run inherits the one before, so it starts over");
+  const edited = keys(4);
+  edited[1] = probe.runKey(run(0, "casual", "a2 reworded", rig), 1);
+  pt = probe.resumePoint(chosen, edited, true);
+  assert(pt.gap === 1 && pt.start === 1,
+         "a paraphrase edited since the kill is run again, not reused");
+  assert(probe.runKey(chosen[0], 0) !== probe.runKey(chosen[0], 1),
+         "the same sentence at two positions is two runs");
+
+  const head = JSON.stringify({ header: { ctx: 16384 } });
+  const row = k => JSON.stringify({ row: { key: k, index: 0 } });
+  let p = probe.readPartial(head + "\n" + row("0|1|canonical|a") + "\n" +
+                            '{"row":{"key":"1|1|cas');
+  assert(!p.error && p.rows.length === 1,
+         "a torn last line (the kill mid-write) is dropped, the rest kept");
+  p = probe.readPartial(head + "\r\n" + "garbage\r\n" + row("x") + "\r\n");
+  assert(/line 2 is not JSON/.test(p.error || ""),
+         "a bad line in the middle refuses the file (got " + JSON.stringify(p) + ")");
+  assert(/empty/.test(probe.readPartial("").error || ""), "an empty file refuses");
+  assert(/line 1 is not a probe header/.test(
+           probe.readPartial(row("x")).error || ""),
+         "a file with no header refuses");
+
+  const s = { modelPath: "m.gguf", ctxSize: 16384, temperature: 0,
+              maxRounds: 6, promptRouting: "auto" };
+  const h1 = probe.partialHeader({ variants: true, isolate: true, steps: "1-11" }, s);
+  assert(probe.headerMismatch(h1, probe.partialHeader(
+           { variants: true, isolate: true, steps: "1-11" }, s)).length === 0,
+         "the same flags match");
+  const d = probe.headerMismatch(h1, probe.partialHeader(
+    { variants: true, isolate: true, steps: "1-11" },
+    Object.assign({}, s, { ctxSize: 12288 })));
+  assert(d.length === 1 && /ctx: file 16384, now 12288/.test(d[0]),
+         "a different window refuses and names both values (got " + d + ")");
+
+  const script = pathR.join(__dirname, "../scripts/chat-probe.js");
+  const tmp = fsR.mkdtempSync(pathR.join(osR.tmpdir(), "aell-resume-"));
+  const junk = pathR.join(tmp, "junk.partial.jsonl");
+  fsR.writeFileSync(junk, "not json\nat all\n");
+  for (const bad of [["--resume", pathR.join(tmp, "missing.jsonl")],
+                     ["--resume", junk], ["--resume"]]) {
+    const r = cpR.spawnSync(process.execPath, [script].concat(bad),
+                            { encoding: "utf8", timeout: 20000 });
+    assert(r.status === 2 && /--resume wants a chat-probe \.partial\.jsonl/.test(r.stderr),
+           "an unusable --resume is refused with exit 2 before touching AE (" +
+           bad.join(" ") + ": status " + r.status + ", stderr " + r.stderr + ")");
+  }
+  fsR.rmSync(tmp, { recursive: true, force: true });
+}
+
 console.log(failed ? "\n" + failed + " assertion(s) failed"
                    : "\nall chat-probe verdict tests passed");
