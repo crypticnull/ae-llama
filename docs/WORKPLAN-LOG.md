@@ -28418,3 +28418,33 @@ Gate MET (canonical >= 6, total >= B+4, typo HARM <= B). B reproduces 42a's B (2
 2. The 42b 12K numbers stand without a same-night 12K B rerun. 42c's bar only asked for 16K.
 
 **Needs a human eye:** none new. NEXT UP 43 (background runners surviving the reap) is still open.
+
+## 2026-09-17 (local session) - a Git Bash background runner is orphaned the moment it starts, so no snapshot could see it: passes are now tagged by environment (NEXT UP 43)
+
+**Item:** NEXT UP 43, the first open row whose needs were met (1a, 8, 5a-4e, 5a-5b/c, 5c, 6b need the owner; 11d is optional; 40d needs owner/interactive). Loop pass 23, started ~07:15 EDT under the owner's `run-local-agent.ps1` loop. AfterFX was running and was left running.
+
+**Harness:** 777/777 at the start; **777/777** again after the change. Nothing under `extension/` changed, so **no bump**.
+
+**Why pass 20's runner survived (reproduced, not reasoned).** `local/q43/repro.ps1` stands in for the loop: a guard job snapshots `Get-AellPassTree` every ~0.8 s, then a headless `claude -p --model haiku` makes ONE background Bash call, `bash local/q43/runner.sh` (node children), and ends its turn. The timeline shows the tool shell under the CLI as a member, but the runner bash's parent pid (52020) was ALREADY GONE while the CLI was still alive. Git Bash EXECs `bash script.sh` into a new Windows process and the middle one exits at once. So:
+- no snapshot can see the runner under the CLI, at any interval (the 15 s cadence was never the cause);
+- it is not a named probe, so the orphan rule skips it;
+- its node/llama-server children have a LIVE parent (the runner), so they are not orphans either.
+After the CLI exited, the reap selected nothing and the runner kept going. That is pass 20 exactly. The reaps logged at 03:24 and 05:01 worked because those runners were `bash -c "... node ..."` chains with no bash-to-bash exec.
+
+**Fix (scripts only):**
+- `run-local-agent.ps1` sets `$env:AELL_PASS_TAG = <loopPID>-<i>-<ticks>` after the beat and guard jobs start, right before the CLI pipeline, and clears it as soon as the CLI returns. Everything the pass starts inherits it.
+- `scripts/lib/pass-tree.ps1` rule 3, `Get-AellPassTaggedKeys`: reads each process created since the pass began (never protected processes or the loop) from its PEB (C# `AellProcEnv`, compiled on first use). The reap passes `-Tagged`, and the reason logged is `pass tag`. AE/CEP/backend are still refused whatever they carry. A pass that cold-launches AE tags it too.
+- **Second measurement changed the rule.** In the first end-to-end run only the node child was selected. Git Bash processes that bash spawned have a minimal Windows environment block (1 777 chars, no tag; the POSIX environment lives inside msys), while native children (node 4 486 chars) carry it. So the rule also takes a tagged process's live ANCESTORS while each was created since the pass began and is not protected (an old parent such as explorer ends the walk), plus the live DESCENDANTS of everything taken.
+- Pass start: a salvaged dirty tree that touches `extension/` now logs `WARNING: extension/ is dirty at pass start ...`.
+
+**Verified:**
+- End-to-end with the real CLI (`local/q43/repro3.out`): targets were the 2 runner bashes and the node, all `pass tag`. Nothing was left alive and nothing else was targeted (the owner's desktop app and this session's own shells were untouched).
+- `tests/test-pass-tree.js`: 4 new static checks, plus selftest case 5 (the pass-20 shape: without the tag nothing is reaped, with it 203-208 and a tagged child of an old parent are reaped; never AE/CEP/panel server even when tagged, never the old parent, never the owner's own orphaned runner, another pass's tag matches nothing) and case 6 (the real PEB reader on a real child, Windows only). `test-powershell-syntax`, `test-claude-procs`, and the loop tests (`heartbeat`, `teardown`, `exit-reason`, `pass-timeout`, `pass-invocation`, `log-append`, `harness-loop-tee`, `host-dialogs`) all pass.
+
+**Limits, written down rather than filed:** a runner caught at the reap with NO native child alive (only msys `sleep`/`curl`/`cp` running) has nothing tagged to anchor on. The chat-probe and llama-server that do the damage are native and live for the whole run, so the window is the gap between two commands.
+
+**Assumed:**
+1. PEB offsets (ProcessParameters +0x20, Environment +0x80, EnvironmentSize +0x3F0) hold for 64-bit Windows 10/11. Checked on this machine; a read that fails answers "untagged", never "tagged".
+2. Reading other same-user processes' memory with PROCESS_QUERY_LIMITED_INFORMATION and PROCESS_VM_READ is acceptable in the loop. It reads only processes created since the pass began.
+
+**Needs a human eye:** the RUNNING loop keeps the code it parsed at start. The fix is live from the next `run-local-agent.ps1` start. `loop-salvage-20260917-*` stashes are still in `git stash list`.

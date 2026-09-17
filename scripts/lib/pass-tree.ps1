@@ -22,6 +22,18 @@
 #  2. An ORPHAN rule for what started and was orphaned between two
 #     snapshots: a known probe (or llama-server, or an nvidia-smi sampling
 #     loop) created after the pass began whose parent is gone.
+#  3. A TAG (NEXT UP 43). The loop sets AELL_PASS_TAG in its own
+#     environment for exactly the life of the CLI pipeline, so everything
+#     the pass starts inherits it, and a process whose environment block
+#     carries this pass's tag is a member whatever its parentage says.
+#     Measured 2026-09-17: Git Bash running `bash script.sh` from a
+#     background tool call EXECs a new Windows process and the middle one
+#     exits at once, so the runner's parent pid is dead within
+#     milliseconds WHILE THE CLI IS STILL ALIVE. No snapshot can ever see
+#     it under the CLI, and a runner is not a named probe, so rules 1 and
+#     2 both missed pass 20's run34.sh, which then swapped tools.js and
+#     drove AE under pass 21. Its children have a LIVE parent (the
+#     runner), so they were not orphans either.
 #
 # NEVER reaped, whatever the snapshot says (Test-AellReapProtected):
 #  - After Effects and anything whose LIVE ancestry reaches it (CEP, the
@@ -160,6 +172,163 @@ function Import-AellPassTreeFile {
   return $n
 }
 
+# Rule 3's reader. CIM has no environment, so it is read out of the
+# process's PEB (ProcessParameters +0x20, Environment +0x80, its size
+# +0x3F0; 64-bit targets only). Compiled on first use, not at dot-source,
+# so the guard job and the stubbed suite never pay for it. Anything that
+# cannot be opened or read answers false: a tag we cannot see is not a
+# member.
+$script:AellProcEnvSource = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class AellProcEnv {
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern IntPtr OpenProcess(int access, bool inherit, int pid);
+  [DllImport("kernel32.dll")]
+  static extern bool CloseHandle(IntPtr h);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  static extern bool ReadProcessMemory(IntPtr h, IntPtr addr, byte[] buf, IntPtr size, out IntPtr read);
+  [DllImport("kernel32.dll")]
+  static extern bool IsWow64Process(IntPtr h, out bool wow);
+  [DllImport("ntdll.dll")]
+  static extern int NtQueryInformationProcess(IntPtr h, int cls, ref Pbi pbi, int len, out int retLen);
+  [StructLayout(LayoutKind.Sequential)]
+  struct Pbi { public IntPtr A; public IntPtr Peb; public IntPtr B; public IntPtr C; public IntPtr D; public IntPtr E; }
+
+  static bool Read(IntPtr h, IntPtr at, byte[] buf) {
+    IntPtr n;
+    return ReadProcessMemory(h, at, buf, (IntPtr)buf.Length, out n) && (long)n == buf.Length;
+  }
+
+  // The whole environment block of a 64-bit process, or null.
+  public static string Block(int pid) {
+    if (IntPtr.Size != 8) return null;
+    IntPtr h = OpenProcess(0x1000 | 0x0010, false, pid);
+    if (h == IntPtr.Zero) return null;
+    try {
+      bool wow;
+      if (IsWow64Process(h, out wow) && wow) return null;
+      Pbi pbi = new Pbi(); int rl;
+      if (NtQueryInformationProcess(h, 0, ref pbi, Marshal.SizeOf(pbi), out rl) != 0) return null;
+      byte[] p8 = new byte[8];
+      if (!Read(h, IntPtr.Add(pbi.Peb, 0x20), p8)) return null;
+      IntPtr pp = (IntPtr)BitConverter.ToInt64(p8, 0);
+      if (!Read(h, IntPtr.Add(pp, 0x80), p8)) return null;
+      IntPtr env = (IntPtr)BitConverter.ToInt64(p8, 0);
+      if (!Read(h, IntPtr.Add(pp, 0x3F0), p8)) return null;
+      long size = BitConverter.ToInt64(p8, 0);
+      if (size <= 0 || size > (4 << 20)) return null;
+      byte[] buf = new byte[size];
+      if (!Read(h, env, buf)) return null;
+      return Encoding.Unicode.GetString(buf);
+    } catch { return null; } finally { CloseHandle(h); }
+  }
+
+  public static bool HasEntry(int pid, string entry) {
+    string b = Block(pid);
+    if (b == null) return false;
+    return b.StartsWith(entry + "\0", StringComparison.OrdinalIgnoreCase) ||
+           b.IndexOf("\0" + entry + "\0", StringComparison.OrdinalIgnoreCase) >= 0;
+  }
+}
+'@
+
+function Test-AellProcessEnvEntry {
+  param([int]$ProcessId, [string]$Entry)
+  try {
+    if (-not ('AellProcEnv' -as [type])) {
+      Add-Type -TypeDefinition $script:AellProcEnvSource -ErrorAction Stop
+    }
+    return [bool][AellProcEnv]::HasEntry($ProcessId, $Entry)
+  } catch { return $false }
+}
+
+# The keys ("pid|created") of the processes this pass's tag proves are
+# ours. Protected processes and the loop are never read or added: AE
+# cold-launched by a pass inherits the tag too, and must still never be a
+# target. -Reader replaces the PEB read (the self-test's synthetic table).
+#
+# Reading the tag is not enough on its own. Measured 2026-09-17: a Git
+# Bash process that bash itself spawned (the exec'd runner, the subshell
+# of its `for` loop) has only a minimal Windows environment block, 1 777
+# chars with no AELL_PASS_TAG, while the node and llama-server it starts
+# carry the full one. So from each tagged process this also takes
+#  - its live ANCESTORS, while each was created since the pass began and
+#    is not protected (the runner bash above a tagged chat-probe; an old
+#    parent such as explorer ends the walk and is not taken), and
+#  - the live DESCENDANTS of everything taken (the runner's cp.exe),
+#    pruned at a protected process.
+function Get-AellPassTaggedKeys {
+  param(
+    $Table,
+    [string]$Entry,
+    [datetime]$PassStartedAt,
+    [int]$LoopId,
+    [scriptblock]$Reader = $null
+  )
+  $out = @{}
+  if (-not $Entry) { return $out }
+
+  $byId = @{}
+  $byParent = @{}
+  foreach ($p in $Table) {
+    $byId[[string]$p.ProcessId] = $p
+    $pk = [string]$p.ParentProcessId
+    if (-not $byParent.ContainsKey($pk)) { $byParent[$pk] = @() }
+    $byParent[$pk] += $p
+  }
+  $isNew = {
+    param($q)
+    return ([int]$q.ProcessId -gt 4 -and [int]$q.ProcessId -ne $LoopId -and
+            $null -ne $q.CreationDate -and
+            ([datetime]$q.CreationDate) -ge $PassStartedAt -and
+            -not (Test-AellReapProtected -Proc $q))
+  }
+  $taken = @{}
+  $add = {
+    param($q)
+    $taken[[string]$q.ProcessId] = $q
+  }
+
+  foreach ($p in $Table) {
+    if (-not (& $isNew $p)) { continue }
+    if ($Reader) { $has = [bool](& $Reader $p $Entry) }
+    else { $has = Test-AellProcessEnvEntry -ProcessId ([int]$p.ProcessId) -Entry $Entry }
+    if (-not $has) { continue }
+    & $add $p
+    $cur = $p
+    for ($hop = 0; $hop -lt 64; $hop++) {
+      $parent = $byId[[string]$cur.ParentProcessId]
+      if ($null -eq $parent -or -not (& $isNew $parent)) { break }
+      if (([datetime]$parent.CreationDate) -gt ([datetime]$cur.CreationDate)) { break }
+      & $add $parent
+      $cur = $parent
+    }
+  }
+
+  $queue = New-Object System.Collections.Queue
+  foreach ($q in @($taken.Values)) { $queue.Enqueue($q) }
+  while ($queue.Count -gt 0) {
+    $q = $queue.Dequeue()
+    $kids = $byParent[[string]$q.ProcessId]
+    if (-not $kids) { continue }
+    foreach ($c in $kids) {
+      if ($taken.ContainsKey([string]$c.ProcessId)) { continue }
+      if (-not (& $isNew $c)) { continue }
+      if ($null -ne $q.CreationDate -and
+          ([datetime]$c.CreationDate) -lt ([datetime]$q.CreationDate)) { continue }
+      & $add $c
+      $queue.Enqueue($c)
+    }
+  }
+
+  foreach ($q in @($taken.Values)) {
+    $out[([string]$q.ProcessId + '|' + (Get-AellCreatedKey -Proc $q))] = [string]$q.Name
+  }
+  return $out
+}
+
 # Does this process run one of the repo's GPU/AE probes, or a server or
 # sampler they leave behind? Only these qualify for the orphan rule.
 function Test-AellProbeProcess {
@@ -174,15 +343,17 @@ function Test-AellProbeProcess {
 }
 
 # What to kill at the end of a pass. Each result carries ProcessId, Name
-# and Reason ('pass tree' | 'orphaned probe'). -ExcludeIds are left for
-# the caller (the CLI processes, which the existing reap logs by name).
+# and Reason ('pass tree' | 'pass tag' | 'orphaned probe'). -Tagged is
+# Get-AellPassTaggedKeys. -ExcludeIds are left for the caller (the CLI
+# processes, which the existing reap logs by name).
 function Get-AellPassReapTargets {
   param(
     [hashtable]$Snapshot,
     $Table,
     [datetime]$PassStartedAt,
     [int]$LoopId,
-    [int[]]$ExcludeIds = @()
+    [int[]]$ExcludeIds = @(),
+    [hashtable]$Tagged = @{}
   )
   $byId = @{}
   foreach ($p in $Table) { $byId[[string]$p.ProcessId] = $p }
@@ -230,6 +401,13 @@ function Get-AellPassReapTargets {
       $out += New-Object PSObject -Property @{
         ProcessId = [int]$p.ProcessId; Name = [string]$p.Name
         Reason = 'pass tree'
+      }
+      continue
+    }
+    if ($Tagged.ContainsKey($key)) {
+      $out += New-Object PSObject -Property @{
+        ProcessId = [int]$p.ProcessId; Name = [string]$p.Name
+        Reason = 'pass tag'
       }
       continue
     }

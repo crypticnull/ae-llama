@@ -82,6 +82,68 @@ $snap2['106|' + (Get-AellCreatedKey -Proc $ae)] = 'AfterFX.exe'
 $t = @(Get-AellPassReapTargets -Snapshot $snap2 -Table $after -PassStartedAt (At 1) -LoopId 100)
 Ok (@($t | Where-Object { $_.ProcessId -eq 106 }).Count -eq 0) 'After Effects is never reaped, even if a snapshot lists it'
 
+# --- 5. the 2026-09-17 pass-20 shape (NEXT UP 43) ----------------------
+# A background tool call ran `bash run34.sh`. Git Bash exec'd the runner
+# into a NEW process and the middle one exited at once, so the runner's
+# parent was dead while the CLI still lived: never a snapshot member, not
+# a probe, and its children have a live parent. Only the tag finds them.
+$toolSh  = P 202 102 'bash.exe' 'bash -c "bash local/q42b/run34.sh"' 'C:\Program Files\Git\usr\bin\bash.exe' (At 5)
+$runner  = P 203 996 'bash.exe' 'bash local/q42b/run34.sh' 'C:\Program Files\Git\usr\bin\bash.exe' (At 5)
+$rProbe  = P 204 203 'node.exe' 'node scripts/chat-probe.js --steps 34' 'C:\Program Files\nodejs\node.exe' (At 6)
+$rSrv    = P 205 203 'llama-server.exe' 'llama-server.exe --port 8791' 'C:\x\llama-server.exe' (At 6)
+$rCp     = P 206 203 'cp.exe' 'cp local/q42b/tools-D.js extension/js/tools.js' 'C:\Program Files\Git\usr\bin\cp.exe' (At 7)
+$rSub    = P 207 203 'bash.exe' 'bash local/q42b/run34.sh' 'C:\Program Files\Git\usr\bin\bash.exe' (At 7)
+$rNode2  = P 208 207 'node.exe' 'node scripts/chat-probe.js --steps 34' 'C:\Program Files\nodejs\node.exe' (At 7)
+$oldPar  = P 220 1   'explorer.exe' 'C:\WINDOWS\explorer.exe' 'C:\WINDOWS\explorer.exe' (At -600)
+$fromOld = P 221 220 'notepad.exe' 'notepad.exe' 'C:\WINDOWS\notepad.exe' (At 9)
+$ownRun  = P 213 995 'bash.exe' 'bash my-own-script.sh' 'C:\Program Files\Git\usr\bin\bash.exe' (At 8)
+$ownKid  = P 214 213 'node.exe' 'node scripts/chat-probe.js' 'C:\Program Files\nodejs\node.exe' (At 8)
+$live20 = @($loop, $job, $cli, $toolSh, $ae, $cep, $panel, $runner, $rProbe, $rSrv, $rCp, $rSub, $rNode2, $oldPar, $fromOld, $ownRun, $ownKid)
+$tree20 = @(Get-AellPassTree -RootId 100 -Table $live20)
+$snap20 = @{}
+Merge-AellPassTree -Snapshot $snap20 -Tree $tree20
+Ok ((Ids $tree20) -eq '102,202') ('pass 20: the snapshot cannot see the exec''d runner (got ' + (Ids $tree20) + ')')
+$gone20 = @($loop, $job, $ae, $cep, $panel, $runner, $rProbe, $rSrv, $rCp, $rSub, $rNode2, $oldPar, $fromOld, $ownRun, $ownKid)
+$t = @(Get-AellPassReapTargets -Snapshot $snap20 -Table $gone20 -PassStartedAt (At 1) -LoopId 100)
+Ok ((Ids $t) -eq '') ('pass 20 WITHOUT the tag: nothing is reaped, which is the bug (got ' + (Ids $t) + ')')
+
+# Only NATIVE children carry the tag. Git Bash processes that bash spawned
+# hold a minimal environment block (measured 2026-09-17: 1 777 chars, no
+# AELL_PASS_TAG), so the runner bashes and cp read untagged here too.
+$taggedIds = @{ '204' = 1; '205' = 1; '208' = 1; '221' = 1; '106' = 1; '107' = 1; '108' = 1; '100' = 1 }
+$reader = { param($p, $entry) return ($entry -eq 'AELL_PASS_TAG=t20') -and $taggedIds.ContainsKey([string]$p.ProcessId) }
+$tagged = Get-AellPassTaggedKeys -Table $gone20 -Entry 'AELL_PASS_TAG=t20' -PassStartedAt (At 1) -LoopId 100 -Reader $reader
+$t = @(Get-AellPassReapTargets -Snapshot $snap20 -Table $gone20 -PassStartedAt (At 1) -LoopId 100 -Tagged $tagged)
+Ok ((Ids $t) -eq '203,204,205,206,207,208,221') ('pass 20 WITH the tag: the untagged runner bashes and cp go with the tagged node and server (got ' + (Ids $t) + ')')
+foreach ($keep in @(@(106,'After Effects a pass launched (tagged)'), @(107,'CEP (tagged)'),
+                    @(108,'the panel''s llama-server (tagged)'), @(100,'the loop'),
+                    @(220,'an old parent of a tagged process'), @(213,'the owner''s own orphaned runner'), @(214,'the owner''s own probe under it'))) {
+  Ok (@($t | Where-Object { $_.ProcessId -eq $keep[0] }).Count -eq 0) ('tag rule never reaps ' + $keep[1])
+}
+Ok (@($t | Where-Object { $_.Reason -ne 'pass tag' }).Count -eq 0) 'tag targets say "pass tag"'
+$t = @(Get-AellPassReapTargets -Snapshot $snap20 -Table $gone20 -PassStartedAt (At 1) -LoopId 100 `
+         -Tagged (Get-AellPassTaggedKeys -Table $gone20 -Entry 'AELL_PASS_TAG=other' -PassStartedAt (At 1) -LoopId 100 -Reader $reader))
+Ok ((Ids $t) -eq '') 'another pass''s tag matches nothing'
+
+# --- 6. the real PEB reader, on Windows only ---------------------------
+if ($env:OS -eq 'Windows_NT' -and [IntPtr]::Size -eq 8) {
+  $tagValue = 'selftest-' + $PID + '-' + (Get-Date).Ticks
+  $env:AELL_PASS_TAG = $tagValue
+  $child = $null
+  try {
+    $child = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') `
+               -ArgumentList '-NoProfile', '-Command', 'Start-Sleep -Seconds 20' -PassThru -WindowStyle Hidden
+  } finally { Remove-Item -LiteralPath 'Env:\AELL_PASS_TAG' -ErrorAction SilentlyContinue }
+  Start-Sleep -Milliseconds 800
+  Ok (Test-AellProcessEnvEntry -ProcessId $child.Id -Entry ('AELL_PASS_TAG=' + $tagValue)) 'a real child carries the tag and it can be read'
+  Ok (-not (Test-AellProcessEnvEntry -ProcessId $child.Id -Entry 'AELL_PASS_TAG=nope')) 'a different tag value does not match'
+  Ok (-not (Test-AellProcessEnvEntry -ProcessId $PID -Entry ('AELL_PASS_TAG=' + $tagValue))) 'this process, its tag already cleared, does not match'
+  Ok (-not (Test-AellProcessEnvEntry -ProcessId 999999 -Entry 'AELL_PASS_TAG=x')) 'a pid that does not exist answers false'
+  Stop-Process -Id $child.Id -Force -ErrorAction SilentlyContinue
+} else {
+  Write-Host 'skip - the PEB reader is Windows-only'
+}
+
 if ($bad) { Write-Host ''; Write-Host "$bad PROBLEM(S)"; exit 1 }
 Write-Host ''
 Write-Host 'PASS TREE OK'

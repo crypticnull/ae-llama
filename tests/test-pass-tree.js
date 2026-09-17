@@ -58,6 +58,24 @@ check("the reap reads the guard's snapshot",
 check("the reap is wrapped, so a failure never costs the loop",
       /Pass leftover reap failed/.test(loop));
 
+// NEXT UP 43, 2026-09-17: a Git Bash runner started by a background tool
+// call lost its parent pid the moment it started, so no snapshot saw it.
+// The loop tags the pass's environment; the reap reads the tag back.
+var tagSet = loop.indexOf("$env:AELL_PASS_TAG = $passTag");
+var pipe = loop.indexOf("& $ClaudePath @claudeArgs");
+var tagClear = loop.indexOf("Env:\\AELL_PASS_TAG");
+var guardStart = loop.indexOf("Start-Job -Name 'AellPassTimeout'");
+check("the loop tags the pass environment AFTER the guard job starts and BEFORE the CLI",
+      guardStart !== -1 && tagSet > guardStart && pipe > tagSet,
+      "guard " + guardStart + ", tag " + tagSet + ", cli " + pipe);
+check("the tag is cleared as soon as the CLI returns, before the reap",
+      tagClear > pipe && tagClear < reap);
+check("the reap reads the tag and hands it to the targets",
+      /Get-AellPassTaggedKeys[\s\S]{0,200}AELL_PASS_TAG=/.test(loop.slice(reap - 600, reap)) &&
+        /-Tagged \$passTagged/.test(loop.slice(reap, reap + 400)));
+check("a dirty extension/ at pass start is called out",
+      /WARNING: extension\/ is dirty at pass start/.test(loop));
+
 var lib = code("scripts/lib/pass-tree.ps1");
 check("the process table carries CreationDate (pid-reuse guard)",
       /CreationDate/.test(code("scripts/lib/claude-procs.ps1")));

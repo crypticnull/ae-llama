@@ -693,6 +693,15 @@ for ($i = 1; $i -le $Iterations; $i++) {
         # the morning review can inspect or pop it) and keep going.
         Write-Log 'Working tree is dirty; a previous pass left changes behind.'
         foreach ($d in $dirty) { Write-Log ('  ' + [string]$d) }
+        # NEXT UP 43: on 2026-09-17 the dirt was a LIVE runner of the
+        # previous pass still swapping tools.js, so the stash could not
+        # hold. Say so where the owner will look.
+        if (@($dirty | Where-Object { [string]$_ -match '^.. "?extension/' }).Count) {
+            Write-Log ('WARNING: extension/ is dirty at pass start. If a ' +
+                       'previous pass left a background runner alive it ' +
+                       'may still be writing there; look for one before ' +
+                       'trusting this pass''s harness result.')
+        }
         $stamp2 = Get-Date -Format 'yyyyMMdd-HHmmss'
         & git stash push -u -m ('loop-salvage-' + $stamp2) 2>&1 | Out-Null
         $still = & git status --porcelain
@@ -904,6 +913,13 @@ for ($i = 1; $i -le $Iterations; $i++) {
     }
 
     $passLines = New-Object System.Collections.Generic.List[string]
+    # Tag everything the pass starts (NEXT UP 43). Set AFTER the beat and
+    # guard jobs exist and cleared as soon as the CLI returns, so only the
+    # pass inherits it. The reap reads it back: a Git Bash runner loses its
+    # parent pid the moment it starts, and the tag is how it is still known
+    # as ours. See scripts/lib/pass-tree.ps1 rule 3.
+    $passTag = [string]$PID + '-' + $i + '-' + (Get-Date).Ticks
+    $env:AELL_PASS_TAG = $passTag
     $passT0 = Get-Date
     try {
         Get-Content -Raw $promptFile |
@@ -918,6 +934,7 @@ for ($i = 1; $i -le $Iterations; $i++) {
     }
     $passSec = [int]((Get-Date) - $passT0).TotalSeconds
     $passExit = $LASTEXITCODE
+    Remove-Item -LiteralPath 'Env:\AELL_PASS_TAG' -ErrorAction SilentlyContinue
 
     # Stop the beat BEFORE the reap, or the last line can claim a cli
     # process that is being killed as it is written.
@@ -953,9 +970,12 @@ for ($i = 1; $i -le $Iterations; $i++) {
             -Tree (Get-AellPassTree -RootId $PID -Table $procTable)
         $cliIds = @(Get-AellCliPassProcesses -RootId $PID -Table $procTable |
                     ForEach-Object { [int]$_.ProcessId })
+        $passTagged = Get-AellPassTaggedKeys -Table $procTable `
+                         -Entry ('AELL_PASS_TAG=' + $passTag) `
+                         -PassStartedAt $passStartedAt -LoopId $PID
         $leftovers = @(Get-AellPassReapTargets -Snapshot $passTree `
                          -Table $procTable -PassStartedAt $passStartedAt `
-                         -LoopId $PID -ExcludeIds $cliIds)
+                         -LoopId $PID -ExcludeIds $cliIds -Tagged $passTagged)
         foreach ($lo in $leftovers) {
             try {
                 Stop-Process -Id $lo.ProcessId -Force -ErrorAction Stop
