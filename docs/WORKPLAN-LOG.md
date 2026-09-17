@@ -27957,3 +27957,31 @@ The codepoints in 22 step +7919 or -12081, i.e. `0x4E00 + (i*7919) % 20000`. Tha
 **Assumed:** (1) Closing on the transcript without a GPU replay is enough, because the transcript is the primary evidence and it is unambiguous (element classes, not text). (2) The capture left one extra user bubble plus "Stopped." in the open test panel's chat. That is harmless: it is a scratch session, and the history carries that one message. The capture is in gitignored `local/kv36/request.json`.
 
 No extension/ change, so **no bump**.
+
+## 2026-09-17 (local session) - H3 at 1920x1080: the doc sentence invited the size, and the early ETA counted weight staging (NEXT UP 37), 0.12.39
+
+**Item:** NEXT UP 37, the first row with its needs met. 1a, 5a-4e, 5a-5b, 5a-5c and 5c are owner-gated, 6b and 11d wait on owner calls, and 8 is blocked. The pass started ~02:02 EDT under the owner's `run-local-agent.ps1` loop (PID 35752, -UntilHour 9), so the loop is the permission (17a). AfterFX (PID 37832) was running and was left running.
+
+**Harness:** 775/775 PASSED at the start and **775/775** after the change.
+
+**(1) The invented size.** I reasoned from the code first. `comfy_generate` (tools.js) receives the MODEL's args and never the user's text, so the panel cannot tell a 1920x1080 the user asked for from one the model made up. Dropping it in code would break the capDefaultClip rule that a named value always wins. The lever is the rules sentence that told the model to "Match width/height to the target comp when it makes sense". It now reads "Omit width/height unless the user or a comp sets a size". That is 39803 -> 39801 chars compact and 58933 -> 58931 full, and the sha pins in `tests/test-prompt-rules.js` were replaced, with the reason in a comment. Group A (row 22) removes the sentence anyway.
+- **A/B measured in the REAL panel:** Qwen2.5-32B, ctx 16384, routing "all", no active comp. The panel was reloaded onto the repo code after `Llama.stop()`, and the model was started with the toggle. Over DevTools, `Tools._panelTools.comfy_generate` was wrapped to record args and return an error (nothing rendered), and `Tools.buildSystemPrompt` was wrapped to swap the OLD sentence back in for the baseline. The sentence was "Generate a video of a red paper boat drifting on a calm pond.", with the chat cleared before each send.
+  - Old wording: 1920x1080 **3/3**.
+  - New wording: no width/height **4/5** (2 before the A/B, 2/3 in it). The one miss sent 1920x1080.
+  - Control, "Generate a 1280x720 video ...": 1280x720 in both arms.
+  - Both wraps were removed afterwards and the chat cleared. The chat model is left running (it was running at the start).
+- Side observation, not filed: in the new arm the model named nonexistent workflows twice ("Video from Text", "Video - Drifting Objects"). The real tool answers that with the grounded list, and 12a saw the model retry correctly from it. The intercept answered before the name check, so this pass does not show a retry.
+- A trial send that did not generate ("Make a 1920x1080 video ...") built a "Pond Scene" comp with shapes instead. It was removed with an evalScript (project back to 7 items, active item none).
+- **Residual filed as NEXT UP 39:** a deterministic no-comp/no-named-size guard. It needs main.js to pass the last user text to the tool.
+
+**(2) The early ETA.** `makeProgressTracker` anchored on the first progress value seen, and the sampler's bar starts at 0 when the node starts. Dynamic-VRAM weights stream in during the first forward pass, so the 0->1 interval is load time. The 2a backend log (`comfy-managed.log`, H3 at 1344x768) shows step 1 at 12 s against a steady 6.45 s/step. The anchor now never sits below step 1 (`advance` re-anchors on the first step >= 1).
+- `tests/test-comfy-progress.js` replays 12a's numbers: step 0->1 at 46 s, then 20 s/step, 20 steps.
+  - The old code FAILS 3 new asserts: an ETA of 874 s from step 1 alone, 594 s at step 2, and the "past the generation timeout ... will be cancelled first" line at 66 s.
+  - The new code gives no estimate at step 1, 360 s at step 2 and no warning.
+- The fix was loaded in the real panel (`Comfy._makeProgressTracker` source carries the new rule). No render was run, so the live ETA line is stub-verified only.
+
+**Tests:** full stubbed suite green after the re-pin, and CAPABILITIES.md regenerated.
+
+**Assumed:** (1) N=5 against N=3 is a direction, not a grade. The change is 2 chars shorter, and a named size still passes, so it cannot cost a user who asks for a size. A `chat-probe` matrix was not run for a one-sentence doc change. (2) Reloading the panel (Llama.stop, then reload) was acceptable, because the 12a/36 scratch chat in it was test state.
+
+**Bumped** 0.12.38 -> 0.12.39: extension/ changed (comfy.js, tools.js), with the harness green and the doc change measured in a real panel.

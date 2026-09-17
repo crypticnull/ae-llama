@@ -304,6 +304,27 @@ function trackerChecks() {
            "a bar that goes BACKWARDS re-anchors instead of quoting a rate " +
            "measured across the reset (" + t.read().etaSec + ")");
 
+    // NEXT UP 37: the bar starts at 0 when the sampler node starts, and
+    // dynamic-VRAM weights stream in during the first forward pass, so
+    // step 0->1 is load time. The 12a H3 run at 1920x1072 (~20 s/step)
+    // read "about 10m left" at step 2 and warned of a timeout it beat.
+    t = Comfy._makeProgressTracker("p-1");
+    t.accept(state({ "3": running(0, 20) }));
+    clock += 46000;                       // step 1: 20 s + 26 s of staging
+    t.accept(state({ "3": running(1, 20) }));
+    assert(t.read().etaSec === 0,
+           "step 0->1 includes weight staging — no estimate from it (" +
+           t.read().etaSec + ")");
+    clock += 20000;
+    t.accept(state({ "3": running(2, 20) }));
+    r = t.read();
+    assert(r.etaSec === 360,
+           "at step 2 the estimate is 18 steps x 20 s = 360 s, from step 1 " +
+           "on, not 600 s through the staging step (" + r.etaSec + ")");
+    assert(!/timeout/.test(Tools._generatingLine(66, r, 600, false)),
+           "and a 66 s-in job projecting 360 s more warns of no timeout [" +
+           Tools._generatingLine(66, r, 600, false) + "]");
+
     // The older builds' message shape.
     t = Comfy._makeProgressTracker("p-1");
     t.accept({ type: "progress", data: { node: "3", value: 4, max: 20 } });

@@ -320,6 +320,13 @@
    * before the first step — dividing by it would quote an ETA far past the
    * truth on exactly the renders that need one. It is anchored on the
    * first step actually seen, so the rate quoted is the sampling rate.
+   *
+   * And never below step 1. The bar reports 0 when the sampler node
+   * starts, and weights staged for dynamic VRAM loading stream in during
+   * the FIRST forward pass, so step 0->1 is load time too. Observed
+   * 2026-09-17 (WORKPLAN NEXT UP 37): H3 at 1920x1072 read "about 10m
+   * left" at step 2 of a ~20 s/step render (~6m true), and the timeout
+   * warning fired on a job that then finished 160 s inside it.
    */
   function makeProgressTracker(promptId) {
     var wantId = promptId || null;
@@ -337,7 +344,9 @@
       // the reset — the comparison is against the LAST value, not the
       // anchor, or a bar that resets to above where it was anchored keeps
       // quoting the old rate.
-      if (v < value) { anchorAt = Date.now(); anchorValue = v; }
+      if (v < value || (anchorValue < 1 && v >= 1)) {
+        anchorAt = Date.now(); anchorValue = v;
+      }
       value = v;
     }
 

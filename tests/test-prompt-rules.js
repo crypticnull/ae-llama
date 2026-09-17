@@ -41,12 +41,16 @@ const sha = (s) => crypto.createHash("sha256").update(s).digest("hex");
 // CHANGE rule or doc wording on purpose, re-measure the prompt as
 // CLAUDE.md requires and replace the hash in the same commit, saying why.
 // A move, a reorder of the data, or a new field must never change it.
+// Re-pinned 2026-09-17 (NEXT UP 37): "Match width/height to the target
+// comp when it makes sense" -> "Omit width/height unless the user or a
+// comp sets a size", after the model sent 1920x1080 with no comp and H3
+// took 442 s instead of 153 s. 39803 -> 39801 / 58933 -> 58931 chars.
 const compact = Tools.buildSystemPrompt("", { compact: true });
 const full = Tools.buildSystemPrompt("");
 const COMPACT_SHA =
-  "fc7c11db34f1a26384d3e9e46a626554cef6405def0e5c3fc5d154dcd969ee4c";
+  "22fb47f90375e96ce16378ba5b421d87a7a4c0c9eeb0a9029d51d37a526e2921";
 const FULL_SHA =
-  "8dd323f33970d97eda2b27242cf55f336b8893ca9643a33d308c2803946b64f5";
+  "939950981836b66da89ee4e5ab99ba20fe36d2e7060f11c795cde8e545b995f6";
 assert(sha(compact) === COMPACT_SHA,
        "compact prompt is byte-identical to the pre-split one (" +
        compact.length + " chars, sha " + sha(compact).slice(0, 12) + ")");
