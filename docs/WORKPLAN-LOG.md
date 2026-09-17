@@ -28210,3 +28210,40 @@ The stop rate is 30-50 % in every config. The routed runs only word their stop r
 1. The row pointed at the prompt, and the 40 entry had already shown the refusal was not the lever, so I left the host refusal as it was.
 2. A wrong-layer matte (vague under A) grades HARM, which is worse than a miss, so A alone was not shippable despite the canonical win. That is why I carried on to C.
 3. I did not measure 16K `all` (the shipped default) this pass: the server was sized for 12K and the row was about 12K. 40b asks for it.
+
+## 2026-09-17 (local session) - step 27 vague holds on the unrouted prompt at 16K, and no position or wording moves it: the lever is the routing default (NEXT UP 40b, files 40c)
+
+**Item:** NEXT UP 40b, the first row whose needs were met (1a, 5a-4e, 5a-5b, 5a-5c, 5c and 6b wait on the owner; 8 is blocked; 11d is conditional on the owner wanting headroom). This is loop pass 16, which started 05:01 EDT under the owner's `run-local-agent.ps1` loop (-UntilHour 9). AfterFX was running and was left running. The panel's 32B server on 8737 was not touched.
+
+**Harness:** **776/776** at the start. Nothing under `extension/` changed, so there was no re-run and **no bump**.
+
+**Not a retry.** Loop pass 15 took 40b at 04:16, ran about 140 chat-probe runs (08-17 to 09-01 UTC stamps), and was killed at 45:00 before it logged. The loop salvaged its `tools.js` edit to stash `loop-salvage-20260917-050137`, which I left for review and did not ship. Its last runner (`chat-probe --port 8791 ... AB4 A r7`, PID 46816) was still alive, with no server on 8791, while this pass's harness ran. I killed that probe; the harness was green anyway. I ran no new model runs. I graded pass 15's `.partial.jsonl` files with `local/tally40b.js` (gitignored) and excluded **56 rows** whose only event was `ECONNREFUSED 127.0.0.1:8791`. Pass 15 had restarted its server between variants, and the md tables grade those rows "miss" (`baseline c` alone had 25).
+
+**Measured** (7B Q4_K_M, q8_0 KV, T=0.7 per the headers, `--variants --steps 27 --route all --ctx 16384`). Each cell is pass/graded:
+
+| Variant (pass 15's label) | canonical | casual | vague (HARM) | typo |
+|---|---|---|---|---|
+| **shipped HEAD** (baseline, baseline more, baseline c) | 18/20 | 19/20 | **0/20 (13)** | 16/19 |
+| P2 rule at top of masks | 4/4 | 4/4 | 0/4 (3) | 3/4 |
+| P1 rule at top | 4/4 | 3/4 | 2/4 (2) | 3/4 |
+| P3 rule after the pivot rule | 6/6 | 6/6 | 0/6 (6) | 3/6 |
+| P5 rule before prefer-inspecting | 6/6 | 6/6 | 2/6 (4) | 3/6 |
+| P5q + quoted names | 6/6 | 6/6 | 3/6 (2) | 3/6 |
+| D1 `layer` = "anywhere in the stack" (x2) | 16/16 | 16/16 | 2/16 (12) | 13/16 |
+| D3 names-only args (x2) | 15/16 | 16/16 | 2/16 (8) | 15/16 |
+| F D1 + cut + P5 (the stash) | 8/8 | 7/8 | 3/8 (4) | 4/8 |
+
+I could not reconstruct the content of `AB move A/B` and `AB4 A-D`: the labels do not describe them and only the last edit survives in the stash. They landed in the same band (vague 1-3 of 5-8) and are not in the table.
+
+**Reading:** the row said "if it holds, the candidates are the rule's position or the §24d routing default, not more words". It holds (0/20). Position gets vague to at most 2-3 of 6 and **costs typo** (3/6 in P3, P5 and P5q, down from 16/19). Wording gets vague to at most 3/8. Routed 12K was 24/24 after 40a. So in the full 79-tool prompt, the rule is not the lever. The measured fix is the routing default, and item 20 already set the gate for flipping it: re-run 12K auto after 40 lands. 40 and 40a have landed, but that re-run existed only inside struck row 20's text. **Filed as NEXT UP 40c** so the loop can take it.
+
+**Changed:** `docs/WORKPLAN.md` (40b struck with the table's numbers, 40c added) and this entry. No code.
+
+**Needs a human eye:**
+1. Stash `loop-salvage-20260917-050137` holds pass 15's unshipped F variant. It is safe to drop.
+2. A killed pass's chat-probe outlived the loop's timeout kill (the PID 46816 above). NEXT UP 14 was meant to stop exactly that. Its runner was a grandchild the tree walk missed, or it was re-parented. I did not investigate (one item per pass). If it recurs, it wants a row.
+
+**Assumed:**
+1. Grading a killed pass's transcripts is recovery, not a second attempt (the precedent is item 20's pass 11).
+2. ECONNREFUSED rows are environmental and carry no information about the prompt, so they are excluded rather than counted as misses.
+3. Wording that lowers typo by a third to lift vague from 0 to 2-3 of 6 is not shippable. So no prompt change ships, and the flip stays gated on 40c plus a MINOR bump that is not a loop pass's.
