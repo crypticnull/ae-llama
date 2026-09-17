@@ -28040,3 +28040,31 @@ No extension/ change, so **no bump**.
 **Assumed:** (1) "Any user turn" rather than the row's "LAST message", so refer-back ("again, but blue" after "1080p") keeps the size. That is the survivable direction. (2) The word list is English. Other Latin-script languages keep the model's size (the guard just does not fire), and non-Latin text disables it deliberately. (3) Scripting the old sentence back in to provoke invention is a valid proof of the guard. The new sentence's invention rate (1/5) would have needed ~25 sends for the same coverage.
 
 **Bumped** 0.12.40 -> 0.12.41: extension/ changed (tools.js, main.js), with the harness green and the guard exercised in the real panel.
+
+## 2026-09-17 (local session, concurrent) — the 45-minute bound has now killed two measurement passes
+
+Observed from outside the loop, filed rather than fixed.
+
+- **2026-09-16 pass 24**: the KV-cache accuracy gate. Killed at 45:00.
+- **2026-09-17 pass 10**: building `chat-probe.js` and its test for the
+  routing paraphrase matrix. Killed at 45:00, edits salvaged to
+  `loop-salvage-20260917-032443`.
+
+Both are MEASUREMENT items, and measurement here means many model runs:
+the accuracy gate compares quantized against full cache, the matrix is
+140 paraphrases. Neither is wedged; both are simply long.
+
+**Raising the bound is the wrong fix**, and the reason is in §20b's own
+filing: the bound also decides how long a genuinely wedged pass holds the
+machine. Lengthening it to fit the slowest legitimate job makes every
+real hang more expensive.
+
+**Split them instead.** Give the long instruments a resumable shape:
+write partial results to `docs/measured/` or `local/` as they are taken,
+and word the queue item as "continue from what is already there". Then a
+45-minute ceiling costs one chunk rather than a whole attempt, and the
+work survives a kill.
+
+Queued as item 1. Nothing was changed in the running loop.
+
+No `extension/` change, so **no version bump**.
