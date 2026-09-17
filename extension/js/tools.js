@@ -1956,9 +1956,54 @@
   var HISTORY_CHARS_PER_TOKEN = 2.7;
   var REPLY_RESERVE_TOKENS = 3072 + 256;
   var LEDGER_BUDGET = 1500;
+
+  /**
+   * Both ratios above are ENGLISH ratios, and every budget here counts
+   * with this one function so a script the ratios do not fit cannot slip
+   * past one of them. Measured 2026-09-17 with llama-tokenize over the
+   * 7B and 32B vocab (identical counts), ordinary prose and an AE-style
+   * request in each script:
+   *
+   *   Japanese  1.66 / 1.55 chars/token    Korean   1.52 / 1.36
+   *   Chinese   1.63 / 1.44                English  3.92 (the request)
+   *
+   * So a CJK turn counted at 2.7 was ~2x under-counted, which lets the
+   * proactive trim pass, earns the context 400, and the reactive retry
+   * then drops every earlier turn: refer-back broken for exactly the
+   * non-English buyer. Every UTF-16 unit at or above U+2E80 (CJK
+   * radicals onward, kana, Hangul, fullwidth forms, and each half of a
+   * surrogate pair) is priced as ONE whole token — above the ~0.74 the
+   * densest real text measured, in the survivable direction. Cyrillic
+   * measured 2.60 and is left at the English rate (4 % under).
+   */
+  var WIDE_CHAR_MIN = 0x2E80;
+  function budgetLength(text, charsPerToken) {
+    var str = String(text == null ? "" : text);
+    var wide = 0;
+    for (var i = 0; i < str.length; i++) {
+      if (str.charCodeAt(i) >= WIDE_CHAR_MIN) wide++;
+    }
+    return str.length + wide * ((charsPerToken || HISTORY_CHARS_PER_TOKEN) - 1);
+  }
+
+  /** The longest prefix of text whose budgetLength stays within max. */
+  function budgetPrefix(text, max) {
+    var used = 0, i;
+    for (i = 0; i < text.length; i++) {
+      used += text.charCodeAt(i) >= WIDE_CHAR_MIN ? HISTORY_CHARS_PER_TOKEN : 1;
+      if (used > max) break;
+    }
+    return i;
+  }
+
+  // systemChars: the prompt TEXT (priced by budgetLength), or a plain
+  // character count for callers that only have a size.
   function historyBudget(ctxSize, systemChars) {
     var ctx = Number(ctxSize) || 16384;
-    var promptTokens = Math.ceil(Number(systemChars || 0) / PROMPT_CHARS_PER_TOKEN);
+    var sysLen = typeof systemChars === "string"
+      ? budgetLength(systemChars, PROMPT_CHARS_PER_TOKEN)
+      : Number(systemChars || 0);
+    var promptTokens = Math.ceil(sysLen / PROMPT_CHARS_PER_TOKEN);
     var roomTokens = ctx - REPLY_RESERVE_TOKENS - promptTokens;
     var chars = Math.floor(roomTokens * HISTORY_CHARS_PER_TOKEN) - LEDGER_BUDGET;
     return {
@@ -4631,7 +4676,7 @@
   function fitHistory(history, budgetChars) {
     var size = 0, i;
     for (i = 0; i < history.length; i++) {
-      size += (history[i].content || "").length + 16;
+      size += budgetLength(history[i].content) + 16;
     }
     if (size <= budgetChars) {
       return { entries: history, dropped: 0, truncated: 0, ledger: "" };
@@ -4639,11 +4684,11 @@
     var entries = history.slice();
     var gone = [];
     while (entries.length > 4 && size > budgetChars) {
-      size -= (entries[0].content || "").length + 16;
+      size -= budgetLength(entries[0].content) + 16;
       gone.push(entries.shift());
     }
     while (entries.length > 1 && entries[0].role !== "user") {
-      size -= (entries[0].content || "").length + 16;
+      size -= budgetLength(entries[0].content) + 16;
       gone.push(entries.shift());
     }
     // THE FLOOR, and why it has to exist. Dropping WHOLE entries stops
@@ -4669,6 +4714,9 @@
     var truncated = 0;
     for (i = 0; i < entries.length && size > budgetChars; i++) {
       var content = entries[i].content || "";
+      // Sizes are budgetLength units (a CJK char weighs a token), so the
+      // cut is solved in those units and only then turned into an index.
+      var weight = budgetLength(content);
       // The marker carries the number of characters it replaced, so its
       // own length depends on the answer. Solve it twice: the first pass
       // prices the marker at the widest the number can be, the second is
@@ -4678,18 +4726,19 @@
       var marker = trimMarker(content.length);
       var keep = 0, j;
       for (j = 0; j < 2; j++) {
-        keep = content.length - (size - budgetChars) - marker.length;
+        keep = budgetPrefix(content,
+          weight - (size - budgetChars) - marker.length);
         if (keep < TRIM_MIN_KEEP_CHARS) keep = TRIM_MIN_KEEP_CHARS;
         marker = trimMarker(content.length - keep);
       }
       // An entry shorter than the marker gets BIGGER if we "shorten" it.
       // Leave it whole and spend the budget on one that pays.
-      if (keep + marker.length >= content.length) continue;
+      if (budgetLength(content.slice(0, keep)) + marker.length >= weight) continue;
       entries[i] = {
         role: entries[i].role,
         content: content.slice(0, keep) + marker
       };
-      size -= content.length - entries[i].content.length;
+      size -= weight - budgetLength(entries[i].content);
       truncated++;
     }
     return { entries: entries, dropped: gone.length, truncated: truncated,
@@ -4837,7 +4886,7 @@
       // The exact size of the block as joined below: header, then
       // "\n- " + line for every line.
       var t = header().length;
-      for (var j = 0; j < lines.length; j++) t += lines[j].length + 3;
+      for (var j = 0; j < lines.length; j++) t += budgetLength(lines[j]) + 3;
       return t;
     }
     while (lines.length > 1 && total() > budget) {
@@ -4853,6 +4902,7 @@
     TOOL_DEFS: TOOL_DEFS,
     fitHistory: fitHistory,
     historyBudget: historyBudget,
+    budgetLength: budgetLength,
     promptModeFor: promptModeFor,
     promptOptsFor: promptOptsFor,
     extendPromptOpts: extendPromptOpts, // per-round extension (§24c)

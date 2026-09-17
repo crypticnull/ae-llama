@@ -711,7 +711,7 @@
       // MEASURED prompt (Tools.historyBudget), not a floor: the old
       // max(4000, …) floor was negative at real prompt sizes, so most
       // rounds ran with one turn of memory and nobody knew.
-      var hb = global.Tools.historyBudget(s.ctxSize, system.length);
+      var hb = global.Tools.historyBudget(s.ctxSize, system);
       var histBudget = hb.chars;
       if (forceTinyContext) {
         // The reactive path: a context 400 got through anyway (one huge

@@ -27985,3 +27985,31 @@ No extension/ change, so **no bump**.
 **Assumed:** (1) N=5 against N=3 is a direction, not a grade. The change is 2 chars shorter, and a named size still passes, so it cannot cost a user who asks for a size. A `chat-probe` matrix was not run for a one-sentence doc change. (2) Reloading the panel (Llama.stop, then reload) was acceptable, because the 12a/36 scratch chat in it was test state.
 
 **Bumped** 0.12.38 -> 0.12.39: extension/ changed (comfy.js, tools.js), with the harness green and the doc change measured in a real panel.
+
+## 2026-09-17 (local session) - CJK turns are budgeted as a token per character: real Japanese/Chinese/Korean run 1.36-1.66 chars/token (NEXT UP 38), 0.12.40
+
+**Item:** NEXT UP 38, the first row with its needs met. 1a, 5a-4e, 5a-5b, 5a-5c and 5c are owner-gated, 6b and 11d wait on owner calls, and 8 is blocked. The pass started 02:13 EDT under the owner's `run-local-agent.ps1` loop (-UntilHour 9), so the loop is the permission (17a). AfterFX (PID 37832) was running and was left running.
+
+**Harness:** 775/775 PASSED at the start and **775/775** after the change.
+
+**Step 1, real text.** `llama-tokenize.exe` (vendor llama.cpp, loads the vocab only, no GPU) over both shipped GGUFs. The 7B and 32B gave identical counts. Texts are in gitignored `local/cjk38/`: a ~300-char diary paragraph and an AE-style request ("make a 1920x1080 comp, a blue solid, a Title layer ...") per script.
+- Japanese 1.66 (prose) / 1.55 (request); Chinese 1.63 / 1.44; Korean 1.52 / 1.36; English request 3.92.
+- Russian prose 2.60 (4 % under the 2.7 history rate; left alone, not filed). Emoji line 2.67 in UTF-16 units.
+- All CJK is under the row's ~2 threshold, so the fix went in. Row 36's 0.62 was the synthetic stride filler; real text merges about 2.5x better.
+
+**Fix (tools.js, one estimator):** `budgetLength(text, charsPerToken)` = length plus (rate - 1) for every UTF-16 unit >= U+2E80, i.e. a CJK char, kana, Hangul syllable, fullwidth form or surrogate half costs one whole token. That is above the densest real text (0.74 token/char), in the survivable direction.
+- `fitHistory` sizes entries with it, and its floor cut is solved in the same units, then turned into an index by `budgetPrefix`. The cut marker still reports raw characters.
+- `rollupHistory` folds the ledger by it.
+- `historyBudget` accepts the prompt TEXT (priced at the prompt rate) as well as a count. `main.js` and `scripts/chat-probe.js` now pass `system`, not `system.length`. Probes and tests that pass a number are unchanged.
+- Exported as `Tools.budgetLength`. The prompt itself is byte-identical.
+
+**Real panel, both arms** (32B, ctx 16384, routing "all", compact prompt 40 369 chars). Over DevTools 8092, `Llama.chat` was wrapped to capture the first round's messages and then call through. Three sends, each a 1 330-char Japanese note plus "ignore this, answer はい". The history part was counted by the panel's own server `/tokenize`. Driver: `local/cjk38/arm.js`.
+- **Old code (0.12.39):** budget 4 291 chars = 2 145 tokens of room, of which ~1 590 are meant for history. Turn 3 sent all 5 entries, 4 213 raw chars = **2 490 real tokens**, over the whole room and eating the reply reserve. No 400, because at 16K the gap is too small to reach n_ctx, but the proactive trim did not see it.
+- **New code:** `Llama.stop()`, page reload, model restarted with the Start button (Ready in 8 s). Turn 2 sent 3 entries at 979 tokens; the oldest note was cut by the floor, and the model then answered "メモの内容を確認しました…" instead of はい. Turn 3 sent 976 tokens with the ledger on and the "context ledger" notice shown. No page exception.
+- Cost, noted in the struck row and not filed: at 1 token/char a CJK user's history uses ~60 % of the room the real ratio would allow.
+
+**Tests:** `tests/test-history-trim.js` 18-22: estimator shapes; a Japanese chat that fits by `.length` but not by tokens must be dropped proactively; the floor cut on an 8 000-char Japanese TOOL RESULTS entry must fit in tokens and keep the head; a CJK ledger folds to its budget; an ASCII prompt string budgets like its length and CJK state leaves less room. Run against the 0.12.39 `tools.js` with only a `budgetLength` shim added, **6 asserts FAIL** (0 dropped; 3 736 > 2 222 tokens; 2 858 > 1 481; ledger 3 460 > 1 500; both historyBudget string asserts). All pass on the new code. Full stubbed suite green.
+
+**Assumed:** (1) One token per wide char rather than a tuned 0.75: the ratios above are one tokenizer family, and the constant's rule is "wrong in the survivable direction". (2) Reloading the panel was acceptable; its chat was the scratch state of 37. The chat was cleared at the end, and the model left running on routing "all", as found.
+
+**Bumped** 0.12.39 -> 0.12.40: extension/ changed (tools.js, main.js), with the harness green and both arms measured in the real panel.

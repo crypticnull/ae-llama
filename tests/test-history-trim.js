@@ -313,5 +313,103 @@ function sizeOf(entries) {
          "the dropped turns still come back as the ledger");
 }
 
+// 18-22. CJK turns (NEXT UP 38). Every count above is ENGLISH-shaped:
+//     2.7 chars/token. Measured 2026-09-17 with llama-tokenize over the
+//     7B and 32B Qwen2.5 vocab, ordinary Japanese / Chinese / Korean run
+//     1.36-1.66 chars/token, so a CJK chat counted by .length passed the
+//     proactive trim at ~2x its real size, earned the context 400, and
+//     the reactive retry then dropped EVERY earlier turn.
+const T = window.Tools;
+const CPT = 2.7;           // HISTORY_CHARS_PER_TOKEN
+const DENSEST_REAL = 1.36; // Korean AE request, the lowest measured
+const JA = "新しいコンポジションを作成して、背景に青い平面を追加してください。" +
+  "それから「タイトル」というテキストレイヤーを画面の中央に配置してください。";
+function ja(n) { let t = ""; while (t.length < n) t += JA; return t.slice(0, n); }
+function realTokens(entries) {
+  // What the server would count, at the densest real CJK ratio measured
+  // and the English one for the rest, +16 chars per entry as above.
+  let tok = 0;
+  for (const e of entries) {
+    const c = e.content || "";
+    let wide = 0;
+    for (let i = 0; i < c.length; i++) if (c.charCodeAt(i) >= 0x2E80) wide++;
+    tok += wide / DENSEST_REAL + (c.length - wide + 16) / CPT;
+  }
+  return tok;
+}
+
+// 18. the estimator itself
+{
+  assert(T.budgetLength("hello") === 5, "ASCII costs its length");
+  assert(Math.abs(T.budgetLength("日本") - 2 * CPT) < 1e-9,
+         "a CJK char costs a whole token (" + T.budgetLength("日本") + ")");
+  assert(Math.abs(T.budgetLength("한국 ok") - (2 * CPT + 3)) < 1e-9,
+         "Hangul is wide too, and mixed text adds up");
+  assert(T.budgetLength(null) === 0 && T.budgetLength(undefined) === 0,
+         "no content costs nothing");
+}
+
+// 19. THE BUG: a Japanese chat that fits by .length but not by tokens
+//     must be trimmed BEFORE the request, not by the 400.
+{
+  const h = [];
+  for (let i = 0; i < 5; i++) {
+    h.push({ role: "user", content: ja(500) });
+    h.push({ role: "assistant", content: ja(500) });
+  }
+  const budget = 6000; // 2222 tokens of room
+  assert(sizeOf(h) <= budget,
+         "precondition: by .length it fits (" + sizeOf(h) + " <= " + budget + ")");
+  assert(realTokens(h) > budget / CPT,
+         "precondition: by tokens it does not (" + Math.round(realTokens(h)) +
+         " > " + Math.round(budget / CPT) + ")");
+  const r = fit(h, budget);
+  assert(r.dropped > 0, "old turns were dropped proactively (" + r.dropped + ")");
+  assert(realTokens(r.entries) <= budget / CPT,
+         "and what is sent fits the room in tokens (" +
+         Math.round(realTokens(r.entries)) + " <= " + Math.round(budget / CPT) + ")");
+  assert(r.entries[0].role === "user", "survivors still start on a user turn");
+}
+
+// 20. the floor cut is solved in the same units: one huge Japanese
+//     entry in the protected tail shrinks to fit and keeps its head.
+{
+  const h = [{ role: "user", content: ja(200) },
+             { role: "assistant", content: "ok" },
+             { role: "user", content: "TOOL RESULTS:\n" + ja(8000) },
+             { role: "assistant", content: "ok" }];
+  const budget = 4000;
+  const r = fit(h, budget);
+  assert(r.truncated > 0, "the oversized CJK entry was cut (" + r.truncated + ")");
+  assert(realTokens(r.entries) <= budget / CPT,
+         "the tail fits in tokens (" + Math.round(realTokens(r.entries)) +
+         " <= " + Math.round(budget / CPT) + ")");
+  assert(r.entries[2].content.indexOf("TOOL RESULTS:\n" + JA.slice(0, 20)) === 0,
+         "the cut kept the entry's head");
+  const again = fit(r.entries, budget);
+  assert(again.truncated === 0 && again.dropped === 0,
+         "and a second pass finds nothing left to cut");
+}
+
+// 21. the ledger's own budget weighs CJK lines the same way
+{
+  const gone = [];
+  for (let i = 0; i < 30; i++) gone.push({ role: "user", content: ja(300) });
+  const led = T.rollupHistory(gone, 1500);
+  assert(led && T.budgetLength(led) <= 1500,
+         "a CJK ledger folds to its budget in tokens, not chars (" +
+         Math.round(T.budgetLength(led)) + " <= 1500)");
+}
+
+// 22. historyBudget prices the PROMPT text the same way; a count still works
+{
+  const en = "x".repeat(40000);
+  assert(T.historyBudget(16384, en).chars === T.historyBudget(16384, 40000).chars,
+         "an ASCII prompt string budgets exactly like its length");
+  const mixed = "x".repeat(38000) + ja(2000);
+  assert(T.historyBudget(16384, mixed).chars < T.historyBudget(16384, 40000).chars,
+         "CJK project state in the prompt leaves less room for history");
+}
+
 console.log(failed ? "\nTESTS FAILED" : "\nALL TESTS PASSED");
 process.exitCode = failed ? 1 : 0;

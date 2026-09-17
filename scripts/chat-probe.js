@@ -705,7 +705,7 @@ function sendMessage(text, done) {
     // thing that holds a ten-turn conversation, so it has to carry the
     // fix too — otherwise it would keep reporting a failure the panel no
     // longer has.
-    const hb = Tools.historyBudget(s.ctxSize, system.length);
+    const hb = Tools.historyBudget(s.ctxSize, system);
     let histBudget = hb.chars;
     if (round.forceTinyContext) histBudget = 1;
     const fitted = Tools.fitHistory(history, histBudget);
