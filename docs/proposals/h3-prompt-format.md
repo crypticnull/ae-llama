@@ -93,9 +93,20 @@ Why panel-side rather than teaching the model the format:
 3. **It matches the owner's own rule**: the model does not need to be
    clever, it needs to call the tool.
 
-**Open question for the owner, not to be guessed:** whether a sentence
-that is ALREADY cinematic should pass through untouched. Suggested rule:
-format only when the text carries no timeline and no camera term.
+**DECIDED by the owner, 2026-09-17:** format only when the text carries
+no timeline and no camera term; otherwise pass it through untouched. His
+reasoning: "most people aren't going to use those terms anyway", so the
+common case is formatted and the deliberate case is respected. The test
+is therefore a DETECTOR, not a judgement: a bracketed seconds range or a
+term from the camera vocabulary means hands off.
+
+**Also owner-approved the same day:** the panel-side deterministic
+approach over a model-side or graph-side enhancer.
+
+**Owner idea, NOT decided, recorded so it is not lost:** an explicit "H3
+mode" in the panel. He said "we could even have like an H3 mode or
+something. We can think more about that." Do not build it off this
+sentence; it needs a shape first.
 
 ## 4. What to build
 
