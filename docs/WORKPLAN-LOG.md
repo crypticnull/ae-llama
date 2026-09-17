@@ -28603,3 +28603,24 @@ After the CLI exited, the reap selected nothing and the runner kept going. That 
 **Assumed:** the probe scripts were throwaway (`local/`, gitignored); the one-shot sentinel check did not seem worth a committed probe. The panel rewrites the yaml on every boot, so no migration is needed.
 
 **Needs a human eye:** none.
+
+## 2026-09-17 (local session) - a panel reload fires unload, so the llama-server reap has no survivor to kill (NEXT UP 26a)
+
+**Item:** NEXT UP 26a, the first open row whose needs fit. Skipped above it: 1a, 8, 5a-4e, 5a-5b/c, 5c, 6b (owner calls), 11d (owner-conditional), 40d (minor bump), 22a (owner eye), 28 (a 30-minute backend watch; this pass started ~08:35 EDT under the owner's loop with `-UntilHour 9`, so it could not finish in the window) and 29 (backend, multi-pass). Not attempted, not blocked. AfterFX was left running.
+
+**Harness:** 777/777 at the start. Nothing in extension/ changed, so no re-run and no bump.
+
+**Setup found, not made:** the panel was already open (DevTools 8092 listening, page pid 28532) with the 32B Q4_K_M running at 16K q8_0 KV: llama-server pid 45444, parent CEPHtmlEngine renderer 10456, which is the page's own `process.pid`; `localStorage["com.cptk.aellama.serverPid"]` held 45444; `Llama.getState()` "running".
+
+**Measured:** `node scripts/panel-devtools.js --eval 'setTimeout(function(){location.reload()},300)'` at 08:45:13, then `tasklist` once a second.
+- Renderer 10456 alive at every sample, and the NEW page's `process.pid` is 10456: the CEP process survives the reload (the half of 26's reasoning that held).
+- llama-server gone at t+1 s and never came back.
+- New page: `Llama.getState()` "stopped", PID key null, panel log empty - no "killing orphaned llama-server" line.
+
+**Why:** `main.js` registers `addEventListener("unload", ...)` calling `Llama.stop()` and `Comfy.stopManaged()`, and `location.reload()` fires it. The server was killed and the record forgotten by the OLD page, so the new page's `reapOrphan()` found no record. The llama.js comment's case "a reload that skips Llama.stop() (DevTools / Ctrl+R)" does not happen on a normal reload. Neither branch the row expected: the process is not replaced, and the reap is not what cleans up.
+
+**Decided (no human to ask):** keep `reapOrphan()`; it is PID-verified and cheap, and still covers an unload that did not run or threw. Did NOT edit the comments in `extension/js/llama.js` / `main.js`, because any extension/ change needs a bump and a comment-only update would make every test user reinstall for nothing. Filed as **NEXT UP 26b** (comment fix, ride along with the next bump). §17i-a carries the result.
+
+**Left as changed:** the 32B server the panel had running is now stopped (the reload stopped it). Not restarted: the loop window ends at 09:00 and the owner's day starts then, so freeing ~20 GB of VRAM is the right state to leave; a later pass that needs the chat model starts its own.
+
+**Needs a human eye:** none.
