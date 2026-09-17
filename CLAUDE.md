@@ -308,6 +308,12 @@ Model identity strings must never appear in committed artifacts.
   from the remote (cloud) session to the local one: what is in flight,
   what is broken right now, the ComfyUI §17-§19 arc with the owner's
   answered decisions, and the diagnostic traps that cost nights.
+- `docs/REMOTE-SESSIONS.md` — how the owner's phone keeps reaching this
+  machine. The Claude desktop app owns Remote Control links and restarts
+  itself to auto-update, which drops every session at once;
+  `scripts/remote-sessions.ps1` runs CLI-owned sessions instead and a
+  scheduled task restarts them. Read it before touching that script, and
+  to add a project to the list.
 - `docs/NATIVE_COVERAGE_PLAN.md` — the tool-coverage roadmap
 - `docs/CAPABILITIES.md` — the whole product in one place; tool table is
   GENERATED (`node scripts/capability-report.js`, CI-enforced fresh).

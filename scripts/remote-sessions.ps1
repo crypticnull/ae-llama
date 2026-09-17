@@ -120,9 +120,14 @@ function Start-Session($p, $state) {
         Write-Line ('SKIP ' + $p.name + ': someone is in that conversation right now')
         return $state
     }
+    # Titles are UPPER CASE to match the ones the app already shows, and a
+    # first start carries NO suffix. The version appears only when a
+    # session has died and come back, which is the owner's rule: the
+    # number is a record of a failure, not decoration.
     $version = 1
     if ($state.ContainsKey($p.name)) { $version = [int]$state[$p.name].version + 1 }
-    $sessionName = $p.name + ' v' + $version
+    $sessionName = $p.name.ToUpper()
+    if ($version -gt 1) { $sessionName = $sessionName + ' v' + $version }
     $argLine = '--remote-control "' + $sessionName + '" --continue'
     try {
         $proc = Start-Process -FilePath $ClaudePath -ArgumentList $argLine -WorkingDirectory $p.path -WindowStyle Hidden -PassThru
@@ -157,7 +162,9 @@ function Invoke-Status {
     $state = Get-State
     foreach ($p in (Get-Projects)) {
         if ($state.ContainsKey($p.name) -and (Test-Live $state[$p.name].pid)) {
-            Write-Host ('  ' + $p.name.PadRight(24) + ' running  pid ' + $state[$p.name].pid + '  as "' + $p.name + ' v' + $state[$p.name].version + '"')
+            $shown = $p.name.ToUpper()
+            if ([int]$state[$p.name].version -gt 1) { $shown = $shown + ' v' + $state[$p.name].version }
+            Write-Host ('  ' + $p.name.PadRight(24) + ' running  pid ' + $state[$p.name].pid + '  as "' + $shown + '"')
         } else {
             Write-Host ('  ' + $p.name.PadRight(24) + ' NOT running')
         }
