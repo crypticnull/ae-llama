@@ -28348,3 +28348,45 @@ Table and transcripts: section "Re-run after 40 and 40a" in `docs/measured/promp
 3. The 42b fix is a separate row, not this pass. It is a core rule, so it needs a matrix, and the brief allows one item.
 
 **Needs a human eye:** nothing new. The `loop-salvage-20260917-*` stashes are still in `git stash list`.
+
+## 2026-09-17 (local session) - 42b's "swap the failed call" rule wins step 34 but fails the 16K matrix: not shipped (NEXT UP 42b, files 42c and 43)
+
+**Item:** NEXT UP 42b, the first row whose needs were met. Loop pass 21, started 06:03:54 EDT under the owner's `run-local-agent.ps1` loop (-UntilHour 9). AfterFX was running and was left running. The panel's 32B server on 8737 was not touched.
+
+**Harness:** **777/777** at the start. Nothing under `extension/` is changed at the end (`tools.js` restored from `local/q42b/tools-B.js`, `git status` clean), so **no bump** and no second harness run.
+
+**Adopted pass 20's run.** Pass 20 (06:00:45-06:03:34) wrote `local/q42b/BAR.md` and started the step-34 A/B as a BACKGROUND job, then ended its turn. The loop logged "no commit" and did not reap the runner. When this pass started, the runner was still swapping `extension/js/tools.js` between arms (working tree dirty with candidate D, a chat-probe driving AE while this pass's harness ran; the harness was still green). The bar predates all output, so this pass let it finish and graded it. Filed as **NEXT UP 43**.
+
+**Candidate D** (rule text 126 -> 126 chars, prompt length unchanged): "things — resend what CAN succeed (swap the failed one for any call its error names), and say in 'reply' what you could not do."
+
+**Step 34 x10** (7B Q4_K_M, 12K, q8_0 KV, --route auto, T=0, interleaved), graded against BAR.md:
+
+| arm | pass /40 | canonical | casual | vague | typo pass | typo HARM |
+|---|---|---|---|---|---|---|
+| B shipped | 23 | 3/10 | 10/10 | 9/10 | 1/10 | 9 |
+| D swap | 31 | 6/10 | 10/10 | 10/10 | 5/10 | 5 |
+
+Gate MET (canonical >= 6, total >= B+4, typo HARM <= B). B reproduces 42a's B (22/40, canonical 2/10, typo HARM 9).
+
+**Matrices with D** (`chat-probe --variants --steps 1-11,15-36`, 40c's rig, 06:10-06:37). pass/miss/HARM:
+- 12K r1 76/7/16, r2 71/9/19, **mean 73.5/8/17.5** (40c: 71/10/18)
+- 16K r1 71/10/18, r2 66/12/21, **mean 68.5/11/19.5** (40c: 70.5/9.5/19)
+- Transcripts: logs/chat-probe-2026-09-17T10-16-45 (12K r1), 10-23-33 (16K r1), 10-30-23 (12K r2), 10-37-09 (16K r2); per-row diff `local/q42b/rows.js`.
+
+**Matrix gate NOT met** at 16K on both clauses:
+- mean pass 68.5 is 2 below 40c's 70.5 (bar: within 1);
+- two rows that were pass/pass in 40c are HARM 2/2 with D: `21 un-animate the squares / casual` and `34 restyle a headline / typo`. The 34 typo row is confounded (40c predates 42's error change and 42a's judge), 21 casual is not.
+- The replan step (11) passed in all four runs.
+- 12K is better on every mean, and 34 canonical went HH -> PP in both windows.
+
+**Not shipped.** Two readings are open, which is why 42c exists rather than a retry: the 16K drop is 2 runs against 2 runs, within the spread 40c itself showed (16K r1/r2 68 vs 73); or the rule does cost something at 16K. Both need the transcripts of 21 casual read before any rerun.
+
+**Filed:**
+- **NEXT UP 42c:** read the 16K 21-casual HARM transcripts. If the round never rolled back, the rule cannot have caused it, and a paired B/D 16K rerun (same night, interleaved) decides; else find what the rule changed.
+- **NEXT UP 43:** a pass's background runner survived the post-pass reap (evidence above).
+
+**Assumed:**
+1. Adopting pass 20's run is the same attempt at 42b, not a retry: the bar and the arms were fixed before any output existed.
+2. The 40c pair is the matrix baseline, as BAR.md declared, although it predates 0.12.44 (42) and 42a's judge. A same-night B matrix would have been cleaner; there was no time in a 45-minute pass for eight matrices.
+
+**Needs a human eye:** none new. `loop-salvage-20260917-*` stashes still in `git stash list`.
