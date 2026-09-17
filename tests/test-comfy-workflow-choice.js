@@ -247,6 +247,82 @@ step(function (done) {
   });
 });
 
+// NEXT UP 44: the model's first call invented a name in 3/3 measured
+// runs. A name made only of kind words is resolved like a nameless call
+// and says so; a name with any other word keeps the grounded refusal.
+[["Image Generation", {}, /AE_LLAMA_KREA2_V1\.json$/],
+ ["image_txt2img", {}, /AE_LLAMA_KREA2_V1\.json$/],
+ ["default", {}, /AE_LLAMA_KREA2_V1\.json$/],
+ ["textToVideo", {}, /AE_LLAMA_H3_T2V_V1\.json$/],
+ ["default", { durationSeconds: 3 }, /AE_LLAMA_H3_T2V_V1\.json$/],
+ // A family plus kind words picks within that family.
+ ["Krea", {}, /AE_LLAMA_KREA2_V1\.json$/],
+ ["minimax H3 video", {}, /AE_LLAMA_H3_T2V_V1\.json$/]
+].forEach(function (c) {
+  step(function (done) {
+    ranWith.length = 0;
+    run({ tool: "comfy_generate",
+          args: Object.assign({ workflow: c[0], prompt: "a red apple",
+                                "import": false }, c[1]) }, function (r) {
+      assert(r.ok && c[2].test(ranWith[0] || ""),
+             "invented name '" + c[0] + "' " + JSON.stringify(c[1]) +
+             " runs the resolver's pick (ran: " + ranWith[0] + ", " +
+             (r.ok ? "ok" : r.error) + ")");
+      const note = r.ok && r.data.applied[0];
+      assert(note && note.indexOf("'" + c[0] + "' is not a template") !== -1 &&
+             /AE_LLAMA_KREA2_V1, AE_LLAMA_H3_T2V_V1|AE_LLAMA_H3_T2V_V1, AE_LLAMA_KREA2_V1/.test(note) &&
+             !/example-txt2img/.test(note),
+             "and applied says so, with the real names: " + note);
+      done();
+    });
+  });
+});
+
+// SDXL / Stable Diffusion are families with no template in this fixture,
+// so they are refused and say which family is missing.
+["SDXL", "Stable Diffusion 1.5", "image to video", "i2v", "flux",
+ "krea video", "krea h3"].forEach(function (n) {
+  step(function (done) {
+    ranWith.length = 0;
+    run({ tool: "comfy_generate",
+          args: { workflow: n, prompt: "x", "import": false } }, function (r) {
+      assert(!r.ok && /Unknown workflow/.test(r.error) && ranWith.length === 0,
+             "a name that may mean a specific model is refused, not " +
+             "guessed: '" + n + "' -> " + (r.ok ? "ran" : r.error));
+      if (/sd|diffusion/i.test(n)) {
+        assert(/no (SDXL|SD15) template is installed/.test(r.error),
+               "and says the family has no template: " + r.error);
+      }
+      done();
+    });
+  });
+});
+
+step(function (done) {
+  ranWith.length = 0;
+  run({ tool: "comfy_generate",
+        args: { workflow: "ae_llama_krea2_v1", prompt: "x",
+                "import": false } }, function (r) {
+    assert(r.ok && /AE_LLAMA_KREA2_V1\.json$/.test(ranWith[0] || "") &&
+           r.data.applied.length === 0,
+           "a real name in any case runs as named, with no note");
+    done();
+  });
+});
+
+step(function (done) {
+  ranWith.length = 0;
+  const off = { comfyWorkflows: { AE_LLAMA_KREA2_V1: { enabled: false } } };
+  run({ tool: "comfy_generate",
+        args: { workflow: "default", prompt: "x", "import": false } },
+      function (r) {
+        assert(!/AE_LLAMA_KREA2_V1\.json$/.test(ranWith[0] || ""),
+               "an invented name never reaches a switched-off template " +
+               "(ran: " + ranWith[0] + ")");
+        done();
+      }, off);
+});
+
 step(function (done) {
   // A dir with NOTHING but the example: the error has to say why the one
   // file sitting there is not usable, or it reads as "no files".

@@ -3237,14 +3237,25 @@
     return rows;
   }
 
-  function pickWorkflow(s, args) {
+  function pickWorkflow(s, args, invented) {
     var descs = global.Comfy.describeWorkflows(s.comfyWorkflowsDir);
     var f = workflowFacts(s);
+    if (invented && invented.family) {
+      var fam = [];
+      for (var d = 0; d < descs.length; d++) {
+        if (inFamily(descs[d].name, invented.family)) fam.push(descs[d]);
+      }
+      if (fam.length === 0) {
+        return { chosen: null, candidates: [],
+                 why: "no " + invented.family + " template is installed" };
+      }
+      descs = fam;
+    }
     return global.Comfy.resolveWorkflow(descs, {
       // A length was asked for => a video was asked for. No new argument
       // and no prompt bytes: the model already reaches these.
       kind: (args.frames > 0 || args.durationSeconds > 0)
-        ? "video" : "image",
+        ? "video" : (invented ? invented.kind : "image"),
       image: args.image,
       disabled: s.comfyWorkflows || {}
     }, f.ctx, {
@@ -3255,6 +3266,76 @@
       // basic tie on every other axis and fall through to name order.
       baseline: f.baseline
     });
+  }
+
+  /* NEXT UP 44. The model's first comfy_generate named a template that
+   * does not exist in every run measured: "Image Generation",
+   * "image_txt2img", "default", then "Stable Diffusion" and "Stable
+   * Diffusion 1.5" 3/3 after 0.12.47. Each refusal cost a round. A name
+   * made only of words for the KIND of output, plus at most one model
+   * FAMILY, names no template but says enough to pick one: it is resolved
+   * like a nameless call, among that family's templates when one is
+   * named. Any other word ("i2v", "flux", "image to video") keeps the
+   * grounded refusal. Returns {kind, family} or null. */
+  var WF_IMAGE_WORDS = { image: 1, images: 1, picture: 1, pic: 1, photo: 1,
+    still: 1, txt2img: 1, text2img: 1, t2i: 1 };
+  var WF_VIDEO_WORDS = { video: 1, videos: 1, clip: 1, animation: 1,
+    movie: 1, txt2vid: 1, text2video: 1, txt2video: 1, t2v: 1 };
+  var WF_FILLER_WORDS = { generation: 1, generate: 1, generator: 1, gen: 1,
+    text: 1, to: 1, "default": 1, basic: 1, standard: 1, simple: 1,
+    workflow: 1, template: 1, comfy: 1, comfyui: 1, ai: 1, render: 1,
+    api: 1, model: 1 };
+  // What is left once kind and filler words are gone, joined, -> the
+  // token the shipped template names carry (AE_LLAMA_<FAMILY>_...).
+  var WF_FAMILIES = {
+    stablediffusion: ["SD15", "image"], stablediffusion15: ["SD15", "image"],
+    sd: ["SD15", "image"], sd15: ["SD15", "image"],
+    stablediffusionxl: ["SDXL", "image"], sdxl: ["SDXL", "image"],
+    krea: ["KREA2", "image"], krea2: ["KREA2", "image"],
+    ltx: ["LTXV", "video"], ltxv: ["LTXV", "video"],
+    ltxvideo: ["LTXV", "video"],
+    wan: ["WAN22", "video"], wan22: ["WAN22", "video"],
+    wan2: ["WAN22", "video"],
+    h3: ["H3", "video"], minimax: ["H3", "video"],
+    minimaxh3: ["H3", "video"]
+  };
+
+  function exactWorkflow(all, name) {
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].name.toLowerCase() === String(name).toLowerCase()) {
+        return all[i];
+      }
+    }
+    return null;
+  }
+
+  function inventedWorkflow(name) {
+    var words = String(name || "").replace(/([a-z])([A-Z])/g, "$1 $2")
+      .toLowerCase().split(/[^a-z0-9]+/);
+    var image = false, video = false, rest = "";
+    for (var i = 0; i < words.length; i++) {
+      var w = words[i];
+      if (!w || WF_FILLER_WORDS[w] === 1) continue;
+      if (WF_IMAGE_WORDS[w] === 1) image = true;
+      else if (WF_VIDEO_WORDS[w] === 1) video = true;
+      else rest += w;
+    }
+    if (image && video) return null;
+    var fam = null;
+    if (rest) {
+      if (!WF_FAMILIES.hasOwnProperty(rest)) return null;
+      fam = WF_FAMILIES[rest];
+      if ((image && fam[1] !== "image") || (video && fam[1] !== "video")) {
+        return null;
+      }
+    }
+    return { kind: video ? "video" : (fam ? fam[1] : "image"),
+             family: fam ? fam[0] : null };
+  }
+
+  function inFamily(name, family) {
+    return ("_" + String(name).toUpperCase() + "_")
+      .indexOf("_" + family + "_") !== -1;
   }
 
   /* NEXT UP 39. The model invents a video size ~1 time in 5 with no comp
@@ -3463,9 +3544,17 @@
       // `list[0]` sent "a picture of a red apple" to AE_LLAMA_H3_I2V_V1 -
       // a 40 GB Blackwell-only VIDEO graph - because ae_llama_h3 sorts
       // before ae_llama_krea2.
-      var chosen = null;
-      if (!args.workflow) {
-        var pick = pickWorkflow(s, args);
+      var chosen = null, invented = null, renamedNote = null;
+      if (args.workflow && !exactWorkflow(all, args.workflow)) {
+        invented = inventedWorkflow(args.workflow);
+      }
+      if (!args.workflow || invented) {
+        var pick = pickWorkflow(s, args, invented);
+        if (!pick.chosen && invented) {
+          cb({ ok: false, error: "Unknown workflow '" + args.workflow +
+               "' (" + pick.why + "). Available: " + names.join(", ") });
+          return;
+        }
         if (!pick.chosen) {
           cb({ ok: false, error: pick.why + ". Available: " +
                names.join(", ") });
@@ -3475,8 +3564,13 @@
           if (list[c].name === pick.chosen.name) { chosen = list[c]; break; }
         }
         if (!chosen) chosen = list[0];
+        if (invented) {
+          renamedNote = "workflow '" + args.workflow + "' is not a " +
+            "template name, so " + chosen.name + " was chosen; the names " +
+            "are: " + names.join(", ");
+        }
       }
-      if (args.workflow) {
+      if (args.workflow && !invented) {
         var found = null, placeholder = null;
         for (var i = 0; i < all.length; i++) {
           if (all[i].name.toLowerCase() ===
@@ -3508,6 +3602,10 @@
       // for one handoff. Transparent to the model.
       var enhancedPrompt = null;
       function finish(result) {
+        if (result && result.ok && result.data && renamedNote !== null &&
+            result.data.applied instanceof Array) {
+          result.data.applied.unshift(renamedNote);
+        }
         if (result && result.ok && result.data && enhancedPrompt !== null) {
           result.data.promptUsed = enhancedPrompt;
           result.data.enhanced = true;

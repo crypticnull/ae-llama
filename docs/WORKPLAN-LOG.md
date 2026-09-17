@@ -28521,3 +28521,27 @@ After the CLI exited, the reap selected nothing and the runner kept going. That 
 3. Comp names are matched exactly, as `import_as_layer` matches them. An unknown comp sizes nothing, and the placement refusal still reports it.
 
 **Needs a human eye:** assumption 1 goes against the letter of §23c.
+
+## 2026-09-17 (local session) - an invented workflow name made of kind and family words is resolved, not refused (NEXT UP 44), 0.12.48
+
+**Item:** NEXT UP 44, the first open row whose needs were met (1a, 8, 5a-4e, 5a-5b/c, 5c, 6b are owner calls; 11d is owner-gated; 40d is a minor bump). Pass started ~08:03 EDT under the owner's `run-local-agent.ps1` loop (-UntilHour 9), so AE, the chat model and the backend were in scope. AfterFX was running and was left running.
+
+**Harness:** 777/777 at the start; **777/777** after the change.
+
+**Measured first, with the kind-only rule (before the family half):** `chat-probe --reuse-server --steps 1,13`, 3 runs: the model's first `comfy_generate` named "stable diffusion txt2img", "Stable Diffusion", "Stable Diffusion 1.5". A kind-words-only rule would have caught none of them (the three runs filed in 44 had "Image Generation", "image_txt2img", "default"). So the rule also accepts ONE model family.
+
+**Changed (`extension/js/tools.js`):**
+- `inventedWorkflow(name)`: splits the name (camelCase, `_`, spaces, digits kept), drops filler words (generation, default, workflow, text, to...), notes kind words (image/txt2img/t2i... vs video/clip/t2v...), and joins what is left. Empty -> `{kind}`; a key in `WF_FAMILIES` (stablediffusion/sd/sd15 -> SD15, stablediffusionxl/sdxl -> SDXL, krea/krea2 -> KREA2, ltx/ltxv -> LTXV, wan/wan22 -> WAN22, h3/minimax -> H3) -> `{kind, family}`. Anything else, both kinds, or a kind that contradicts the family -> null (the old refusal).
+- `comfy_generate`: when the name matches no template exactly, an invented name goes through `pickWorkflow(s, args, invented)` - the resolver the nameless call already uses, with descriptors filtered to `_<FAMILY>_` and the kind hint used when no length is asked for (a length still means video). The first `applied` line from the generation says "workflow 'X' is not a template name, so <chosen> was chosen; the names are: ...". A family with no installed template refuses as before, with "(no SDXL template is installed)".
+- No prompt/doc change (no sha or budget movement).
+
+**Tests:** `tests/test-comfy-workflow-choice.js`: kind-only names (image/default/textToVideo/default + durationSeconds), family names (Krea, "minimax H3 video") run the right fixture template with the note; SDXL, "Stable Diffusion 1.5" (no such family in the fixture, names the missing family), "image to video", "i2v", "flux", "krea video", "krea h3" are refused with nothing queued; a real name in any case runs with no note; a switched-off template is never reached. Whole Node suite green.
+
+**Real AE, `chat-probe --reuse-server --steps 1,13` (32B on 8737, up since 02:36), 3 runs after the family half: 2/2 each.** Invented names "simple_image", "text_to_image", "stable_diffusion" were all resolved on the FIRST call: step 13 took **2 rounds** (3 in every run before). simple_image/text_to_image -> AE_LLAMA_KREA2 at 1920x1080 (the resolver's image pick on this card); stable_diffusion -> AE_LLAMA_SD15_T2I_V1 680x384. Transcripts `logs/chat-probe-2026-09-17T12-15-37.md`, `12-16-12`, `12-16-38` (the note is cut by the transcript's line truncation, visible as `"workflow 'sim`).
+
+**Assumed:**
+1. "Stable Diffusion" with no version means SD 1.5 (the family literally named that; SDXL is "Stable Diffusion XL"). The model itself picked SD15 after the refusal in all 3 pre-change runs.
+2. Resolving instead of refusing is safe for these words because none of them can name a specific template the user asked for that the family filter would miss. A name with any unrecognised word still refuses, so "flux" or a typo of a real name costs a round as before.
+3. The doc still says `workflow: string` (required), which is probably WHY the model invents one. Making it `workflow?:` is +1 char but a prompt change needing a matrix; not taken, since the code now absorbs the invented names. Not filed: the rounds it would save are already saved.
+
+**Needs a human eye:** none.
