@@ -27931,3 +27931,29 @@ Nothing under extension/ changed, so **no bump**. No new work found.
 **Assumed:** (1) Finishing pass 4's half-done 12a is not "a second attempt at a blocked item": it was never blocked, and its evidence was still live in the panel. (2) The CJK garbage is a finding, not a 12a failure, because 12a's bar is "no hang, no script error". (3) Cleanup: `-r` removed the scratch comp "AELL 12a probe", its "Red Box" solid and the imported H3 clip from the untitled project, plus two "AELL ST probe" comps that my crashed probe runs had left. The panel stays open with its chat model loaded, and the panel-booted backend is left to the panel's own lifecycle.
 
 **Bumped** 0.12.37 -> 0.12.38. extension/ changed (hostscript.jsx, selftest.js) and is AE-verified. This bump also ships everything that rode with 12a.
+
+## 2026-09-17 (local session) - NEXT UP 36 closed as a misread: the "32B CJK garbage" was the test's own input; the real finding is CJK token counting (new row 38)
+
+SUPERSEDES: 27905,27934 -- that entry's "Filed: NEXT UP 36 (on the 32B, `-c 4096 -ctk q8_0`, the cut-message reply "Hi!" was followed by ~2 000 random CJK characters)". The model emitted no CJK. The characters were a USER message that loop pass 4 typed, and the model answered it with a correct "Hi!".
+
+**Item:** NEXT UP 36, the first row with its needs met. 1a, 5a-4e, 5a-5b, 5a-5c and 5c are owner-gated, 8 is blocked, 6b waits on the owner, and 11d is "only if the owner wants". The pass started 01:58 EDT under the owner's `run-local-agent.ps1` loop (PID 35752, -UntilHour 9), so the loop is the permission (17a). AfterFX was running and was left running. The panel was left open with its 32B model loaded, and the panel-booted backend on :8288 was left to the panel's own lifecycle.
+
+**Harness: 775/775 PASSED** at the start. Nothing under `extension/` changed, so it was not re-run.
+
+**What settled it:** 12a left the panel open, so its chat is still in the DOM. `scripts/panel-devtools.js` dumped every element with its class:
+- 17 `msg user` "Here are my notes, ignore them and just say hi: ..." (50 337 chars)
+- 18-20 are the ledger, "message cut to fit" and context notices
+- 21 `msg assistant` "Hi!"
+- **22 `msg user`** "Just say hi. " followed by 2 600 CJK characters
+- 23 `msg assistant` "Hi!"
+- 24-26 are the second paste, "retrying with older turns trimmed", and the red HTTP 400 (11 371 tokens > 4096)
+
+The codepoints in 22 step +7919 or -12081, i.e. `0x4E00 + (i*7919) % 20000`. That is a generated token-packing filler, not model output. So the item's premise, "reply was Hi! then Just say hi. followed by CJK", was two separate chat bubbles read as one. There is no garbage to reproduce, and I ran no q8_0-vs-f16 replay. It could only have compared two clean answers, and it would have meant stopping the panel's 32B to free the card.
+
+**What the check found instead (filed as NEXT UP 38):** `/tokenize` on the panel's own 32B server (CPU-side, no generation):
+- The 2 600-char CJK filler is **4 169 tokens**, 0.62 chars/token. `tools.js` budgets history at `HISTORY_CHARS_PER_TOKEN = 2.7`, so a CJK user's turns are under-counted ~4x. The expected effect is a context 400 and the reactive trim that drops all history. That is reasoned, not measured, and the stride filler is worst-case. Row 38's first step is to measure real Japanese/Chinese/Korean text.
+- A request captured without sending (DevTools hook on `Llama.chat` + `Settings.get` returning ctxSize 4096 for one send, both restored, the send ended "Stopped."): on `promptRouting: "all"` the compact system prompt is **40 310 chars = 10 472 tokens** (3.85 chars/token, so `PROMPT_CHARS_PER_TOKEN = 3.7` holds for English). ctx 4096 cannot answer on "all" at all, which is why element 26 was a 400 even after the trim. That is §24's known problem and was not filed again. The 12a "Hi!" at 4096 (element 20 said ~2 304 prompt tokens) must have been on routing "auto".
+
+**Assumed:** (1) Closing on the transcript without a GPU replay is enough, because the transcript is the primary evidence and it is unambiguous (element classes, not text). (2) The capture left one extra user bubble plus "Stopped." in the open test panel's chat. That is harmless: it is a scratch session, and the history carries that one message. The capture is in gitignored `local/kv36/request.json`.
+
+No extension/ change, so **no bump**.
