@@ -28624,3 +28624,17 @@ After the CLI exited, the reap selected nothing and the runner kept going. That 
 **Left as changed:** the 32B server the panel had running is now stopped (the reload stopped it). Not restarted: the loop window ends at 09:00 and the owner's day starts then, so freeing ~20 GB of VRAM is the right state to leave; a later pass that needs the chat model starts its own.
 
 **Needs a human eye:** none.
+
+## 2026-09-17 (local session) - no item taken: nothing left in the queue fits before the loop's 09:00 stop (loop pass 32)
+
+**Item:** none. Pass started 08:46 EDT under the owner's loop (`run-local-agent.ps1 -UntilHour 9`, pid 35752), 14 minutes before its window closes and the owner's day starts.
+
+**Why nothing was taken:** every open NEXT UP row is one of (a) an owner call or owner eye: 1a, 8, 5a-4e, 5a-5b, 5a-5c, 5c, 6b, 22a, 40d (also a MINOR bump); (b) a long measurement: 28 (30-minute backend watch), 29 (backend + disk, multi-pass), 11d, and the lower table's §15 Option A deletions, §25 `outputPath` probe, §16f 3 and §16f 4 (chat model / AE runs); or (c) 26b, which by its own row rides with the next bump and cannot ship alone (an extension/ comment-only change would force a bump that installs nothing). None can finish by 09:00, and starting a backend or chat model now would leave it on the card into the owner's working day - the case CLAUDE.md's daytime rule exists for.
+
+**Harness:** NOT re-run, on purpose. The previous pass (08:35) was 777/777 and its commit ea29397 touched nothing in extension/, so a second run would measure the same code and occupy AE at the edge of the window. Assumed green on that basis.
+
+**No bump** (nothing in extension/ changed). AfterFX left running as found.
+
+**For the owner:** the loop queue is effectively empty of unattended work - what remains is the owner decisions listed in (a), and 28/29, which need a pass that starts with an hour of window rather than minutes.
+
+**Needs a human eye:** the (a) decisions above.
