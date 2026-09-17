@@ -812,7 +812,7 @@
             "the AE project. Blocks until finished (may take minutes). If " +
             "the hidden backend is installed it BOOTS AUTOMATICALLY — " +
             "never tell the user to start ComfyUI first.",
-      args: "{workflow: string (name from comfy_list_workflows), prompt: string, negative?: string, width?: int, height?: int (the size the template GENERATES at, which is not always the size it saves: a template that upscales between passes writes a larger file, and the result reports the size actually imported), seed?: int, frames?: int (video workflows), durationSeconds?: number (video templates whose length is set in seconds — the error tells you which), image?: string (absolute path to a reference/first-frame image), import?: bool = true}" }
+      args: "{workflow: string (name from comfy_list_workflows), prompt: string, negative?: string, width?: int, height?: int (generation size; the result reports the size imported), seed?: int, frames?: int (video workflows), durationSeconds?: number (video templates whose length is set in seconds — the error tells you which), image?: string (absolute path to a reference/first-frame image), import?: bool = true, comp?: string (also place it as a layer there)}" }
   ];
 
   var TOOL_NAMES = [];
@@ -3320,6 +3320,19 @@
     });
   }
 
+  /**
+   * An import_as_layer result in import_file's shape (name, id, width,
+   * height), so outputSize, the probe's cleanup and every reader of
+   * `imported` keep working, plus where the layer landed.
+   */
+  function placedItem(d) {
+    d = d || {};
+    var out = { name: d.source, id: d.itemId, comp: d.comp, layer: d.layer };
+    var m = /^(\d+)x(\d+)$/.exec(String(d.sourceSize || ""));
+    if (m) { out.width = Number(m[1]); out.height = Number(m[2]); }
+    return out;
+  }
+
   var PANEL_TOOLS = {
 
     comfy_status: function (args, cb) {
@@ -3487,6 +3500,8 @@
         }
         // Import each rendered file into the AE project.
         var imported = [];
+        var placeIn = (args.comp !== null && typeof args.comp !== "undefined" &&
+                       args.comp !== "") ? String(args.comp) : null;
         (function next(i) {
           if (i >= result.files.length) {
             // The size that was REQUESTED is not always the size that was
@@ -3507,10 +3522,29 @@
             finish({ ok: true, data: data });
             return;
           }
-          callHostTool("import_file", { path: result.files[i] },
+          if (!placeIn) {
+            callHostTool("import_file", { path: result.files[i] },
+              function (r) {
+                imported.push(r.ok ? r.data : { error: r.error });
+                next(i + 1);
+              });
+            return;
+          }
+          // Named comp (NEXT UP 22): import_as_layer imports (or reuses)
+          // the item AND places it, fitted. A placement refusal still
+          // imports the file, so minutes of rendering are never lost to
+          // a mistyped comp name; the refusal rides in the result.
+          callHostTool("import_as_layer", { path: result.files[i],
+                                            comp: placeIn },
             function (r) {
-              imported.push(r.ok ? r.data : { error: r.error });
-              next(i + 1);
+              if (r.ok) { imported.push(placedItem(r.data)); next(i + 1); return; }
+              callHostTool("import_file", { path: result.files[i] },
+                function (r2) {
+                  var it = r2.ok ? r2.data : { error: r2.error };
+                  it.notPlaced = r.error;
+                  imported.push(it);
+                  next(i + 1);
+                });
             });
         })(0);
       });

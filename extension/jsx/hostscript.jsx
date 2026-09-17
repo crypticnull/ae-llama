@@ -11196,6 +11196,7 @@ AELL_TOOLS.import_as_layer = function (args) {
     layer: layer.name,
     index: layer.index,
     source: item.name,
+    itemId: item.id,
     sourceSize: hasPixels ? (srcW + "x" + srcH) : "(no picture)",
     compSize: comp.width + "x" + comp.height,
     fit: fit,

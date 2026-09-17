@@ -28466,3 +28466,34 @@ After the CLI exited, the reap selected nothing and the runner kept going. That 
 2. The before-state's `sourceRect` is used when present; otherwise the after-state's rect stands in (the text is not edited by this step).
 
 **Needs a human eye:** none.
+
+## 2026-09-17 (local session) - comfy_generate {comp} places the render in the comp, chat-probe step 13 passes it in real AE (NEXT UP 22, first half), 0.12.46
+
+**Item:** NEXT UP 22 (roadmap group A, §23c), the first open row whose needs were met (1a, 8, 5a-4e, 5a-5b/c, 5c, 6b are owner calls; 11d is optional and owner-gated; 40d needs owner/interactive). Loop pass started ~07:36 EDT under the owner's `run-local-agent.ps1` loop (-UntilHour 9), so AE, the model and the backend were in scope. AfterFX was running and was left running.
+
+**Harness:** 777/777 at the start; **777/777** after the change.
+
+**Scope taken:** §23c bullet 1 (placement) plus its chat-probe verdict. Bullets 2-3 (comp size, snapped to `/object_info` steps, verified against a running backend) are left in row 22, restated.
+
+**Changed:**
+- `extension/js/tools.js`: `comfy_generate` takes `comp`. When it is present the import goes through `import_as_layer {path, comp}` (fit, reuse + reload); `placedItem` returns import_file's shape (`name`, `id`, `width`, `height`) plus `comp` and `layer`, so `outputSize` and chat-probe's cleanup by item id still work. If the host refuses the comp, the file is still imported through `import_file`, and the refusal comes back in `imported[].notPlaced`, so a mistyped comp name does not throw away minutes of rendering. `import:false` still wins.
+- Doc (both prompt forms): the width/height parenthetical (the old KREA2 upscale story, §23a's third cut) became "(generation size; the result reports the size imported)", and `comp?: string (also place it as a layer there)` was added. **Net -85 chars:** compact 39797 -> 39712, full 58927 -> 58842. Shas re-pinned in `test-prompt-rules.js`. `test-context-budget.js` ceilings lowered by the 85 saved (40000 -> 39915, 59000 -> 58915). §23a's fourth cut ("Match width/height...") no longer exists; NEXT UP 37 rewrote it and the rewrite is still true.
+- `extension/jsx/hostscript.jsx`: `import_as_layer` also returns `itemId`.
+- `scripts/chat-probe.js` step 13 ("generate a picture and bring it in"): a render that reaches only the project panel is now a FAIL, and the message says whether the model named a comp. Before this it was an info "GAP".
+
+**Tests:** new `tests/test-comfy-comp-placement.js` (host and doc pins; no comp -> import_file unchanged; comp -> one import_as_layer with id/size/where; numeric comp name stringified; refused comp -> import_file fallback with the grounded error; import:false; empty comp). It caught a real bug before commit: the placedItem regex had lost its backslashes on the way into the file. `test-chat-probe.js` updates the step 13 cases (in the project only -> fail, naming the comp if one was passed) and `test-comfy-output-size.js` pins the new wording. Whole Node suite green.
+
+**Real AE, `chat-probe --reuse-server` (32B Q4_K_M, q8_0 KV, 16K, compact, routing all; the server on 8737 was already up from 02:36):**
+- `--steps 13` alone: the model passed `comp: "Probe Room"`, but the comp did not exist (step 1 makes it). The fallback worked as designed: the file was imported and `notPlaced` read "Comp not found: Probe Room. Comps in this project: (none)", which the model relayed. The step judged FAIL because the render never landed in a comp. Transcript `logs/chat-probe-2026-09-17T11-43-21.md`.
+- `--steps 1,13`: **2/2 pass.** `comfy_generate {workflow: AE_LLAMA_SDXL_T2I_V1, comp: "Probe Room"}` returned `imported: [{id 118622, comp "Probe Room", layer ..., 1920x1080}]` and the verdict found a layer using the file. Cleanup removed 2 items. Transcript `logs/chat-probe-2026-09-17T11-43-58.md`.
+
+**Found, filed as NEXT UP 44 and 45:**
+- 44: the model's FIRST `comfy_generate` named a workflow that does not exist in all 3 runs ("Image Generation", "image_txt2img", "default"), even once right after `comfy_list_workflows`. Each cost a round.
+- 45: `--steps 14` (8 GB override, pause never) FAILED because SDXL rendered beside the 32B. The step was written when the nameless default was KREA2. Either the step's premise or the arbiter is stale. Transcript `logs/chat-probe-2026-09-17T11-42-50.md`.
+
+**Assumed:**
+1. On a refused comp, fall back to import instead of failing the call. A failed call after a successful render would invite a second render.
+2. §23c's "+14 chars paid by 23a's fourth cut" was met with the third cut instead, because the fourth line is gone. The measured net is negative in both forms.
+3. The generated PNGs (`AELlama_SD15__00001_`, `AELlama_SDXL__00001_/00002_`) stay in `%APPDATA%\AE-Llama\generated` as the probe's evidence. The managed backend was left up for the loop's teardown to stop (§17q).
+
+**Needs a human eye:** none.

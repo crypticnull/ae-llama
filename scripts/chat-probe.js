@@ -2318,12 +2318,10 @@ const STEPS = [
     // backend directly; what it cannot say is whether a sentence a user
     // would type ever reaches it.
     //
-    // Deliberately phrased the way a user asks, comp included, even
-    // though no tool can place footage into a comp today (import_file
-    // takes a path and nothing else). The verdict holds the product to
-    // what it HAS — generated, on disk, in the project — and the comp
-    // half is reported as a gap rather than failed every night, because
-    // it is workplan 5.8 and unbuilt, not broken.
+    // Phrased the way a user asks, comp included. Until NEXT UP 22 no
+    // generation could land in a comp and this step only REPORTED that
+    // gap; comfy_generate now takes {comp} and places the render there
+    // itself, so a render that stops at the project panel fails.
     title: "generate a picture and bring it in",
     expects: ["comfy_generate"],
     say: "Make me a picture of a single red apple on a white plate and " +
@@ -2388,13 +2386,14 @@ const STEPS = [
       say("info", "generated " + item.width + "x" + item.height +
           (item.duration ? " / " + item.duration.toFixed(2) + "s" : "") +
           " -> " + item.name);
-      // Reported, not failed: workplan 5.8 owns the missing tool.
       const placed = state.layers.some(l =>
         good.some(g => samePath(g, l.sourceFile)));
       if (!placed) {
-        say("info", "GAP: the user asked for it IN the comp and it only " +
-            "reached the project — no tool places a footage item into a " +
-            "comp (import_file takes a path and nothing else)");
+        const comps = ok.map(t => t.args && t.args.comp).filter(Boolean);
+        return "the user asked for it IN the comp and it only reached " +
+               "the project (" + (comps.length
+                 ? "comfy_generate was given comp \"" + comps[0] + "\""
+                 : "no comfy_generate call named a comp") + ")";
       }
       return null;
     }

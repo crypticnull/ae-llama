@@ -57,12 +57,18 @@ const sha = (s) => crypto.createHash("sha256").update(s).digest("hex");
 // names)". 7B routed step 34 x10 at 12K: 23 -> 31 of 40; paired 16K
 // matrix B/D r1+r2 same night: mean pass 69 vs 68.5, no pass/pass row
 // HARM/HARM. Lengths unchanged (39797 / 58927 chars).
+// Re-pinned 2026-09-17 (NEXT UP 22, §23a/§23c): comfy_generate's
+// width/height parenthetical (the authored-KREA2 upscale story) ->
+// "(generation size; the result reports the size imported)", and a new
+// "comp?: string (also place it as a layer there)". 39797 -> 39712 /
+// 58927 -> 58842 chars; both ceilings in test-context-budget.js moved
+// down by the 85 banked.
 const compact = Tools.buildSystemPrompt("", { compact: true });
 const full = Tools.buildSystemPrompt("");
 const COMPACT_SHA =
-  "2ea5dd6e92fce795eed00807788f4f2b78ca2c058a8b4f05693e62cedc512374";
+  "5693274a411bcc228de847990df33d3bfb0a230f7a29bd8a05b3d67abe750299";
 const FULL_SHA =
-  "dc605648cc7ec84fd197f635b52f341c907d2e10aae88c4144001b204bfa2146";
+  "5fe7c73e4f7563176d0fe3c5fe030f0fece6d57ef3e0448490e1aa076f666b33";
 assert(sha(compact) === COMPACT_SHA,
        "compact prompt is byte-identical to the pre-split one (" +
        compact.length + " chars, sha " + sha(compact).slice(0, 12) + ")");

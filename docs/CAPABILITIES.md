@@ -448,7 +448,10 @@ Queued (see WORKPLAN for owners/order):
   correction on X included (a 320x240 par-1 source fits a 720x480
   par-1.2121 comp at 272.727 x 200, not 225 x 200). `import_file` still
   exists and still only reaches the project panel; its docs now say so
-  and point here.
+  and point here. Since 0.12.46 `comfy_generate {comp}` places a render
+  through this same tool, so "make a picture of X and put it in Main"
+  lands on the timeline in one call; a comp name AE does not know still
+  imports the file and returns the grounded refusal beside it.
 - Two comp settings AE keeps to itself became reachable 2026-08-29:
   `set_comp_setting` now writes the WORK AREA and the preview
   RESOLUTION, and `get_comp_details` reads both back. AE does not treat

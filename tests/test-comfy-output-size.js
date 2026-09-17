@@ -261,9 +261,9 @@ const upscaleBy = () => ({ class_type: "LatentUpscaleBy",
   const at = src.indexOf('name: "comfy_generate"');
   assert(at > 0, "comfy_generate is still a tool");
   const def = src.slice(at, at + 2000);
-  assert(/GENERATES at/.test(def),
+  assert(/height\?: int \(generation size;/.test(def),
          "its args no longer call width/height the output size");
-  assert(/result reports the size actually imported/.test(def),
+  assert(/result reports the size imported/.test(def),
          "and they point at where the real size comes from");
 }
 

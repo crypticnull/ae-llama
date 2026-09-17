@@ -787,12 +787,20 @@ function genOk(files) {
   const aeStyle = realPng.replace(/\//g, "\\").toUpperCase();
   const state = withFootage([], [{ id: 100, name: "apple.png",
     path: aeStyle, width: 1232, height: 1232, duration: 0 }]);
-  assert(picture.check(state, { tools: [genOk([realPng])] }) === null,
-         "in the project under a differently-cased path is a pass");
+  const v = picture.check(state, { tools: [genOk([realPng])] });
+  assert(v && /only reached the project \(no comfy_generate call named a comp\)/
+           .test(v),
+         "in the project under a differently-cased path gets past the " +
+         "import check, and in the project ONLY is now a fail: " + v);
+  const named = genOk([realPng]);
+  named.args = { comp: "Probe Room" };
+  const v2 = picture.check(state, { tools: [named] });
+  assert(v2 && /given comp "Probe Room"/.test(v2),
+         "and it names the comp the model DID pass: " + v2);
 }
 {
-  // The comp half is REPORTED, not failed — no tool places footage in a
-  // comp yet (workplan 5.8). Pinned so that stays a deliberate choice.
+  // The comp half has been a verdict since NEXT UP 22 gave comfy_generate
+  // {comp}; before it, no tool could place a render and it was reported.
   const state = withFootage(
     [{ index: 1, name: "apple.png", parent: null, isSolid: false,
        isNull: false, isText: false, isShape: false, effectNames: [],
@@ -800,7 +808,7 @@ function genOk(files) {
     [{ id: 100, name: "apple.png", path: realPng, width: 1232,
        height: 1232, duration: 0 }]);
   assert(picture.check(state, { tools: [genOk([realPng])] }) === null,
-         "and so is the same thing WITH a layer using it");
+         "the same thing WITH a layer using it is the pass");
 }
 try { fsC.unlinkSync(realPng); } catch (e) {}
 try { fsC.unlinkSync(emptyPng); } catch (e) {}

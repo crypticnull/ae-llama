@@ -362,7 +362,7 @@ Tools.fetchProjectState(function (json) {
   const Tools = window.Tools;
   const full = Tools.buildSystemPrompt("");
   const compact = Tools.buildSystemPrompt("", { compact: true });
-  const FULL_CEILING = 59000;
+  const FULL_CEILING = 58915;   // -85 banked, NEXT UP 22
   assert(full.length <= FULL_CEILING,
          "the full prompt stays under its ceiling (" + full.length +
          " of " + FULL_CEILING + ") — growth needs a matching cut");
@@ -389,7 +389,7 @@ Tools.fetchProjectState(function (json) {
   // The point is not the exact number — it is that the next routing
   // addition has to pay in the currency the default user spends, which
   // immediately shows whether a proposed cut is real or cosmetic.
-  const COMPACT_CEILING = 40000;
+  const COMPACT_CEILING = 39915;   // -85 banked, NEXT UP 22
   assert(compact.length <= COMPACT_CEILING,
          "the compact prompt stays under its own ceiling (" +
          compact.length + " of " + COMPACT_CEILING + ") — this is the " +
