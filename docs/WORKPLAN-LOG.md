@@ -27864,3 +27864,24 @@ No `extension/` change, so **no version bump**.
 **Assumed:** (1) Packs copied from the owner's own install are the versions he runs. (2) n = 1 per arm is enough for the seconds (step times stable to 0.01 s/it), not for the peaks. (3) Cleanup: `python_h3c` deleted, managed interpreter checked clean, nothing on :8288, card back to 1 990 MiB.
 
 Nothing under extension/ changed, so **no bump**.
+
+## 2026-09-17 (local session) - H3 prompt shaped in the panel: `Comfy.formatH3Prompt`, owner's pass-through rule as a detector (NEXT UP 2, §13e), 0.12.37
+
+**Item:** NEXT UP 2, the first row with its needs met (1a is owner-gated). The pass ran at 01:10 EDT under `run-local-agent.ps1` PID 35752 (-UntilHour 9), so the owner's loop is the permission. AfterFX was already running and was left running.
+
+**Harness: 770/770 PASSED** before the change and **770/770** after it. The harness does not load `comfy.js`, so the after-run proves only that nothing AE-side broke.
+
+**Did:** `extension/js/comfy.js` gained `formatH3Prompt(text, {seconds})` and `shapeH3Prompt`, which runs last in `injectParams`, after `capDefaultClip`. It is keyed on the procedural prompt node's class (`MiniMaxH3*`), not the template name, so both T2V basics and any i2v sibling get it.
+- Plain text becomes `[0-Ns] <words, trimmed>`. N is the length the graph will render: a seconds template uses its seconds widget after the cap; a frames template uses `length`, snapped up to 17k+5 (the node's tooltip), over the graph's `fps`. The shipped basic gives `[0-5.2s]`.
+- A bracketed timeline (`[0-3s]`, `[5.4s]`, `[0 to 3s]`) or a camera term sends the text untouched. The camera terms are the proposal's vocabulary: dolly, pan, tilt, orbit, crane, handheld, whip pan, locked-off, and track only with a direction. `applied` names the term that matched.
+- No known length means no timeline. Nothing else is filled in, and i2v and t2v format alike.
+- `applied.promptSent` carries the text actually sent, and `generate()`'s landed check looks for THAT. Without it, every shaped prompt would have been refused as "no editable prompt text". The stubs caught this before any render did (`test-workflow-bundle.js`).
+- Bound: the encoder raises past ONE tokenizer batch, and `qwen3vl.py` sets `max_length=99999999`. Read on the managed 0.34.0, not measured. One token covers at least one UTF-8 byte, so the panel refuses a prompt over that many bytes, naming both numbers. The bound is honest but practically unreachable. The proposal doc now says so, because "it RAISES" read as a live risk.
+
+**Tests:** new `tests/test-h3-prompt-format.js` (32 checks): the detector both ways, plus false positives that must still format ("race track", "Japan", "control panel"). It also covers never inventing, the bound on the SENT text, both shipped-basic paths (t2v frames, including the grid snap), an i2v seconds stub, and a non-H3 class left alone. Three existing asserts in `test-comfy-inject.js`, `test-workflow-adapt.js` and `test-workflow-bundle.js` now expect the shaped prompt; the behaviour changed on purpose. Full stubbed suite green.
+
+**Assumed:** (1) "Format" means only the elements the panel knows (Scene + Timeline). The proposal's own never-invent rule leaves nothing else, since a camera term already means pass-through. (2) "zoom" is not a camera term, because it is not in the published vocabulary. A zoom prompt gets a timeline, which is harmless. (3) The timeline rounds to one decimal.
+
+**Filed:** NEXT UP 2a: one real H3 render with a shaped prompt and one with a camera term (backend + weights). It proves what stubs cannot: that the backend and the clip are fine with a whole-clip bracket. CAPABILITIES curated half updated.
+
+**Bumped** 0.12.36 -> 0.12.37 (extension/ changed; stub-verified, AE harness green).

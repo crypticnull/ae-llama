@@ -37,6 +37,11 @@ Two more facts worth pinning:
   `"MiniMax H3 text segment exceeds the supported prompt length"`. A long
   enhanced prompt can FAIL rather than truncate, so the panel must bound
   what it sends.
+  **Read 2026-09-17 on the managed 0.34.0:** "one batch" means
+  `max_length=99999999` tokens (`comfy/text_encoders/qwen3vl.py`), so the
+  raise is real but only reachable by a ~100 MB prompt. The panel's bound
+  (`comfy.js H3_PROMPT_MAX_TOKENS`, one token covers at least one UTF-8
+  byte) is a proof, not a practical limit.
 
 ## 2. The craft, from published guidance
 
@@ -109,6 +114,10 @@ something. We can think more about that." Do not build it off this
 sentence; it needs a shape first.
 
 ## 4. What to build
+
+**Built 2026-09-17 (steps 1-3):** `comfy.js formatH3Prompt` and
+`shapeH3Prompt`, pinned in `tests/test-h3-prompt-format.js`. Step 4 is
+still open.
 
 1. `Comfy.formatH3Prompt(text, {mode, seconds, camera})` in `comfy.js`,
    pure and stub-testable, emitting the ordering above and omitting every

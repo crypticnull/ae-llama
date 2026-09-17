@@ -577,7 +577,10 @@ Queued (see WORKPLAN for owners/order):
   of mis-writing it); a request that names no length renders at most
   `COMFY_DEFAULT_CLIP_SECONDS` (6 s) and says so in the applied list,
   so a template authored at 15 s no longer defaults to a quarter-hour
-  render — a named length is honoured (§18 P3a(b)). It also takes
+  render — a named length is honoured (§18 P3a(b)). An H3 prompt is
+  shaped by the panel itself, `[0-Ns] <the user's words>` with the length
+  the graph will render, unless the text already carries a bracketed
+  timeline or a camera move, which is sent untouched (§13e). It also takes
   `image`, which uploads a local file to
   ComfyUI's input folder — but with no bundled template declaring
   `procedural.firstFrame` any more, that argument is currently

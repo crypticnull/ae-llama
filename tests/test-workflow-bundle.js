@@ -315,7 +315,10 @@ shipped.forEach((t) => {
            err || (applied.length + " change(s)"));
     if (err) return;
 
-    assert(Comfy._graphCarriesValue(graph, PROMPT),
+    // generate() looks for what was SENT: an H3 prompt is reshaped (§13e).
+    assert(Comfy._graphCarriesValue(graph,
+             typeof applied.promptSent === "string" ? applied.promptSent
+                                                    : PROMPT),
            t.base + ": the prompt landed in the graph as a literal");
 
     // The seed is a number, so _graphCarriesValue (string compare) cannot

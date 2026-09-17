@@ -1209,6 +1209,106 @@
       "default is capped at " + cap + " s; pass frames to render longer)");
   }
 
+  // ------------------------------------------------ H3 prompt shape (§13e)
+
+  /* The MiniMax H3 encoder RAISES "text segment exceeds the supported prompt
+   * length" when a prompt tokenizes into more than one batch, and its
+   * tokenizer's max_length is 99999999 (comfy/text_encoders/qwen3vl.py,
+   * read 2026-09-17 on the managed 0.34.0). A token covers at least one
+   * UTF-8 byte, so a prompt of at most this many bytes provably fits. */
+  var H3_PROMPT_MAX_TOKENS = 99999999;
+
+  /* Owner, 2026-09-17: format only when the user gave no timeline and no
+   * camera direction, otherwise send the text untouched. A detector, not a
+   * judgement. The camera words are the published H3 vocabulary
+   * (docs/proposals/h3-prompt-format.md §2); "track" alone is too common
+   * ("race track"), so it counts only with a direction. */
+  var H3_TIMELINE_RE = /\[\s*\d+(?:\.\d+)?\s*s?\s*(?:-|–|—|to)\s*\d+(?:\.\d+)?\s*s?\s*\]|\[\s*\d+(?:\.\d+)?\s*s(?:ec(?:onds?)?)?\s*\]/i;
+  var H3_CAMERA_RE = /\b(?:dolly|dollies|dollying|pan|pans|panning|panned|tilt|tilts|tilting|tilted|orbit|orbits|orbiting|crane|craning|hand-?held|whip[- ]pan|locked[- ]off|track(?:s|ing|ed)?\s+(?:left|right|in|out|shot)|tracking shot)\b/i;
+
+  /**
+   * Shape a user's sentence into the H3 craft order (References, Retention,
+   * Scene, Timeline, Camera, Audio, Constraints), inventing nothing: every
+   * element the panel was not given is left out. The panel knows the scene
+   * (the words) and the length (the graph), so that is the whole of it:
+   * "[0-6s] <words>". i2v and t2v format alike; the mode changes what a
+   * user must describe, not the shape, and the encoder labels the picture
+   * itself.
+   *
+   * Returns {prompt, formatted, reason}. Throws a grounded error when the
+   * result could exceed the encoder's limit, which would otherwise raise
+   * inside the backend after the models loaded.
+   */
+  function formatH3Prompt(text, opts) {
+    var src = String(text);
+    var seconds = opts && Number(opts.seconds);
+    var out = { prompt: src, formatted: false, reason: "" };
+    var cam = H3_CAMERA_RE.exec(src);
+    if (H3_TIMELINE_RE.test(src)) {
+      out.reason = "it already carries a bracketed timeline";
+    } else if (cam) {
+      out.reason = "it already names a camera move ('" + cam[0] + "')";
+    } else if (!(seconds > 0)) {
+      out.reason = "the clip length is not known";
+    } else {
+      var s = String(Math.round(seconds * 10) / 10);
+      out.prompt = "[0-" + s + "s] " + src.replace(/^\s+|\s+$/g, "");
+      out.formatted = true;
+    }
+    var bytes = unescape(encodeURIComponent(out.prompt)).length;
+    if (bytes > H3_PROMPT_MAX_TOKENS) {
+      throw new Error("The prompt is " + bytes + " bytes; MiniMax H3's " +
+        "encoder refuses a prompt over " + H3_PROMPT_MAX_TOKENS +
+        " tokens. Shorten it and re-call.");
+    }
+    return out;
+  }
+
+  /** Seconds the H3 node will render, read from the graph as it will queue. */
+  function h3ClipSeconds(graph, node, procedural) {
+    if (procedural.durationSeconds) {
+      var dn = proceduralNode(graph, procedural.durationSeconds,
+                              "durationSeconds");
+      var secs = Number(dn.inputs[proceduralKey(dn,
+        procedural.durationSeconds, "durationSeconds")]);
+      return secs > 0 ? secs : 0;
+    }
+    var len = node.inputs.length;
+    if (typeof len !== "number" || !(len > 0)) return 0;
+    // The node snaps length UP to its 17k+5 grid (its /object_info tooltip).
+    if (len > 5) len = 5 + 17 * Math.ceil((len - 5) / 17);
+    for (var k in graph) {
+      if (!graph.hasOwnProperty(k)) continue;
+      var n = graph[k];
+      if (n && n.inputs && typeof n.inputs.fps === "number" && n.inputs.fps > 0) {
+        return len / n.inputs.fps;
+      }
+    }
+    return 0;
+  }
+
+  /**
+   * Last graft for an H3 template: rewrite the prompt the manifest pointed
+   * at into the H3 shape. Keyed on the node's class, not the template name,
+   * so every H3 sibling gets it. Returns the text actually sent, so the
+   * landed check can look for THAT rather than the caller's raw words.
+   */
+  function shapeH3Prompt(graph, params, manifest, applied) {
+    var p = manifest && manifest.procedural;
+    if (!p || !p.prompt || typeof params.prompt !== "string" ||
+        params.prompt === "") return null;
+    var node = proceduralNode(graph, p.prompt, "prompt");
+    if (!node || !/^MiniMaxH3/.test(String(node.class_type))) return null;
+    var key = proceduralKey(node, p.prompt, "prompt");
+    var r = formatH3Prompt(params.prompt,
+                           { seconds: h3ClipSeconds(graph, node, p) });
+    writeWidget(node, key, r.prompt);
+    applied.push(r.formatted
+      ? "prompt shaped for H3 -> \"" + r.prompt + "\""
+      : "prompt sent to H3 untouched (" + r.reason + ")");
+    return r.prompt;
+  }
+
   /**
    * Graft params onto the graph. Returns a list of what was changed so the
    * LLM (and user) can see how the template was used.
@@ -1299,6 +1399,9 @@
       injectProcedural(graph, params, manifest.procedural, applied);
     }
     capDefaultClip(graph, params, manifest, applied);
+    // After the cap, so the timeline states the length that will render.
+    var h3Sent = shapeH3Prompt(graph, params, manifest, applied);
+    if (h3Sent !== null) applied.promptSent = h3Sent;
     // After everything, because the answer depends on the graph as it is
     // going to be queued.
     noteOutputSize(graph, sizedIds, applied);
@@ -2217,8 +2320,10 @@
 
     // A prompt that lands nowhere means the render would use the template's
     // baked-in text — fail fast instead of burning GPU minutes on it.
+    // An H3 prompt is reshaped on the way in, so look for what was sent.
     if (typeof params.prompt === "string" && params.prompt !== "" &&
-        !graphCarriesValue(graph, params.prompt)) {
+        !graphCarriesValue(graph, (applied && typeof applied.promptSent ===
+          "string") ? applied.promptSent : params.prompt)) {
       cb(new Error("This workflow has no editable prompt text (its text " +
         "widget may be converted to a non-literal input). Un-convert it " +
         "in ComfyUI and re-export, or use another template."));
@@ -3350,6 +3455,7 @@
     _timeoutProgressNote: timeoutProgressNote, // exposed for tests
     loadWorkflow: loadWorkflow,
     injectParams: injectParams,
+    formatH3Prompt: formatH3Prompt,
     outputScaleFrom: outputScaleFrom,
     uploadImage: uploadImage,
     generate: generate,

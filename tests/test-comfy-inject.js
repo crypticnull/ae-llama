@@ -81,8 +81,9 @@ let g = h3Graph();
 let applied = Comfy.injectParams(g, { prompt: "a kite over the sea",
                                       durationSeconds: 6, seed: 42 },
                                  h3Manifest());
-assert(g["138"].inputs.prompt === "a kite over the sea",
-       "the prompt lands on the sampler node the manifest names");
+assert(g["138"].inputs.prompt === "[0-6s] a kite over the sea",
+       "the prompt lands on the sampler node the manifest names, shaped " +
+       "for H3 with the clip's 6 s");
 assert(g["136"].inputs.value === 6,
        "durationSeconds lands on the seconds primitive");
 assert(g["133"].inputs.noise_seed === 42,

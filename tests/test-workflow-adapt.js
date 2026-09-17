@@ -590,8 +590,11 @@ const withManifest = Comfy.loadWorkflow(apiFile);
 const applied2 = Comfy.injectParams(withManifest,
                                     { prompt: "a red balloon", seed: 7 },
                                     Comfy.readManifest(apiFile));
-assert(withManifest["138"].inputs.prompt === "a red balloon",
-       "with the sidecar, procedural.prompt lands on node 138");
+// Shaped for H3 (§13e) with the authored graph's own 15 s: no AELL is
+// loaded here, so no default cap brings it down.
+assert(withManifest["138"].inputs.prompt === "[0-15s] a red balloon",
+       "with the sidecar, procedural.prompt lands on node 138, H3-shaped " +
+       "(got " + JSON.stringify(withManifest["138"].inputs.prompt) + ")");
 assert(applied2.join(" ").indexOf("prompt -> node 138") !== -1,
        "and the applied list names the node it went to");
 
