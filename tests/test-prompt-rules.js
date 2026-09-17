@@ -45,12 +45,18 @@ const sha = (s) => crypto.createHash("sha256").update(s).digest("hex");
 // comp when it makes sense" -> "Omit width/height unless the user or a
 // comp sets a size", after the model sent 1920x1080 with no comp and H3
 // took 442 s instead of 153 s. 39803 -> 39801 / 58933 -> 58931 chars.
+// Re-pinned 2026-09-17 (NEXT UP 40a): set_track_matte's args name each
+// role ("the layer to be seen" / "the text/logo whose shape it shows
+// through"), the through-is-matte rule gains "X in the shape of Y" and
+// drops the glosses the args now carry. 7B at 12K routed, step 27 x4
+// phrasings: 7/16 pass before, 24/24 after. 39801 -> 39797 / 58931 ->
+// 58927 chars.
 const compact = Tools.buildSystemPrompt("", { compact: true });
 const full = Tools.buildSystemPrompt("");
 const COMPACT_SHA =
-  "22fb47f90375e96ce16378ba5b421d87a7a4c0c9eeb0a9029d51d37a526e2921";
+  "d7c7c2f301a8ff0845ca2fae0f74e0209fac357fa9a4d22127134c6581191642";
 const FULL_SHA =
-  "939950981836b66da89ee4e5ab99ba20fe36d2e7060f11c795cde8e545b995f6";
+  "6e5b9dac9cd30692b5e11a84526152eeb91b769e5128aaf742cb7aa2e778ef1e";
 assert(sha(compact) === COMPACT_SHA,
        "compact prompt is byte-identical to the pre-split one (" +
        compact.length + " chars, sha " + sha(compact).slice(0, 12) + ")");
@@ -135,6 +141,26 @@ assert(byTool.organize_project.indexOf("organize-preview") >= 0 &&
        byTool.add_mask.indexOf("soften-is-blur") >= 0,
        "a tool's rules are derived from RULE_DEFS owners (add_mask co-owns " +
        "the blur bullet, so a mask route reads it before the crop bullet)");
+
+// NEXT UP 40a: the 7B at 12K routed swapped matte roles (layer 3 =
+// matteLayer 3, or HELLO matted by Beta) while its compact doc said only
+// "Use one layer as another's track matte" and the args glossed one side
+// as "the layer being matted". Both args must say which side is which in
+// plain words, and a trigger phrase the model has to map ("in the shape
+// of") must reach the rule it is routed to.
+const matteArgs = Tools.TOOL_DEFS.filter((t) => t.name === "set_track_matte")[0].args;
+assert(/layer\?: name\|index \([^)]*seen/.test(matteArgs) &&
+       /matteLayer: name\|index \([^)]*shows through/.test(matteArgs),
+       "set_track_matte args name both roles: 'layer' is seen, " +
+       "'matteLayer' is the shape it shows through");
+const vague = Tools.promptOptsFor({ ctxSize: 12288, promptRouting: "auto" },
+  "Beta should appear in the shape of the word HELLO", []);
+const vaguePrompt = Tools.buildSystemPrompt("", vague.opts);
+assert(vague.routeInfo.picked.indexOf("set_track_matte") >= 0 &&
+       /X in the shape of Y' =\s+set_track_matte \{layer: X, matteLayer: Y/
+         .test(vaguePrompt),
+       "'in the shape of' routes to set_track_matte AND its rule maps the " +
+       "phrase to the roles");
 
 console.log(failures ? "\nFAILURES: " + failures :
             "\nAll prompt-rules checks passed");

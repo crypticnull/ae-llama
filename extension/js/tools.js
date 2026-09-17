@@ -653,12 +653,12 @@
     { name: "set_track_matte", mutating: true,
       triggers: ["track matte", "matte", "show through", "only through",
                  "stencil", "in the shape of", "visible through", "cut out"],
-      desc: "Use one layer as another's track matte (alpha or luma, " +
-            "optionally inverted), or remove it with mode 'none'. No " +
+      desc: "Make one layer show only through another's shape, or " +
+            "remove it with mode 'none'. No " +
             "layer-stacking requirement. 'show the video through the " +
             "text' = {layer: the footage being cut, matteLayer: the " +
             "text, mode: alpha}.",
-      args: "{comp?: string, layer?: name|index (the layer being matted; omit = selected), matteLayer: name|index, mode: 'alpha'|'alpha_inverted'|'luma'|'luma_inverted'|'none'}" },
+      args: "{comp?: string, layer?: name|index (the layer to be seen; omit = selected), matteLayer: name|index (the text/logo whose shape it shows through), mode: 'alpha'|'alpha_inverted'|'luma'|'luma_inverted'|'none'}" },
     { name: "list_effects", mutating: false,
       triggers: ["which effects", "what effects", "effects installed",
                  "find an effect", "effect name"],
@@ -1321,9 +1321,8 @@
       owners: ["set_track_matte"],
       lines: [
         "- 'show the video through the text / cut the logo out of the",
-        "  footage / X only visible through Y' = set_track_matte {layer:",
-        "  X (the footage being cut), matteLayer: Y (the text/logo), mode:",
-        "  alpha}."
+        "  footage / X only visible through Y / X in the shape of Y' =",
+        "  set_track_matte {layer: X, matteLayer: Y, mode: alpha}."
       ] },
     { id: "dance-to-music", section: "plain", order: 54,
       owners: ["audio_to_keyframes", "link_property"],

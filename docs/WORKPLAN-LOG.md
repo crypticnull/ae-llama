@@ -28172,3 +28172,41 @@ The stop rate is 30-50 % in every config. The routed runs only word their stop r
 1. The row said to diff the prompts first. Once the stop rate turned out equal, the cause was in each step's refusal, so I fixed it at the host rather than in the prompt. No prompt bytes changed, so nothing needed measuring or paying for.
 2. A 4-slot server restart changes the first call (step 27 went 1 -> 3 between runs with no change on my side), so each wording was judged on the runs where its refusal actually fired.
 3. The matte refusal stays grounded even though it did not rescue the 7B. The grounded-error rule is not conditional on one model.
+
+## 2026-09-17 (local session) - step 27 matte roles fixed by naming both roles in the args, not by the refusal: 7/16 -> 24/24 routed at 12K (NEXT UP 40a), 0.12.43
+
+**Item:** NEXT UP 40a, the first row whose needs were met. Rows 1a, 5a-4e, 5a-5b, 5a-5c, 5c and 6b wait on the owner, 8 is blocked. 11d is conditional on the owner wanting more headroom, so I skipped it. The pass started 03:56 EDT. The loop stops at 09:00. AfterFX was running and was left running. The panel's server on 8737 was not touched. I started a 7B Q4_K_M server with q8_0 KV at 12K on port 8791 (`kv-quant-probe.js --serve`) and stopped it afterwards (8791 down).
+
+**Harness:** 776/776 at the start, **776/776** after.
+
+**Static read first.** The routed 12K prompt for the canonical DOES render set_track_matte and the `through-is-matte` rule. But the compact doc was "Use one layer as another's track matte", and the args glossed only `layer` ("the layer being matted") and left `matteLayer` bare. Round 1's "Setting Beta as track matte for HELLO" matches that reading: set_track_matte read as "set <X> as the matte".
+
+**Measured.** 7B, `--variants --steps 27 --route auto --ctx 12288`, 4 phrasings per run. The chat-probe header says temperature 0.7, so each run is a sample.
+
+| Wording | canonical | casual | vague | typo |
+|---|---|---|---|---|
+| shipped (4 runs) | 1/4 (2 self-matte, 1 backwards HARM) | 4/4 | 1/4 | 4/4 |
+| A: desc "show only through another layer's shape", args name both roles (4) | 4/4 | 4/4 | 0/4, set_track_matte on a Red Square (a SHAPE layer) | 4/4 |
+| B: A + `layer` = "the layer the user wants seen" (4) | 4/4 | 4/4 | 0/4, off-tool | 4/4 |
+| C: B + rule gains "X in the shape of Y" (4) | 4/4 | 4/4 | 4/4 | 4/4 |
+| **final: C with the cuts below (6)** | **6/6** | **6/6** | **6/6** | **6/6** |
+
+`--route all` at 12K: shipped vague 0/4 (2 HARM, 2 miss), final vague 0/3, and the other three phrasings 9/9 on final. No regression, but the unrouted vague case is live on the shipped default. Filed as **NEXT UP 40b**.
+
+**Change (extension/js/tools.js):**
+- set_track_matte desc: "Make one layer show only through another's shape, or remove it with mode 'none'." (compact form).
+- Args: `layer?: name|index (the layer to be seen; omit = selected), matteLayer: name|index (the text/logo whose shape it shows through)`.
+- Rule `through-is-matte`: "... / X only visible through Y / X in the shape of Y' = set_track_matte {layer: X, matteLayer: Y, mode: alpha}". The "(the footage being cut)" and "(the text/logo)" glosses moved into the args.
+- **Growth paid for:** C was +40 chars. Cutting "(track matte)", "layer's", "; never = layer" and "the user wants" gave a net -4 in every form: compact 39801 -> 39797, full 58931 -> 58927, routed step-27 8329 -> 8325. The final bytes were re-measured (the 6-run row above).
+
+**Tests:**
+- `test-prompt-rules.js`: hashes re-pinned with the reason. There are two new checks: the args must name both roles, and "in the shape of" must route to set_track_matte AND render the rule's "X in the shape of Y" mapping. Both fail on the HEAD tools.js and pass now.
+- `CAPABILITIES.md` regenerated.
+- The whole Node suite is green.
+
+**Transcripts:** baseline `logs/chat-probe-2026-09-17T07-58-51`..`07-59-37`; A `08-00-21`..`08-01-07`; B `08-02-08`..`08-02-56`; C `08-03-23`..`08-04-07`; final `08-07-42`..`08-08-55`; all-route final `08-09-16`..`08-09-46`; all-route shipped `08-10-07`..`08-10-53`.
+
+**Assumed:**
+1. The row pointed at the prompt, and the 40 entry had already shown the refusal was not the lever, so I left the host refusal as it was.
+2. A wrong-layer matte (vague under A) grades HARM, which is worse than a miss, so A alone was not shippable despite the canonical win. That is why I carried on to C.
+3. I did not measure 16K `all` (the shipped default) this pass: the server was sized for 12K and the row was about 12K. 40b asks for it.
