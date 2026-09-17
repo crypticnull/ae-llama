@@ -11349,6 +11349,36 @@ function AELL_childProp(node, lookup, seg) {
   return child || null;
 }
 
+/* A text layer's colour, size and font live in its Source Text document,
+   not in the property tree, so "fillColor" on a text layer is a dead end
+   the tree listing cannot explain. Measured 2026-09-17 (WORKPLAN 42): at
+   12K the 7B sent set_property fillColor to a headline 2/2 and gave up on
+   the bare path error, with set_text_style in its routed set. Returns a
+   sentence naming the tool, or "" when the segment is not a style word. */
+var AELL_TEXT_STYLE_WORDS = {
+  fillcolor: "fillColor", fill: "fillColor", color: "fillColor",
+  colour: "fillColor", textcolor: "fillColor", fontcolor: "fillColor",
+  fontsize: "fontSize", size: "fontSize", textsize: "fontSize",
+  font: "font", fontfamily: "font", fontname: "font", typeface: "font",
+  tracking: "tracking", leading: "leading",
+  justification: "justification", alignment: "justification"
+};
+var AELL_TEXT_STYLE_SAMPLE = {
+  fillColor: "[r,g,b] 0..1", fontSize: "px", font: "PostScript name",
+  tracking: "number", leading: "px|'auto'",
+  justification: "'left'|'center'|'right'"
+};
+function AELL_textStyleHint(layer, seg) {
+  if (!(layer instanceof TextLayer)) return "";
+  var key = String(seg).toLowerCase().replace(/[\s_\-]/g, "");
+  var field = AELL_TEXT_STYLE_WORDS[key];
+  if (!field) return "";
+  return " '" + layer.name + "' is a text layer, so " + field + " is not " +
+    "a property here: call set_text_style {layer: \"" + layer.name +
+    "\", " + field + ": " + AELL_TEXT_STYLE_SAMPLE[field] + "} instead " +
+    "(it also takes font, fontSize, fillColor, tracking, leading).";
+}
+
 /*
  * Walk a '/'-separated path of display or match names from a layer down
  * to any property or group. A failed segment throws a grounded error
@@ -11368,7 +11398,8 @@ function AELL_resolvePropPath(layer, pathStr) {
       var at = walked.length ? "'" + walked.join("/") + "'"
                              : "layer '" + layer.name + "'";
       throw new Error("Path segment '" + seg + "' not found under " + at +
-        ". Children here: " + AELL_childList(node) +
+        "." + AELL_textStyleHint(layer, seg) +
+        " Children here: " + AELL_childList(node) +
         ". Use list_properties to inspect the real tree.");
     }
     if (AELL_childHopped) walked.push("Contents");

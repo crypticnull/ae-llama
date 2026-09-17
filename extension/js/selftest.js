@@ -813,6 +813,22 @@
           return true;
         } },
 
+      // WORKPLAN 42: a text layer's colour lives in its TextDocument, not
+      // the property tree, and at 12K the 7B gave up on the bare path
+      // error. The refusal must name set_text_style, in real AE's tree.
+      { name: "set_property fillColor on text names set_text_style",
+        tool: "set_property",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: ctx.textLayer,
+                   property: "fillColor", value: [0.1, 0.3, 1] };
+        },
+        check: function (err) {
+          return (/not found under/.test(err) &&
+                  /is a text layer, so .*call set_text_style/.test(err)) ||
+                 "no set_text_style hint: " + err;
+        } },
+
       // AE clamps leading 0 to ~0.01 and leaves autoLeading false, so
       // without an explicit "auto" there is no way back.
       { name: "leading can go back to auto",

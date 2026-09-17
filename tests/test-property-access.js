@@ -2184,4 +2184,31 @@ assert(r.ok && r.data.replaced.length < 300 &&
        JSON.stringify(r.data.replaced));
 call("set_expression", { layer: "A", property: "opacity", expression: "" });
 
+// WORKPLAN 42: a text layer's colour, size and font are not in its
+// property tree, so the bare "not found" left the 7B with nowhere to go
+// (12K, "make HEADLINE bigger and blue" -> set_property fillColor 2/2,
+// gave up). The error must name set_text_style for a style word on a
+// TEXT layer, and only there: a solid has no set_text_style to offer.
+const HEAD = new Layer("HEADLINE", comp, "text");
+comp._layers.push(HEAD);
+["fillColor", "fontSize", "font", "Fill Color", "tracking"].forEach((w) => {
+  r = call("set_property", { layer: "HEADLINE", property: w,
+                             value: [0.1, 0.3, 1] });
+  assert(!r.ok && /not found under layer 'HEADLINE'/.test(r.error) &&
+         /is a text layer, so .*call set_text_style {layer: "HEADLINE", /.test(r.error) &&
+         /Children here:/.test(r.error),
+         "text layer '" + w + "' -> error names set_text_style and still " +
+         "lists children: " + (r.error || ""));
+});
+r = call("get_property", { layer: "HEADLINE", property: "Wobble" });
+assert(!r.ok && /not found under/.test(r.error) &&
+       !/set_text_style/.test(r.error),
+       "a non-style word on a text layer gets no set_text_style hint");
+r = call("set_property", { layer: "A", property: "fillColor",
+                           value: [0.1, 0.3, 1] });
+assert(!r.ok && /not found under/.test(r.error) &&
+       !/set_text_style/.test(r.error),
+       "a style word on a SOLID gets no set_text_style hint: " + r.error);
+comp._layers.pop();
+
 console.log(process.exitCode ? "\nTESTS FAILED" : "\nALL TESTS PASSED");

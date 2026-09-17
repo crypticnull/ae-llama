@@ -86,7 +86,7 @@ _Regenerate with `node scripts/capability-report.js` — CI fails if this sectio
 | `set_layer_timing` | Retime a layer on the TIMELINE, in comp seconds: startTime slides the whole layer ('push it back two seconds' = startTime: current + 2), inPoint/outPoint TRIM its ends without sliding it | yes | host | — | 5 |
 | `set_mask` | Edit an EXISTING mask: mode, feather, expansion, opacity, inverted, rename | yes | host | 1 | 13 |
 | `set_mask_path` | Replace or ANIMATE a mask's path | yes | host | 1 | 7 |
-| `set_property` | Set ANY property by path — the universal fallback when no dedicated tool fits | yes | host | 4 | 10 |
+| `set_property` | Set ANY property by path — the universal fallback when no dedicated tool fits | yes | host | 4 | 11 |
 | `set_solid_color` | Change a SOLID layer's colour (this is the ONLY way — a solid's colour is not a property you can set_property) | yes | host | 1 | 5 |
 | `set_text_style` | Restyle an existing text layer (any subset of fields) | yes | host | 1 | 2 |
 | `set_track_matte` | Make one layer show only through another's shape, or remove it with mode 'none' | yes | host | 1 | 9 |

@@ -325,6 +325,9 @@ function leakSolidSource(name) {
 function leakNullSource() { return leakSolidSource("Null " + (++leakedNulls)); }
 let camProbeReads = 0;
 let textStyle = null;
+// Names add_text_layer handed out, so set_property can refuse a text
+// style word with the host's set_text_style hint (WORKPLAN 42).
+const textLayerNames = [];
 // The ordering steps read back what the previous step wrote, so the canned
 // host has to REMEMBER instead of answering with a constant — otherwise
 // "did slot i go to layer i" is a question the stub answers for free.
@@ -4474,6 +4477,7 @@ function cannedOk(tool, args) {
       const made = { index: 1, name: (args && args.text) || "Text",
                      style: textStyle };
       if (/^ST PreText/.test(made.name)) preLayers.push(made.name);
+      textLayerNames.push(made.name);
       if (inherit) made.inheritedStyle = true; else made.styleReset = true;
       return made;
     }
@@ -4794,6 +4798,19 @@ function cannedOk(tool, args) {
                expression: expr };
     }
     case "set_property": {
+      // hostscript AELL_textStyleHint: a text layer's style lives in its
+      // TextDocument, so the path error names set_text_style.
+      if (args && textLayerNames.indexOf(args.layer) !== -1 &&
+          /^(fill ?colou?r|font ?size|font|tracking|leading)$/i
+            .test(String(args.property || ""))) {
+        return { __err: "Path segment '" + args.property + "' not found " +
+          "under layer '" + args.layer + "'. '" + args.layer + "' is a " +
+          "text layer, so fillColor is not a property here: call " +
+          "set_text_style {layer: \"" + args.layer + "\", fillColor: " +
+          "[r,g,b] 0..1} instead. Children here: " +
+          "Text, Transform, Effects. Use list_properties to inspect the " +
+          "real tree." };
+      }
       const SL = shapeLayerOf(args && args.layer);
       if (SL && /^contents\//i.test(String((args && args.property) || ""))) {
         const hit = shapeResolve(SL, args.layer, args.property);

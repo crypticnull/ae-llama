@@ -28281,3 +28281,28 @@ Table and transcripts: section "Re-run after 40 and 40a" in `docs/measured/promp
 1. "One matrix per pass" guarded against the 45-minute kill. At 6.5 min a matrix, four fit with more than ten minutes to spare, and the partial files covered a kill. Running them in one pass keeps "same rig, same night" tight.
 2. The row clause applies to every row. A single non-canonical 2/2 row does not turn the verdict RED: item 20 called 16K GREEN with one casual row, and this pass does the same.
 3. The flip is MINOR and is not a loop pass's to take.
+
+## 2026-09-17 (local session) - set_property's path error on a text layer now hands over a set_text_style call; step 34 at 12K acts on it 1/3, the rest is round-1 tool choice and the judge (NEXT UP 42), 0.12.44
+
+**Item:** NEXT UP 42, the first row whose needs were met (1a, 8, 5a-4e, 5a-5b, 5a-5c, 5c, 6b wait on the owner or are blocked; 11d is conditional on the owner; 40d is the owner's or an interactive session's). Loop pass, started ~05:35 EDT under the owner's loop. AfterFX was running and was left running.
+
+**Harness:** 776/776 at the start; **777/777** after (one new step).
+
+**Changed:**
+- `extension/jsx/hostscript.jsx`: `AELL_textStyleHint(layer, seg)`, called from `AELL_resolvePropPath`'s not-found error. It fires only on a TextLayer and only for a style word (fillColor/fill/color/colour, fontSize/size, font/fontFamily/typeface, tracking, leading, justification/alignment; case, spaces, `_` and `-` ignored). It inserts one sentence before "Children here:": `'HEADLINE' is a text layer, so fillColor is not a property here: call set_text_style {layer: "HEADLINE", fillColor: [r,g,b] 0..1} instead (it also takes font, fontSize, fillColor, tracking, leading).` Every caller of the resolver gets it (get/set_property, list_properties path, keyframe tools). A solid, or a non-style word, gets the old error unchanged.
+- `extension/js/selftest.js`: a new expectError step, "set_property fillColor on text names set_text_style", passes in real AE.
+- Tests: `tests/test-property-access.js` covers five style words on a text layer (hint present, children still listed), a non-style word on text (no hint) and a style word on a solid (no hint). `tests/test-self-test.js` fakes the refusal. `docs/CAPABILITIES.md` was regenerated (set_property self-test count 10 -> 11).
+
+**Spot check:** `chat-probe --variants --reuse-server --route auto --ctx 12288 --temperature 0 --steps 34`, 7B Q4_K_M, `-ctk q8_0 -ctv q8_0`, the 40c rig. Three runs per wording. Runners are in `local/spot42*/` (gitignored).
+- **Wording 1 ("... with set_text_style.")**: canonical and typo HARM 3/3. The model QUOTED the hint back to the user ("use set_text_style to change its color"), re-ran only the scale half that had been rolled back, and stopped. That matches the 40c baseline (canonical HARM 2/2, typo HARM/miss).
+- **Wording 2 (a ready call, shipped)**: canonical 3/3 HARM by the judge, but in r1 the model DID call `set_text_style fillColor` after the retry, and the comp ended up scaled 150 % and blue. Typo passed 1/3; in that run it went straight to set_text_style and never hit the error. Casual and vague passed 3/3 both times.
+- So the error now works when the model acts on it (1 in 3 canonical runs), up from 0. Step 34 at 12K is still not fixed. That is two things this row cannot touch: (a) round 1 still picks `set_transform scale` for "bigger" and `set_property` for colour; (b) the judge grades "bigger" by fontSize, so scale-then-colour, which LOOKS right to a user, scores HARM. Filed as 42a.
+
+**Filed:** NEXT UP 42a.
+
+**Assumed:**
+1. The item's fix is shipped even though the step does not pass. It is a strictly better grounded error, it never fires where it is not true, and it measurably moves the model 0/3 -> 1/3 to the right tool.
+2. The hint was placed BEFORE the children list rather than appended after it. A 7B reads the start of an error, and the children list can run 30 names.
+3. Only one follow-up wording was tried (the ready-call form other refusals here use). A third iteration belongs to 42a, which should address round-1 choice.
+
+**Needs a human eye:** nothing new. The three `loop-salvage-20260917-*` stashes are still in `git stash list`.
