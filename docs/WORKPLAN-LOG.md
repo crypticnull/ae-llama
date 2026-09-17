@@ -28448,3 +28448,21 @@ After the CLI exited, the reap selected nothing and the runner kept going. That 
 2. Reading other same-user processes' memory with PROCESS_QUERY_LIMITED_INFORMATION and PROCESS_VM_READ is acceptable in the loop. It reads only processes created since the pass began.
 
 **Needs a human eye:** the RUNNING loop keeps the code it parsed at start. The fix is live from the next `run-local-agent.ps1` start. `loop-salvage-20260917-*` stashes are still in `git stash list`.
+
+## 2026-09-17 (local session) - chat-probe step 18 judges the text jump in comp space, so a rotation after the anchor move no longer hides it (NEXT UP 41)
+
+**Item:** NEXT UP 41, the first open row whose needs were met (1a, 8, 5a-4e, 5a-5b/c, 5c, 6b need the owner; 11d is optional and owner-gated; 40d needs owner/interactive). Loop pass started ~07:31 EDT under the owner's `run-local-agent.ps1` loop (-UntilHour 9). AfterFX was running and was left running.
+
+**Harness:** 777/777 at the start; **777/777** again after the change. Nothing under `extension/` changed, so **no bump**.
+
+**Changed (`scripts/chat-probe.js`, "fix a text layer's pivot" check):** the jump check only ran when HELLO's rotation was ~0 and scale 100, so an uncompensated `center_anchor_point {preservePosition:false}` followed by any rotation scored pass. It now computes where the text's CENTRE lands in comp space for the before and after states, each with its own position, anchor, scale and rotation (`pos + R(rot) * S * (centre - anchor)`), and fails when that point moved more than 2 px. That is the row's second option, chosen over "rotation mod 360" because it also catches rotation 45 and does not call a compensated anchor plus a spin or scale about the centre a jump. At rotation 0 / scale 100 it reduces to the old formula, so the existing `jumped by [-177, 41]` message is unchanged.
+
+**Tests (`tests/test-chat-probe.js`):** four new cases. Uncompensated anchor + rotation 360 fails, and + rotation 45 fails (both FAILED against HEAD's judge, checked by swapping the old file back in). Compensated anchor + rotation 360 passes, and + rotation 45 with scale 150 passes. Every test file that references chat-probe passes.
+
+**Not done:** the 2026-09-17 matrices that scored step 18 under the old judge (20's 16K auto pass) were not regraded. The pass would become a HARM only if that transcript's state had the rotation after an uncompensated anchor, which is what 41 reported. No shipped decision rested on that one row (40c/40d gate on the whole matrix).
+
+**Assumed:**
+1. AE rotation is clockwise on screen in y-down comp space, so the standard rotation matrix applies. Only the size of the jump is reported, and the test for rotation 45 checks only that it fails, so a sign error there could not turn a pass into a fail.
+2. The before-state's `sourceRect` is used when present; otherwise the after-state's rect stands in (the text is not edited by this step).
+
+**Needs a human eye:** none.

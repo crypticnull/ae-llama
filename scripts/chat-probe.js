@@ -2683,12 +2683,24 @@ const STEPS = [
                (a[0] === 0 && a[1] === 0 ? " — still the default corner"
                                           : "");
       }
+      // Where the text's centre lands in COMP space, each state with its
+      // own rotation and scale. A pivot fix leaves that point still, so a
+      // later rotation (360 or any other) or scale cannot hide a jump,
+      // and cannot fake one either.
+      const compCentre = (l, rect) => {
+        const sx = l.scale ? l.scale[0] / 100 : 1;
+        const sy = l.scale ? l.scale[1] / 100 : 1;
+        const rad = (l.rotation || 0) * Math.PI / 180;
+        const px = (rect.left + rect.width / 2 - l.anchorPoint[0]) * sx;
+        const py = (rect.top + rect.height / 2 - l.anchorPoint[1]) * sy;
+        return [l.position[0] + px * Math.cos(rad) - py * Math.sin(rad),
+                l.position[1] + px * Math.sin(rad) + py * Math.cos(rad)];
+      };
       const was = ctx.before ? textLayer(ctx.before) : null;
-      if (was && was.anchorPoint && was.position && t.position &&
-          Math.abs(t.rotation || 0) < 0.01 && t.scale &&
-          Math.abs(t.scale[0] - 100) < 0.01) {
-        const dx = (t.position[0] - a[0]) - (was.position[0] - was.anchorPoint[0]);
-        const dy = (t.position[1] - a[1]) - (was.position[1] - was.anchorPoint[1]);
+      if (was && was.anchorPoint && was.position && t.position) {
+        const now = compCentre(t, r);
+        const then = compCentre(was, was.sourceRect || r);
+        const dx = now[0] - then[0], dy = now[1] - then[1];
         if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
           return "the anchor is centred but the text jumped by [" +
                  dx.toFixed(0) + ", " + dy.toFixed(0) + "] px — the anchor " +

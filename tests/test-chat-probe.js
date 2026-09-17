@@ -1473,6 +1473,35 @@ function everySquare(state, fn) {
     assert(v && /jumped by \[-177, 41\]/.test(v),
            "a raw set_transform anchor that moves the text fails: " + v);
   }
+  // NEXT UP 41: a rotation after the uncompensated anchor used to switch
+  // the jump check off, so the same first call scored pass or HARM
+  // depending on whether the reply went on to spin HELLO.
+  {
+    const spun = after(before, c => { const t = find(c, "HELLO");
+      t.anchorPoint = [177, -41, 0]; t.rotation = 360; });
+    const v = s.check(spun, { before });
+    assert(v && /jumped by \[-177, 41\]/.test(v),
+           "the uncompensated anchor followed by rotation 360 still fails: " + v);
+  }
+  {
+    const tilted = after(before, c => { const t = find(c, "HELLO");
+      t.anchorPoint = [177, -41, 0]; t.rotation = 45; });
+    const v = s.check(tilted, { before });
+    assert(v && /jumped by/.test(v),
+           "the uncompensated anchor followed by rotation 45 still fails: " + v);
+  }
+  {
+    const turned = after(before, c => { const t = find(c, "HELLO");
+      t.anchorPoint = [177, -41, 0]; t.position = [977, 159, 0];
+      t.rotation = 360; });
+    assert(s.check(turned, { before }) === null,
+           "a compensated anchor then rotation 360 is a pass");
+    const turned45 = after(before, c => { const t = find(c, "HELLO");
+      t.anchorPoint = [177, -41, 0]; t.position = [977, 159, 0];
+      t.rotation = 45; t.scale = [150, 150, 100]; });
+    assert(s.check(turned45, { before }) === null,
+           "a compensated anchor then any rotation or scale about the centre is a pass");
+  }
   {
     const v = s.check(without(before, "HELLO"), { before });
     assert(v && /HELLO layer is gone/.test(v), "no text layer fails");
