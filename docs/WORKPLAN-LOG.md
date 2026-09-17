@@ -27885,3 +27885,19 @@ Nothing under extension/ changed, so **no bump**.
 **Filed:** NEXT UP 2a: one real H3 render with a shaped prompt and one with a camera term (backend + weights). It proves what stubs cannot: that the backend and the clip are fine with a whole-clip bracket. CAPABILITIES curated half updated.
 
 **Bumped** 0.12.36 -> 0.12.37 (extension/ changed; stub-verified, AE harness green).
+
+## 2026-09-17 (local session) - H3 shaped prompt proven on the real backend: `[0-5.2s]` renders fine, a camera term passes through (NEXT UP 2a, §13e)
+
+**Item:** NEXT UP 2a, the first row with its needs met (1a is owner-gated). The pass started 01:19 EDT under the owner's `run-local-agent.ps1` loop (-UntilHour 9), so the loop is the permission (17a). AfterFX was already running (since 00:49) and was left running.
+
+**Harness: 770/770 PASSED** at the start and **770/770** at the end. Nothing under `extension/` changed.
+
+**Did:** `scripts/comfy-probe.js` gained `--no-length` and `--no-size`. Until now the probe always sent `durationSeconds` (default 0.2) plus a size, so it could not send a request the way plain chat does. Two runs of `--boot --no-length --no-size` on `AE_LLAMA_H3_T2V_V1`, seed 12345, managed backend:
+- "A red paper boat floats down a rainy city gutter at dusk, neon reflections in the water": `applied: prompt shaped for H3 -> "[0-5.2s] A red paper boat ..."`. 153 s, peak 28 414 MiB whole card, 1344x768, 5.167 s @ 24 fps, with audio, imported into AE and removed again. Frames 10/60/115: a red paper boat in a rainy gutter, neon reflections, one coherent push-in.
+- "Dolly in on a red paper boat ...": `applied: prompt sent to H3 untouched (it already names a camera move ('Dolly'))`. 155 s, peak 29 400 MiB, same dims. The frames show a clear dolly-in on the boat.
+
+**Verdict:** the backend accepts a bracket covering the whole clip without complaint, the landed check finds the shaped text, and the clip follows the words. The formatter stays as shipped in 0.12.37.
+
+**Assumed / limits:** (1) "No worse" was judged by eye on three frames per clip. I did NOT render an unshaped control of the same sentence, so this is "good", not "no worse than unshaped". If the owner wants an A/B, it is one more 155 s run with the formatter bypassed. (2) n = 1 per prompt. (3) Teardown: the probe stopped the backend it booted both times, nothing listens on :8288, and the card is at 1 990 MiB. Contact sheets are in gitignored `local/h3shape/`.
+
+Nothing under extension/ changed, so **no bump**. No new work found.

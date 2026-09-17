@@ -36,6 +36,13 @@
  *                                                     # node pack were
  *                                                     # installed
  *   node scripts/comfy-probe.js --keep                # leave the AE import
+ *   node scripts/comfy-probe.js --no-length --no-size # send NO length /
+ *                                                     # size, the way a
+ *                                                     # plain chat request
+ *                                                     # arrives (default
+ *                                                     # clip cap, H3 prompt
+ *                                                     # shaping, authored
+ *                                                     # frame size)
  *
  * Defaults are deliberately the SMALLEST thing the template can render
  * (0.2s -> the graph's own 17k+5 floor of 5 frames, ~0.15 MP): this is a
@@ -80,6 +87,8 @@ const OPT = {
   noAe: argv.indexOf("--no-ae") !== -1,
   bare: argv.indexOf("--bare") !== -1,
   keep: argv.indexOf("--keep") !== -1,
+  noLength: argv.indexOf("--no-length") !== -1,
+  noSize: argv.indexOf("--no-size") !== -1,
   afterFX: argValue("--afterfx", null)
 };
 
@@ -332,8 +341,10 @@ function writeTranscript() {
     "- workflow: " + OPT.workflow,
     "- url: " + Comfy.backendUrl(S) +
       "  (backend: " + Comfy.backendMode(S) + ")",
-    "- params: durationSeconds=" + OPT.duration + " " + OPT.width + "x" +
-      OPT.height + " seed=" + OPT.seed +
+    "- params: " +
+      (OPT.noLength ? "no length" : "durationSeconds=" + OPT.duration) + " " +
+      (OPT.noSize ? "no size" : OPT.width + "x" + OPT.height) +
+      " seed=" + OPT.seed +
       (OPT.image ? " image=" + OPT.image : " (text-to-video)"), ""];
   for (const t of transcript) lines.push("- **" + t.kind + "** " + t.text);
   fs.writeFileSync(file, lines.join("\n") + "\n", "utf8");
@@ -444,7 +455,9 @@ function stepGenerate(next) {
     seed: OPT.seed,
     "import": !OPT.noAe
   };
-  if (OPT.frames !== null) args.frames = parseInt(OPT.frames, 10);
+  if (OPT.noSize) { delete args.width; delete args.height; }
+  if (OPT.noLength) { /* the template's own length, capped by the panel */ }
+  else if (OPT.frames !== null) args.frames = parseInt(OPT.frames, 10);
   else args.durationSeconds = OPT.duration;
   if (OPT.image) args.image = OPT.image;
   say("info", "comfy_generate " + JSON.stringify(args));
