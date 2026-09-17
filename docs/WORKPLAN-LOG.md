@@ -28247,3 +28247,37 @@ I could not reconstruct the content of `AB move A/B` and `AB4 A-D`: the labels d
 1. Grading a killed pass's transcripts is recovery, not a second attempt (the precedent is item 20's pass 11).
 2. ECONNREFUSED rows are environmental and carry no information about the prompt, so they are excluded rather than counted as misses.
 3. Wording that lowers typo by a third to lift vague from 0 to 2-3 of 6 is not shippable. So no prompt change ships, and the flip stays gated on 40c plus a MINOR bump that is not a loop pass's.
+
+## 2026-09-17 (local session) - routing re-run after 40/40a: 12K auto GREEN against a fresh 16K auto pair, the flip gate is met (NEXT UP 40c, files 40d and 42)
+
+**Item:** NEXT UP 40c, the first row whose needs were met (1a, 8, 5a-4e, 5a-5b, 5a-5c, 5c, 6b wait on the owner or are blocked; 11d is conditional on the owner). Loop pass 17, started ~05:05 EDT under the owner's `run-local-agent.ps1` loop (-UntilHour 9). AfterFX was running and was left running. The panel's 32B server on 8737 was not touched.
+
+**Harness:** **776/776** at the start. Nothing under `extension/` changed, so there was no re-run and **no bump**.
+
+**Ran:** four `chat-probe --variants --reuse-server --port 8791 --route auto --temperature 0 --steps 1-11,15-36` matrices on a 7B Q4_K_M llama-server (`-ctk q8_0 -ctv q8_0`, 4 slots), same rig as item 20, interleaved 12K r1, 16K r1, 12K r2, 16K r2. The row said one matrix per pass. Each took 6.5 min, so all four ran in one pass (05:07-05:33), with the partial files as the fallback. The bar was declared in `local/route40c/BAR.md` before any output was read. The runner and the per-row tally (`local/route40c/run.sh`, `rows.js`) are gitignored.
+
+**Measured** (pass/miss/HARM/canonical not passing):
+- 12K auto r1 72/8/19/9, r2 70/12/17/12, **mean 71/10/18/10.5**
+- 16K auto r1 68/11/20/11, r2 73/8/18/9, **mean 70.5/9.5/19/10**
+
+**Grading** (item 20's method: means plus the 2-of-2 row clause):
+- **12K GREEN.**
+- The means clear: HARM 18 vs 19 + 2, miss 10 vs 9.5 + 2.
+- No canonical fails 2/2 at 12K and passes 2/2 at 16K. Item 20's three 2/2 canonicals are gone: text pivot 1/2 in both windows (row 41's judge gap), mask 1/2 in both, track matte 1/2 at 12K.
+- No row is HARM 2/2 at 12K and HARM-free at 16K.
+- `variants-compare.js` calls each 12K run RED by the letter bar, which grades noise again (the same finding as 20).
+- One typo row fails 2/2 at 12K and passes 2/2 at 16K: `restyle a headline / typo`. The model used `set_property fillColor`, got "Path segment 'fillColor' not found ... Use list_properties", and gave up or only scaled. The error never points at `set_text_style`, although it was in the routed set.
+- Step 27 passed every phrasing in all four runs (vague 4/4 across the four runs, against 0/20 unrouted in 40b).
+
+Table and transcripts: section "Re-run after 40 and 40a" in `docs/measured/prompt-routing-2026-09-17.md`.
+
+**Filed:**
+- **NEXT UP 40d:** flip `promptRouting` to "auto". The gate is met. It is a MINOR bump with §24i, for the owner or an interactive session.
+- **NEXT UP 42:** the path-not-found error on a text layer should name `set_text_style` (hostscript `AELL_resolvePropPath`). This is a patch the loop can take.
+
+**Needs a human eye:** 40d is the owner's call to ship. Stashes `loop-salvage-20260917-050137`, `-032443` and `-013408` still sit in `git stash list`. The first two were already reviewed by passes 16 and 11.
+
+**Assumed:**
+1. "One matrix per pass" guarded against the 45-minute kill. At 6.5 min a matrix, four fit with more than ten minutes to spare, and the partial files covered a kill. Running them in one pass keeps "same rig, same night" tight.
+2. The row clause applies to every row. A single non-canonical 2/2 row does not turn the verdict RED: item 20 called 16K GREEN with one casual row, and this pass does the same.
+3. The flip is MINOR and is not a loop pass's to take.

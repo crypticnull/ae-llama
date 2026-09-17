@@ -120,3 +120,52 @@ canonical and within +1 on misses. But §24d grades night C against the
 2. Step 18 passes `center_anchor_point {preservePosition:false}` when a
    later round sets rotation, and scores the same call HARM when nothing
    follows. The text jumps either way. Filed as NEXT UP 41.
+
+## Re-run after 40 and 40a (NEXT UP 40c) — 12K GREEN
+
+Loop pass 17, 05:07-05:33 EDT. Same rig as above (7B Q4_K_M, KV q8_0,
+T=0, 4 slots, port 8791 beside the panel's 32B, `--variants --steps
+1-11,15-36`, 99 runs per matrix), on shipped 0.12.43. Order interleaved
+12K r1, 16K r1, 12K r2, 16K r2; each matrix took 6.5 minutes, so all four
+fitted in one pass. The bar was written to `local/route40c/BAR.md` before
+any output was read: item 20's clauses, 12K auto against tonight's 16K
+auto.
+
+| Label | Transcript (`logs/`) | pass | miss | HARM | canonical not passing |
+|---|---|---|---|---|---|
+| 7B q8_0 12K route auto r1 (40c) | `chat-probe-2026-09-17T09-13-40.md` | 72 | 8 | 19 | 9 |
+| 7B q8_0 16K route auto r1 (40c) | `chat-probe-2026-09-17T09-20-10.md` | 68 | 11 | 20 | 11 |
+| 7B q8_0 12K route auto r2 (40c) | `chat-probe-2026-09-17T09-26-51.md` | 70 | 12 | 17 | 12 |
+| 7B q8_0 16K route auto r2 (40c) | `chat-probe-2026-09-17T09-33-35.md` | 73 | 8 | 18 | 9 |
+| **12K auto mean** | | **71** | **10** | **18** | **10.5** |
+| **16K auto mean** | | **70.5** | **9.5** | **19** | **10** |
+
+Means: HARM 18 <= 19 + 2, miss 10 <= 9.5 + 2. Both clear.
+
+The letter bar (`variants-compare.js`) is RED for each 12K run again, and
+again it grades noise: every canonical it calls a regression passes in at
+least one 12K run or fails in at least one 16K run (text pivot is 1/2 in
+BOTH windows).
+
+Per-row clause, every row:
+- **No canonical fails 2/2 at 12K and passes 2/2 at 16K.** Item 20's three
+  2/2 canonicals are gone: text pivot 1/2 at both windows (row 41's judge
+  gap), mask 1/2 at both, track matte 1/2 at 12K (r2 made no shape layer).
+- **No row is HARM 2/2 at 12K and HARM-free at 16K.**
+- One non-canonical row fails 2/2 at 12K and passes 2/2 at 16K:
+  **`restyle a headline / typo`** ("mkae HEADLINE bigegr and blue
+  #1B4FFF"). Same routed set in all four (set_text_style offered). At 12K
+  the model sent `set_transform scale` plus `set_property fillColor`, the
+  round rolled back on "Path segment 'fillColor' not found", and the error
+  did not point at set_text_style. One row, like item 20's 16K casual
+  row: a trigger question, not a routing verdict. Filed as NEXT UP 42 (the
+  grounded error should name the tool).
+- Step 27 (show one layer through another) passed all four phrasings in
+  all four runs, vague included: 4/4 routed against 0/20 unrouted (40b).
+
+### Verdict
+
+- 16K: GREEN (item 20). 12K: **GREEN** on the declared bar.
+- **The gate item 20 set for flipping `promptRouting` to "auto" is met.**
+  The flip is a MINOR bump with §24i's copy, so this pass did not take it.
+  Filed as NEXT UP 40d.
