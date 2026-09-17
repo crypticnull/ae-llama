@@ -824,6 +824,13 @@ comp._layers.pop(); comp._layers.pop(); comp._layers.pop();
 
 r = call("set_track_matte", { layer: "A", matteLayer: "A", mode: "alpha" });
 assert(!r.ok && /matte itself/.test(r.error), "self-matte refused");
+// Grounded (2026-09-17): the bare refusal made a 12K model give up after
+// sending layer 3 as both args. It names the layer and lists what exists.
+assert(/both name 'A' \(index \d+\)/.test(r.error) &&
+       /Layers in '[^']+': 1 '/.test(r.error) &&
+       /call set_track_matte again with TWO different layers/.test(r.error),
+       "self-matte refusal names the layer and lists layers by index: " +
+       r.error);
 r = call("set_track_matte", { layer: "A", mode: "alpha" });
 assert(!r.ok && /matteLayer/.test(r.error), "missing matteLayer refused");
 

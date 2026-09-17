@@ -480,6 +480,20 @@
         },
         check: function (d) { return d.mode === "alpha" || d.mode; } },
 
+      // Grounded self-matte refusal (2026-09-17): the bare "A layer
+      // cannot matte itself" made a small model give up.
+      { name: "a self-matte names the layer and lists the layers",
+        tool: "set_track_matte",
+        expectError: true,
+        args: function (ctx) {
+          return { comp: ctx.comp, layer: "ST Square 3",
+                   matteLayer: "ST Square 3", mode: "alpha" };
+        },
+        check: function (e) {
+          return (/cannot matte itself: layer and matteLayer both name 'ST Square 3' \(index \d+\)/.test(e) &&
+                  /': 1 '/.test(e)) || "message was: " + e;
+        } },
+
       // The other half of the type guard added 2026-09-01: a SHAPE layer
       // is not `instanceof AVLayer` in ExtendScript, so the first cut at
       // refusing cameras locked shapes and text out of mattes as well.
@@ -3113,7 +3127,7 @@
               !/middle of its own bounds/.test(e)) {
             return "message was: " + e;
           }
-          return /To cut away only the top half/.test(e) ||
+          return /inside the bounds is HIDDEN/.test(e) ||
                  "the worked example lost its mode: " + e;
         } },
 
@@ -3412,8 +3426,14 @@
                 .test(e)) {
             return "message was: " + e;
           }
-          return /To cut away only the top half/.test(e) ||
-                 "the worked example is still show-shaped: " + e;
+          if (!/inside the bounds is HIDDEN/.test(e)) {
+            return "the worked example is still show-shaped: " + e;
+          }
+          // "Chop off the LOWER half" needs its own numbers (2026-09-17).
+          return /hide the bottom half so only the top shows, mask bounds \[/
+                   .test(e) ||
+                 "the worked example has no bounds for 'only the top " +
+                 "shows': " + e;
         } },
 
       { name: "…and the same bounds under 'add' keep the old wording",
@@ -3425,7 +3445,7 @@
         },
         check: function (e) {
           if (!/so it hides nothing/.test(e)) return "message was: " + e;
-          return /To show only the top half/.test(e) ||
+          return /only the area inside the bounds SHOWS/.test(e) ||
                  "the worked example changed under 'add': " + e;
         } },
 

@@ -1481,13 +1481,24 @@ assert(!r.ok && /covers ALL of 'Solo', so it hides the WHOLE layer/
        "a comp-sized SUBTRACT is not 'hides nothing' — it hides " +
        "everything, and the refusal now says so: " +
        (r.ok ? JSON.stringify(r.data) : r.error));
-assert(/To cut away only the top half/.test(r.error),
+assert(/inside the bounds is HIDDEN/.test(r.error),
        "…and the worked example is cut-shaped, not show-shaped, so " +
        "following it does what the caller asked: " + r.error);
+// Measured 2026-09-17 (routing matrix, 7B at 12K): "Chop off the lower
+// half of Beta so only the top shows" drew this refusal with one example,
+// "to cut away only the top half, [0, 0, 100, 50]". The model matched
+// "top" and hid the wrong half, or gave up. Both halves, each named by
+// what stays visible, in the user's own words.
+assert(/to hide the bottom half so only the top shows, mask bounds \[0, 50, 100, 50\]/
+         .test(r.error) &&
+       /to hide the top half so only the bottom shows, \[0, 0, 100, 50\]/
+         .test(r.error),
+       "…and it offers BOTH halves by what stays visible: " + r.error);
 r = call("add_mask", { layer: "Solo", shape: "rectangle",
                        bounds: [0, 0, 1920, 1080] });
 assert(!r.ok && /so it hides nothing/.test(r.error) &&
-       /To show only the top half/.test(r.error),
+       /to show only the top half, mask bounds \[0, 0, 100, 50\]; to show only the bottom half, \[0, 50, 100, 50\]/
+         .test(r.error),
        "…while the same bounds under the default 'add' keep the old " +
        "wording, which was right for them: " +
        (r.ok ? JSON.stringify(r.data) : r.error));
@@ -1615,7 +1626,7 @@ assert(/is far bigger than 'Solo'/.test(r.error) &&
        /middle of its own bounds/.test(r.error),
        "…it says what IS true of it: " + r.error);
 assert(/Mask coordinates are in LAYER space/.test(r.error) &&
-       /To cut away only the top half/.test(r.error),
+       /inside the bounds is HIDDEN/.test(r.error),
        "…and keeps the diagnosis and the mode-shaped worked example, " +
        "which are what the model acts on: " + r.error);
 // …and an ellipse big enough to really contain the layer box gets the

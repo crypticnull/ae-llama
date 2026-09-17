@@ -28130,3 +28130,45 @@ Table, transcripts and the row detail are in `docs/measured/prompt-routing-2026-
 **Assumed:**
 1. "Split them" meant a resumable instrument, not rewording rows 20 and 40. Their commands work unchanged and now leave partial files.
 2. Backing up to a self-contained run is better than refusing, because it costs a few runs rather than the whole resume.
+
+## 2026-09-17 (local session) - routed prompts do not give up more often; the two 12K canonicals were an add_mask hint and a set_track_matte role swap (NEXT UP 40), 0.12.42
+
+SUPERSEDES: 28072,28106 -- that entry's "routed prompts give up after a grounded error 2-4x as often" counted replies that OPEN with Failed/Could not/Unable; counted by what the model did next, all six runs stop after an error round 30-50 % of the time
+
+**Item:** NEXT UP 40, the first row whose needs were met. Rows 1a, 5a-4e, 5a-5b, 5a-5c, 5c, 8 and 22a wait on the owner. The pass started 03:35 EDT. AfterFX was running and was left running. The panel's own server on 8737 was not touched. I started a 7B Q4_K_M server with q8_0 KV at 12K on port 8791 (`kv-quant-probe.js --serve`) and stopped it afterwards.
+
+**Harness:** 775/775 at the start. **776/776** after the fix (one new step).
+
+**The premise was a wording count.** I re-graded pass 10's six transcripts by what happened after a round with an error: another command, or none.
+
+| Config | error rounds | continued | stopped |
+|---|---|---|---|
+| 16K all r1 / r2 | 33 / 33 | 19 / 23 | 14 / 10 |
+| 16K auto r1 / r2 | 23 / 34 | 14 / 21 | 9 / 13 |
+| 12K auto r1 / r2 | 32 / 26 | 20 / 13 | 12 / 13 |
+
+The stop rate is 30-50 % in every config. The routed runs only word their stop replies "Failed..." more often. **No prompt change.** Static diff (`buildSystemPrompt`, 12K auto, step 19 sentence): the routed prompt drops the set_mask-owned bullet "Mask points are LAYER space", but the add_mask refusal already says that.
+
+**Step 19 canonical** ("Chop off the lower half of Beta so only the top shows"): 12K sends subtract `[0,0,1920,540]` both times. The refusal's only worked example was "To cut away only the top half of this layer, mask bounds [0, 0, 100, 50]". The model matched "top" and either gave up (12K) or followed it and hid the wrong half (16K auto r1, which the old judge graded pass).
+- **Fix (hostscript.jsx):** `AELL_halvesExample` states what the mode does, then both halves by what stays visible, e.g. "to hide the bottom half so only the top shows, mask bounds [0, 50, 100, 50]; to hide the top half so only the bottom shows, [0, 0, 100, 50]". The add-mode branch gets the same, show-shaped.
+- The first try (both halves, still "cut away only the top half" first) got 1 pass (HARM by the new judge) and 1 give-up in 2 runs.
+- **Final wording, 3 runs at 12K auto:** canonical passed 3/3, each retrying to `[0,50,100,50]`. Casual, vague and typo passed 3/3 too.
+
+**Step 27 canonical:** layer 3 = matteLayer 3, then "A layer cannot matte itself" with no grounding.
+- **Fix:** the refusal names the layer and its index, lists the comp's layers by index (cap 20), and says nothing changed and to call again with two different layers. This follows the CLAUDE.md grounded-error rule either way.
+- **It does not rescue the 7B.** In 7 runs after the fix, the model avoided the mistake 5 times (pass). The 2 times it made it, it gave up after both wordings.
+- Round 1 already says "Setting Beta as track matte for HELLO", so the roles are swapped before any error. Filed as **NEXT UP 40a**. The vague variant takes set_text_style (HARM) in most runs, as before.
+
+**Tests:**
+- `test-shape-mask-tools.js`: both halves are asserted by outcome, with numbers.
+- `test-property-access.js`: the self-matte refusal names the layer and lists layers by index.
+- `test-self-test.js`: its stub host now refuses a self-matte the way the host does.
+- `selftest.js`: a new real-AE step (self-matte refusal), and the two mask steps now check the new wording.
+- Every test that loads hostscript.jsx or selftest.js is green.
+
+**Transcripts:** `logs/chat-probe-2026-09-17T07-41-20`, `07-41-50` (first wording), `07-49-06`, `07-49-37`, `07-50-08` (final mask wording, steps 19+27), `07-50-45`, `07-51-01`, `07-51-16`, `07-51-32` (step 27, final matte wording).
+
+**Assumed:**
+1. The row said to diff the prompts first. Once the stop rate turned out equal, the cause was in each step's refusal, so I fixed it at the host rather than in the prompt. No prompt bytes changed, so nothing needed measuring or paying for.
+2. A 4-slot server restart changes the first call (step 27 went 1 -> 3 between runs with no change on my side), so each wording was judged on the runs where its refusal actually fired.
+3. The matte refusal stays grounded even though it did not rescue the 7B. The grounded-error rule is not conditional on one model.

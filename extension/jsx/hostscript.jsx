@@ -387,6 +387,28 @@ function AELL_layersOrSelection(comp, args, destroys) {
   return out;
 }
 
+/* add_mask's worked example for a layer box, said as OUTCOMES in the
+ * user's own words ("so only the top shows"). Measured 2026-09-17, 7B at
+ * 12K: "Chop off the lower half of Beta so only the top shows" got a
+ * refusal whose only example was "to cut away only the top half,
+ * [0, 0, w, h/2]"; the model matched "top" and hid the wrong half, or
+ * gave up rather than contradict the user. Both halves, each named by
+ * what stays VISIBLE, with the mode's meaning first. */
+function AELL_halvesExample(box, erases) {
+  var h = AELL_r3(box.height / 2);
+  var topB = "[" + box.left + ", " + box.top + ", " + box.width + ", " + h + "]";
+  var botB = "[" + box.left + ", " + AELL_r3(box.top + box.height / 2) +
+             ", " + box.width + ", " + h + "]";
+  if (erases) {
+    return "With this mode the area inside the bounds is HIDDEN: to hide " +
+      "the bottom half so only the top shows, mask bounds " + botB +
+      "; to hide the top half so only the bottom shows, " + topB + ".";
+  }
+  return "With this mode only the area inside the bounds SHOWS: to show " +
+    "only the top half, mask bounds " + topB + "; to show only the " +
+    "bottom half, " + botB + ".";
+}
+
 /* The comp's layer names, capped — the grounding half of every layer
  * refusal that is not a plain lookup miss (AELL_resolveLayer lists them
  * itself on a miss). */
@@ -8031,10 +8053,7 @@ AELL_TOOLS.add_mask = function (args) {
         ": the mask spans " + span + " and the layer is only " +
         mine + ". Mask coordinates are in LAYER space, not comp space — " +
         "the comp is " + comp.width + "x" + comp.height + " and this layer " +
-        "is not. To " + (bigErases ? "cut away" : "show") + " only the top " +
-        "half of this layer, mask bounds [" +
-        box.left + ", " + box.top + ", " + box.width + ", " +
-        AELL_r3(box.height / 2) + "].");
+        "is not. " + AELL_halvesExample(box, bigErases));
     }
     if (hit.left < box.left || hit.top < box.top ||
         hit.right > bRight || hit.bottom > bBottom) {
@@ -12262,7 +12281,27 @@ AELL_TOOLS.set_track_matte = function (args) {
                     "luma cuts this one");
   }
   var matte = AELL_resolveLayer(comp, args.matteLayer, "matteLayer");
-  if (matte === layer) return AELL_err("A layer cannot matte itself");
+  /* Measured 2026-09-17 (routing matrix, 12K, both runs): "I want Beta
+   * to show only through the HELLO letters" sent layer 3 AND matteLayer
+   * 3, got the bare "A layer cannot matte itself", and the small model
+   * gave up — the message named neither layer nor what exists. The
+   * worked example follows the other track matte refusals: which layer
+   * is which, then every layer by index, since an index is what it
+   * confused. */
+  if (matte === layer) {
+    var here = [];
+    for (var mi = 1; mi <= comp.numLayers && mi <= 20; mi++) {
+      try { here.push(mi + " '" + comp.layer(mi).name + "'"); } catch (e) {}
+    }
+    return AELL_err("A layer cannot matte itself: layer and matteLayer " +
+      "both name '" + layer.name + "' (index " + layer.index + "). " +
+      "Nothing was changed — call set_track_matte again with TWO " +
+      "different layers: 'layer' is the one being cut (it shows only " +
+      "through the matte), 'matteLayer' is the text or logo whose shape " +
+      "it shows through. Layers in '" + comp.name + "': " +
+      (here.join(", ") || "(none)") +
+      (comp.numLayers > 20 ? ", ..." : "") + ".");
+  }
   // Same measurement from the other side. AE's own throw does cover this
   // one on AE 23+ (setTrackMatte rejects parameter 1), but the legacy
   // branch would silently reorder the stack first, so the type is

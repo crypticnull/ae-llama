@@ -3326,9 +3326,18 @@ function cannedOk(tool, args) {
             ", y " + bt + " to " + bb + " and the layer is only " +
             mkSz.width + "x" + mkSz.height + " at x 0 to " + mkSz.width +
             ", y 0 to " + mkSz.height + ". Mask coordinates are in LAYER " +
-            "space, not comp space. To " + (bigE ? "cut away" : "show") +
-            " only the top half of this layer, mask bounds [0, 0, " +
-            mkSz.width + ", " + (mkSz.height / 2) + "]." };
+            "space, not comp space. " + (bigE
+              ? "With this mode the area inside the bounds is HIDDEN: to " +
+                "hide the bottom half so only the top shows, mask bounds [0, " +
+                (mkSz.height / 2) + ", " + mkSz.width + ", " +
+                (mkSz.height / 2) + "]; to hide the top half so only the " +
+                "bottom shows, [0, 0, " + mkSz.width + ", " +
+                (mkSz.height / 2) + "]."
+              : "With this mode only the area inside the bounds SHOWS: to " +
+                "show only the top half, mask bounds [0, 0, " + mkSz.width +
+                ", " + (mkSz.height / 2) + "]; to show only the bottom " +
+                "half, [0, " + (mkSz.height / 2) + ", " + mkSz.width + ", " +
+                (mkSz.height / 2) + "].") };
         }
         if (br <= 0 || bl >= mkSz.width || bb <= 0 || bt >= mkSz.height) {
           return { __err: "That mask misses '" + args.layer + "' completely, " +
@@ -3964,6 +3973,14 @@ function cannedOk(tool, args) {
         return { layer: tmLayer, matte: "removed", was: was };
       }
       const mt = args && args.matteLayer;
+      if (mt === tmLayer) {
+        return { __err: "A layer cannot matte itself: layer and matteLayer " +
+          "both name '" + tmLayer + "' (index 1). Nothing was changed — call " +
+          "set_track_matte again with TWO different layers: 'layer' is " +
+          "the one being cut (it shows only through the matte), " +
+          "'matteLayer' is the text or logo whose shape it shows through. " +
+          "Layers in '" + mtComp + "': 1 '" + tmLayer + "'." };
+      }
       if (rigged(mt)) {
         return { __err: "matteLayer '" + mt + "' is " + kind(mt) +
           " and cannot BE a matte — only a visual (AV) layer has the " +
