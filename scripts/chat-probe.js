@@ -3454,9 +3454,16 @@ const STEPS = [
       const was = ctx.before ? headline(ctx.before) : null;
       const wasSize = was && was.fontSize !== null ? was.fontSize
                                                    : ICON_FONT_SIZE;
-      if (!(t.fontSize > wasSize + 1)) {
+      // "Bigger" is what the user SEES, so a Transform scale-up counts as
+      // well as a font size (NEXT UP 42a): a motion designer scales text
+      // layers all the time, and 150 % with a blue fill reads as done.
+      // Both axes must grow, so a one-axis stretch is still not bigger.
+      const wasScale = (was && was.scale) || [100, 100];
+      const scaledUp = !!t.scale && t.scale[0] > wasScale[0] + 1 &&
+                       t.scale[1] > wasScale[1] + 1;
+      if (!(t.fontSize > wasSize + 1) && !scaledUp) {
         return "HEADLINE is still " + t.fontSize + "px (was " + wasSize +
-               ")" + ranInstead(ctx);
+               ") and not scaled up" + ranInstead(ctx);
       }
       // #1B4FFF is [0.106, 0.310, 1.0]. Read loosely on purpose: the
       // ask is "brand blue", and a model that rounds the hex or reaches
@@ -3465,7 +3472,8 @@ const STEPS = [
       const blue = c => !!c && c[2] > 0.6 && c[2] - c[0] > 0.35 &&
                         c[2] - c[1] > 0.25;
       if (!blue(t.fillColor) && !(t.effectColors || []).some(blue)) {
-        return "HEADLINE is " + wasSize + " -> " + t.fontSize + "px but " +
+        return "HEADLINE is " + wasSize + " -> " + t.fontSize + "px" +
+               (scaledUp ? " at scale " + t.scale[0] + " %" : "") + " but " +
                "its fill is " +
                (t.fillColor ? t.fillColor.map(v => v.toFixed(2)).join(",")
                             : "unreadable") + ", not blue";

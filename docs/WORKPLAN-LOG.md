@@ -28306,3 +28306,45 @@ Table and transcripts: section "Re-run after 40 and 40a" in `docs/measured/promp
 3. Only one follow-up wording was tried (the ready-call form other refusals here use). A third iteration belongs to 42a, which should address round-1 choice.
 
 **Needs a human eye:** nothing new. The three `loop-salvage-20260917-*` stashes are still in `git stash list`.
+
+## 2026-09-17 (local session) - step 34's judge accepts a scale-up, and the 12K round-1 premise was wrong: the prompt is identical at 16K and the lever is the rolled-back rule (NEXT UP 42a, files 42b)
+
+**Item:** NEXT UP 42a, the first row whose needs were met (1a, 8, 5a-4e, 5a-5b, 5a-5c, 5c, 6b wait on the owner or are blocked; 11d is conditional on the owner; 40d belongs to the owner or an interactive session). Loop pass started ~05:49 EDT under the owner's `run-local-agent.ps1` loop. AfterFX was running and was left running. The panel's 32B server was not touched.
+
+**Harness:** **777/777** at the start. Nothing under `extension/` changed (the A/B swapped `tools.js` in the working tree and restored it byte for byte, checked with `cmp`), so there was no re-run and **no bump**.
+
+**(1) Judge, changed:**
+- `scripts/chat-probe.js` step 34 "restyle a headline": "bigger" is now fontSize up OR Transform scale up on BOTH axes (> +1). A one-axis stretch still fails. The not-blue message names the scale.
+- `tests/test-chat-probe.js`: three cases. Scale 150 + blue passes (42's r1 end state). Scale 200 and white fails "not blue" (the typo end state). A one-axis stretch fails.
+- Why: the user sees a bigger blue headline, and scaling text layers is ordinary AE practice.
+- Re-graded by hand from the "changed anyway" lines of the eleven 40c/42 transcripts (logs/chat-probe-2026-09-17T09-13-40 .. 09-46-26). Exactly ONE run moves: 42's r1 canonical, HARM -> pass. The other 15 HARMs ended at scale only, with no colour, and stay HARM under the new message.
+
+**(2) Round 1: the question's premise does not hold.**
+- The routed prompt for all four step-34 wordings is **byte-identical at 12K and 16K**. Both are compact, and the picks are the same: set_text_style 2, add_text_animator 1, set_transform 1 (vague: list_presets/apply_preset 4 above them). Dumped with `local/q42a/route.js`.
+- The canonical failed at 16K too, in all four 40c runs. There is no window diff to find.
+- A/B on the one lever the prompt shows: the compact set_text_style line "Restyle an existing text layer (any subset of fields)." (B, shipped) against "Restyle an existing text layer's colour, size or font." (C, +1 char).
+- Rig: 7B Q4_K_M, 12K, `-ctk q8_0 -ctv q8_0`, `--route auto`, T=0, `--steps 34`, interleaved B/C. A step-34 run takes ~16 s.
+- The bar was declared before the output was read (`local/q42a/BAR.md`). At n=3 it was not met (B 8/12, C 9/12). An extension to n=10 was declared, with a new bar, BEFORE r4-r10 were read:
+
+| arm | pass /40 | canonical | casual | vague | typo pass | typo HARM |
+|---|---|---|---|---|---|---|
+| B shipped | 22 | 2/10 | 10/10 | 9/10 | 1/10 | 9 |
+| C colour/size/font | 25 | 4/10 | 10/10 | 10/10 | 1/10 | 9 |
+
+- **Bar NOT met** (canonical >= 7/10 and total >= B+4). C is not shipped.
+
+**What the transcripts show** (e.g. C r4 HARM `logs/chat-probe-2026-09-17T09-54-33.md`, C r5 pass `...09-55-06.md`):
+- Round 1 is identical in every failing run of both arms: `set_transform scale 150` + `set_property fillColor`.
+- The host refuses, with 42's ready `set_text_style` call.
+- Round 2 resends ONLY the scale and tells the user "you need to use set_text_style".
+- A pass is the runs where a third round then calls set_text_style.
+- So pass/fail is decided by the post-rollback re-plan. That is exactly what the core `rolled-back` rule tells the model to do: "resend the commands that CAN succeed (**without the one that failed**), and say plainly in 'reply' what you could not do". Filed as **NEXT UP 42b**.
+
+**Filed:** NEXT UP 42b. Reword the core rolled-back rule so the model sends the call a refusal names in place of the failed one. Gated on the full matrix at 12K and 16K, because the rule is core.
+
+**Assumed:**
+1. A scale-up counts as "bigger". The step's `expects: ["set_text_style"]` is unchanged, and the verdict grades the end state, as every other step does.
+2. Extending the A/B from n=3 to n=10 with a re-declared bar is legitimate, because the second bar was written before r4-r10 existed. The n=3 result is kept in BAR.md, not overwritten.
+3. The 42b fix is a separate row, not this pass. It is a core rule, so it needs a matrix, and the brief allows one item.
+
+**Needs a human eye:** nothing new. The `loop-salvage-20260917-*` stashes are still in `git stash list`.

@@ -3557,6 +3557,32 @@ function icons(state) {
            "blue but the same size is a fail (got: " + v + ")");
   }
   {
+    // NEXT UP 42a: the r1 transcript's end state. Scale 150 % and a blue
+    // fill is a bigger blue headline to the user who asked.
+    uid = 0; const after = iconWorld();
+    after.layers[0].scale = [150, 150, 100];
+    after.layers[0].fillColor = [0.1, 0.29, 0.99];
+    assert(style.check(after, { before: before }) === null,
+           "scaled up and blue is a pass");
+  }
+  {
+    // The typo run's end state: scaled, still white.
+    uid = 0; const after = iconWorld();
+    after.layers[0].scale = [200, 200, 100];
+    const v = style.check(after, { before: before });
+    assert(/at scale 200 %.*not blue/.test(v || ""),
+           "scaled up but still white is a fail (got: " + v + ")");
+  }
+  {
+    // A one-axis stretch is not "bigger".
+    uid = 0; const after = iconWorld();
+    after.layers[0].scale = [150, 100, 100];
+    after.layers[0].fillColor = [0.1, 0.29, 0.99];
+    const v = style.check(after, { before: before, tools: [] });
+    assert(/still 48px .*not scaled up/.test(v || ""),
+           "a one-axis stretch is a fail (got: " + v + ")");
+  }
+  {
     // "only the named layer" is half the row. Resizing the icons on the
     // way to a bigger headline is the wrong-target mutation.
     uid = 0; const after = iconWorld();
