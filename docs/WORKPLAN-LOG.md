@@ -28566,3 +28566,22 @@ After the CLI exited, the reap selected nothing and the runner kept going. That 
 2. Widening the phrase list is not loosening the test. The bar has always been a real 32B sentence, and this is one.
 
 **Needs a human eye:** none.
+
+## 2026-09-17 (local session) - under --reuse-server the probe now SAYS a generation's VRAM handoff was not exercised (NEXT UP 45a)
+
+**Item:** NEXT UP 45a, the first open row whose needs were met (1a, 8, 5a-4e, 5a-5b/c, 5c, 6b are owner calls; 11d is owner-conditional; 40d is a minor bump). Pass started ~08:24 EDT under the owner's `run-local-agent.ps1` loop (-UntilHour 9), so AE and the chat model were in scope. AfterFX was left running; the 32B llama-server on 8737 was reused and left up.
+
+**Harness:** 777/777 at the start. Nothing in `extension/` changed, so there is **no bump** and no re-run was needed for the change itself.
+
+**Decided from the code:** of 45a's two options, the stub route (adopt the reused server on pause "auto" with `Llama.stop`/`start` as VRAM-free no-ops) was rejected. The arbiter would plan a pause, the no-op "stop" would free nothing, and the job would render beside the 32B while the transcript read as if pausing had happened: a false measurement of exactly the thing it claims to measure (and the resume wait would be judged against a server that never went away). So the probe states the blindness instead.
+
+**Changed (scripts/tests only):**
+- `scripts/chat-probe.js blindHandoffNote(reuse, pauseMode, tools)`: pure; with `--reuse-server`, pause not "never" (unset reads as auto), and a non-rolled-back `comfy_generate` in the round, returns "vram handoff NOT exercised: ... ran concurrently beside it (pause auto was ignored); start the probe's own server to measure pausing". Printed as an info line per step. The pause mode is read after the step's settings are applied.
+- `transcriptHeader` under reuse adds "- vram handoff: not exercised (a reused server is invisible to the arbiter except on pause-never steps)".
+- `tests/test-chat-probe.js`: note on auto / unset / always; none for own server, pause never, no generation, a rolled-back generation, no tools; header on/off. 765 ok (was 755).
+
+**Real AE, `chat-probe --reuse-server --port 8737 --steps 1,13`:** 2/2 pass; step 13 rendered SD15 680x384 into Probe Room and the transcript carries both the header line and the step's info line (`logs/chat-probe-2026-09-17T12-26-05.md`).
+
+**Assumed:** a visible "not exercised" is enough for 45a; measuring the auto handoff itself needs the probe to start its own server, which is how the 2026-09-02 runs did it. Not filed as new work: nothing currently depends on a reused-server run to judge pausing.
+
+**Needs a human eye:** none.

@@ -3957,5 +3957,34 @@ function icons(state) {
   }
 }
 
+// NEXT UP 45a: a generation on pause auto under --reuse-server ran beside
+// the chat model, and the transcript said nothing. It says so now.
+{
+  const gen = [{ tool: "comfy_generate", rolledBack: false }];
+  const note = probe.blindHandoffNote(true, "auto", gen);
+  assert(/NOT exercised/.test(note || "") && /pause auto/.test(note),
+         "a reused-server generation on pause auto is marked blind");
+  assert(/pause auto/.test(probe.blindHandoffNote(true, undefined, gen) || ""),
+         "an unset pause mode is the shipped auto");
+  assert(probe.blindHandoffNote(true, "always", gen),
+         "pause always is blind too");
+  const quiet = [[false, "auto", gen, "own server"],
+                 [true, "never", gen, "pause never (adopted, no handoff)"],
+                 [true, "auto", [{ tool: "set_transform" }], "no generation"],
+                 [true, "auto", [{ tool: "comfy_generate", rolledBack: true }],
+                  "a rolled-back generation"],
+                 [true, "auto", null, "no tools"]];
+  for (const c of quiet) {
+    assert(probe.blindHandoffNote(c[0], c[1], c[2]) === null, "no note: " + c[3]);
+  }
+  const s = { modelPath: "m", ctxSize: 16384, temperature: 0.7, maxRounds: 6 };
+  assert(/vram handoff: not exercised/.test(
+           probe.transcriptHeader("S", s, { reuseServer: true }, null).join("\n")),
+         "a reused-server transcript header says the handoff is not exercised");
+  assert(!/vram handoff/.test(
+           probe.transcriptHeader("S", s, { reuseServer: false }, null).join("\n")),
+         "an own-server header does not");
+}
+
 console.log(failed ? "\n" + failed + " assertion(s) failed"
                    : "\nall chat-probe verdict tests passed");

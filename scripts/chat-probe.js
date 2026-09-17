@@ -586,6 +586,26 @@ function adoptReusedServer(llama, reuse, props, patch) {
   };
 }
 
+// NEXT UP 45a: the other half of the blindness. A step that generates on
+// pause "auto"/"always" under --reuse-server is NOT adopted (a handoff
+// would stop a server this process does not own and restart onto a taken
+// port), so the arbiter sees no chat model and runs the job beside it.
+// Faking stop/start instead would render with the chat model still on
+// the card while the transcript read "paused": a false measurement. So
+// the transcript says it, once per step that reached comfy_generate.
+// Pure; null when there is nothing to say.
+function blindHandoffNote(reuse, pauseMode, tools) {
+  if (!reuse || pauseMode === "never") return null;
+  const gen = (tools || []).some(function (t) {
+    return t.tool === "comfy_generate" && !t.rolledBack;
+  });
+  if (!gen) return null;
+  return "vram handoff NOT exercised: under --reuse-server the arbiter " +
+    "cannot see the chat model, so this generation ran concurrently " +
+    "beside it (pause " + (pauseMode || "auto") + " was ignored); start " +
+    "the probe's own server to measure pausing";
+}
+
 // The panel shows the arbiter's pause/resume and ComfyUI's progress in
 // its status line; here they belong in the transcript, or a step that
 // spends two minutes looks like a hang.
@@ -3785,6 +3805,8 @@ function transcriptHeader(stamp, s, opt, serverProps) {
   if (opt.label) out.push("- label: " + opt.label);
   if (opt.reuseServer) {
     out.push("- server (reused): " + describeServerProps(serverProps));
+    out.push("- vram handoff: not exercised (a reused server is invisible " +
+             "to the arbiter except on pause-never steps)");
   }
   out.push("");
   return out;
@@ -4085,11 +4107,15 @@ function main() {
         const restoreStepSettings = applyStepSettings(step.settings);
         const restoreLlama = adoptReusedServer(Llama, OPT.reuseServer,
                                                SERVER_PROPS, step.settings);
+        const pauseMode = Settings.get().comfyPauseLlm;
         const restoreSettings = function () {
           restoreLlama();
           restoreStepSettings();
         };
         sendMessage(run.say, function (round) {
+          const blind = blindHandoffNote(OPT.reuseServer, pauseMode,
+                                         round.tools);
+          if (blind) say("info", blind);
           aeRead(READ_COMP, function (state, readErr) {
             const ctx = { before: before && before.found ? before : null,
                           rounds: round.rounds,
@@ -4309,7 +4335,7 @@ function main() {
 if (require.main === module) {
   main();
 } else {
-  module.exports = { STEPS, parseSteps, squares, transcriptHeader, adoptReusedServer, probePromptOpts, toolDocsLabel, describeServerProps, undoProbe, SIG_FN, READ_COMP,
+  module.exports = { STEPS, parseSteps, squares, transcriptHeader, adoptReusedServer, blindHandoffNote, probePromptOpts, toolDocsLabel, describeServerProps, undoProbe, SIG_FN, READ_COMP,
                      bridgeWrapper, sweepImports, samePath, rememberGenerated,
                      generated, runPrepare, sweepScript, rememberPrecomp,
                      precomps, toolEntry, rigPlan, rigScript, resetHistory,
