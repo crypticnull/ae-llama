@@ -51,7 +51,9 @@ with the entry it replaced:
     AE LLAMA v3      (came back twice)
 
 The number is therefore a **record of a failure**, not decoration. A
-session still showing no suffix has never dropped.
+session still showing no suffix has never dropped. Nothing else may bump
+it -- if the watchdog itself ends a session, that is a bug in the
+watchdog, not a failure of the session (see Self-update).
 
 ## Commands
 
@@ -111,7 +113,31 @@ never), and start on battery.
 
 ## Self-update
 
-`Watch` records the CLI binary's timestamp and size. When they change --
-the CLI updates itself in place -- it cycles the sessions it started onto
-the new build. Because every start carries `--continue`, the
-conversations come back with them.
+`Watch` records the CLI binary's timestamp and size and logs it when they
+change, because the CLI updates itself in place. **It does not restart
+anything for it.** A running session keeps the build it launched with and
+picks up the new one whenever it next restarts on its own.
+
+It used to cycle every session onto the new build. Measured 2026-09-18,
+that fired three times in seven hours (15:11, 18:45, 22:21) and each time
+it killed four conversations the owner was in the middle of, bumped every
+title a version, and left four more dead entries on his account that he
+has no way to delete -- the titles reached `v7` in a single day, none of
+it from a real failure. It also blinded itself for five minutes each
+time, because killing a session writes to its transcript and the
+busy-check then read that write as "someone is in there".
+
+The rule that came out of it: **a new build is a nicety, a live
+conversation is the product.** Nothing here stops a session that is
+working.
+
+## When a session will not start
+
+A session that dies within two minutes of starting did not go offline --
+it failed to start. Retrying that every minute forever would fill the
+owner's account with dead entries, so the watchdog holds off for 1, 2, 4,
+8 and then 15 minutes, logging `HOLD <name>: died Ns after starting`.
+
+The hold never becomes permanent. A project that fails all night is still
+retried every fifteen minutes, because the standing rule is that a
+session which goes down comes back.

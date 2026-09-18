@@ -65,7 +65,13 @@ function Get-State {
         $o = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
         $h = @{}
         foreach ($n in $o.PSObject.Properties.Name) {
-            $h[$n] = @{ pid = [int]$o.$n.pid; version = [int]$o.$n.version }
+            $h[$n] = @{
+                pid        = [int]$o.$n.pid
+                version    = [int]$o.$n.version
+                fails      = [int]$o.$n.fails
+                startedAt  = [string]$o.$n.startedAt
+                retryAfter = [string]$o.$n.retryAfter
+            }
         }
         return $h
     } catch { return @{} }
@@ -74,7 +80,13 @@ function Get-State {
 function Set-State($h) {
     $o = New-Object PSObject
     foreach ($k in $h.Keys) {
-        $v = [pscustomobject]@{ pid = $h[$k].pid; version = $h[$k].version }
+        $v = [pscustomobject]@{
+            pid        = $h[$k].pid
+            version    = $h[$k].version
+            fails      = $h[$k].fails
+            startedAt  = $h[$k].startedAt
+            retryAfter = $h[$k].retryAfter
+        }
         $o | Add-Member -NotePropertyName $k -NotePropertyValue $v
     }
     $o | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $statePath -Encoding ASCII
@@ -125,13 +137,23 @@ function Start-Session($p, $state) {
     # session has died and come back, which is the owner's rule: the
     # number is a record of a failure, not decoration.
     $version = 1
-    if ($state.ContainsKey($p.name)) { $version = [int]$state[$p.name].version + 1 }
+    $fails = 0
+    if ($state.ContainsKey($p.name)) {
+        $version = [int]$state[$p.name].version + 1
+        $fails = [int]$state[$p.name].fails
+    }
     $sessionName = $p.name.ToUpper()
     if ($version -gt 1) { $sessionName = $sessionName + ' v' + $version }
     $argLine = '--remote-control "' + $sessionName + '" --continue'
     try {
         $proc = Start-Process -FilePath $ClaudePath -ArgumentList $argLine -WorkingDirectory $p.path -WindowStyle Hidden -PassThru
-        $state[$p.name] = @{ pid = $proc.Id; version = $version }
+        $state[$p.name] = @{
+            pid        = $proc.Id
+            version    = $version
+            fails      = $fails
+            startedAt  = (Get-Date).ToString('o')
+            retryAfter = ''
+        }
         Set-State $state
         Write-Line ('started "' + $sessionName + '"  pid ' + $proc.Id + '  (' + $p.path + ')')
     } catch {
@@ -140,11 +162,44 @@ function Start-Session($p, $state) {
     return $state
 }
 
+# A session that dies within two minutes of starting did not "go offline",
+# it failed to start -- a bad path, a CLI that will not launch, a config
+# error. Restarting it every tick forever would spam the owner's account
+# with dead session entries he has no way to delete, which is exactly the
+# mess this script exists to prevent. So hold off: 1, 2, 4, 8, then 15
+# minutes between attempts, and say so in the log. The hold NEVER becomes
+# permanent -- a project that fails all night is still retried every 15
+# minutes, because the owner's rule is that a session which goes down
+# comes back.
+function Test-ShouldHold($name, $state) {
+    if (-not $state.ContainsKey($name)) { return $false }
+    $e = $state[$name]
+    $inv = [Globalization.CultureInfo]::InvariantCulture
+    if ($e.retryAfter) {
+        # This death is already counted; we are only waiting out the hold.
+        if ((Get-Date) -lt [datetime]::Parse($e.retryAfter, $inv)) { return $true }
+        return $false
+    }
+    if (-not $e.startedAt) { return $false }
+    $lived = ((Get-Date) - [datetime]::Parse($e.startedAt, $inv)).TotalSeconds
+    if ($lived -ge 120) {
+        $e.fails = 0
+        return $false
+    }
+    $e.fails = [int]$e.fails + 1
+    $wait = [int][math]::Min(15, [math]::Pow(2, $e.fails - 1))
+    $e.retryAfter = (Get-Date).AddMinutes($wait).ToString('o')
+    Write-Line ('HOLD ' + $name + ': died ' + [int]$lived + 's after starting (failure ' +
+                $e.fails + ') -- next try in ' + $wait + ' min')
+    return $true
+}
+
 function Invoke-Ensure {
     $state = Get-State
     $started = 0
     foreach ($p in (Get-Projects)) {
         if ($state.ContainsKey($p.name) -and (Test-Live $state[$p.name].pid)) { continue }
+        if (Test-ShouldHold $p.name $state) { Set-State $state; continue }
         $before = -1
         if ($state.ContainsKey($p.name)) { $before = $state[$p.name].pid }
         $state = Start-Session $p $state
@@ -188,9 +243,16 @@ function Invoke-Stop {
 }
 
 # The CLI updates itself in place. A session launched from the old binary
-# keeps running the old build. Cycling on a version change is what "self
-# update and come back" means here -- and because every restart carries
-# --continue, the conversation comes back with it.
+# keeps running the old build, which is harmless: it picks up the new one
+# the next time it restarts on its own.
+#
+# This used to STOP every session when the binary changed, to cycle them
+# onto the new build. Measured 2026-09-17, that fired three times in seven
+# hours and each time it took down four conversations the owner was using,
+# bumped every title a version, and left four more dead entries on his
+# account that he cannot delete. The stamp is now recorded and logged and
+# nothing is killed for it. A new build is a nicety; a live conversation
+# is the product.
 function Get-CliStamp {
     if (-not (Test-Path -LiteralPath $ClaudePath)) { return 'missing' }
     $f = Get-Item -LiteralPath $ClaudePath
@@ -214,9 +276,7 @@ switch ($Action) {
             Start-Sleep -Seconds $EverySec
             $now = Get-CliStamp
             if ($now -ne $stamp) {
-                Write-Line 'the claude CLI changed on disk -- cycling sessions onto the new build'
-                Invoke-Stop
-                Start-Sleep -Seconds 3
+                Write-Line 'the claude CLI updated on disk -- live sessions keep the build they started with'
                 $stamp = $now
             }
             $n = Invoke-Ensure
