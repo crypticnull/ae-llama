@@ -351,13 +351,33 @@ assert(DEAD_PID > 0 && DEAD_PID !== LIVE_PID,
 // ------------------------------------------------- comfy.js stopManaged()
 {
   const EXT = path.join(ROOT, "extension");
-  const panel = function (pid) {
+  // COMFY_ROOT is what Setup.comfyVendorDir() reports, and `owned`
+  // decides what the stubbed Get-CimInstance says the pid's command line
+  // is. The three interesting answers are: ours (under the root), a
+  // stranger's ComfyUI (shape matches, root does not), and something else
+  // entirely -- the recycled-PID case that 2026-09-23 reported.
+  const COMFY_ROOT = path.join("C:", "Users", "x", "AppData", "Roaming",
+                               "AE-Llama", "vendor", "comfy");
+  const CMDLINE = {
+    ours: '"' + path.join(COMFY_ROOT, "python", "python.exe") +
+          '" "' + path.join(COMFY_ROOT, "ComfyUI", "main.py") + '" --port 8288',
+    stranger: '"C:\Tools\ComfyUI\python\python.exe" ' +
+              '"C:\Tools\ComfyUI\main.py" --port 8188',
+    recycled: '"C:\Program Files\Adobe\dynamiclinkmanager.exe"'
+  };
+  const panel = function (pid, opts) {
+    const o = opts || {};
+    const owned = ("owned" in o) ? o.owned : CMDLINE.ours;
     const calls = [];
     const store = {};
     if (pid) store["aell-comfy-pid"] = String(pid);
     const stubCp = {
       execFileSync: function (file, args) {
         calls.push(String(file).toLowerCase() + " " + (args || []).join(" "));
+        // The ownership read, and only it, answers with a command line.
+        if (/Get-CimInstance/i.test((args || []).join(" "))) {
+          return owned === null ? "" : owned;
+        }
         return "";
       },
       execFile: function (file, args, a, b) {
@@ -378,6 +398,9 @@ assert(DEAD_PID > 0 && DEAD_PID !== LIVE_PID,
         setItem: function (k, v) { store[k] = String(v); },
         removeItem: function (k) { delete store[k]; }
       },
+      Setup: o.noRoot ? {} : {
+        comfyVendorDir: function () { return COMFY_ROOT; }
+      },
       AEBridge: {
         nodeRequire: function (m) {
           return m === "child_process" ? stubCp : require(m);
@@ -392,23 +415,29 @@ assert(DEAD_PID > 0 && DEAD_PID !== LIVE_PID,
     return { Comfy: win.Comfy, calls: calls, store: store };
   };
 
-  // (a) the kill takes
+  // (a) the remembered process is already gone. Nothing is killed -- and
+  // that is the POINT, not an optimisation: a pid with no process behind
+  // it is the one Windows is free to hand to somebody else, so a taskkill
+  // aimed at it is a coin flip with a /T on the end.
   {
     const p = panel(DEAD_PID);
     const r = p.Comfy.stopManaged();
-    assert(r === true, "stopManaged() confirms a kill that took", "got " + r);
-    assert(p.calls.some(function (c) { return /^taskkill/.test(c); }),
-      "having really run taskkill for the remembered pid");
-    assert(!p.calls.some(function (c) { return /^ASYNC/.test(c); }),
-      "SYNCHRONOUSLY -- an async taskkill is a race a CLI loses (17q-d)");
+    assert(r === true,
+      "a backend that is already gone is a stop that succeeded", "got " + r);
+    assert(!p.calls.some(function (c) { return /^taskkill/.test(c); }),
+      "with no taskkill run at a pid that no longer names a process");
     assert(p.store["aell-comfy-pid"] === undefined,
-      "and only then is the PID record dropped");
+      "and the stale record dropped, so no later quit can aim at it");
   }
 
   // (b) the kill does NOT take -- the 17q-d case itself
   {
     const p = panel(LIVE_PID);
     const r = p.Comfy.stopManaged();
+    assert(p.calls.some(function (c) { return /^taskkill/.test(c); }),
+      "an ALIVE pid that really is ours is really taskkill'd");
+    assert(!p.calls.some(function (c) { return /^ASYNC/.test(c); }),
+      "SYNCHRONOUSLY -- an async taskkill is a race a CLI loses (17q-d)");
     assert(r === false,
       "stopManaged() reports FALSE when the process is still alive after " +
       "the kill -- a stop that cannot confirm must say so", "got " + r);
@@ -422,6 +451,58 @@ assert(DEAD_PID > 0 && DEAD_PID !== LIVE_PID,
     const p = panel(0);
     assert(p.Comfy.stopManaged() === true,
       "with nothing remembered, stopManaged() answers true, not a failure");
+  }
+
+  // (d) THE 2026-09-23 CASE. The remembered pid is alive, but Windows
+  // recycled it onto something else -- here, one of the Adobe helpers
+  // that were running when the report was filed. taskkill carries /T, so
+  // getting this wrong takes a process TREE the panel never started.
+  {
+    const p = panel(LIVE_PID, { owned: CMDLINE.recycled });
+    const r = p.Comfy.stopManaged();
+    assert(!p.calls.some(function (c) { return /^taskkill/.test(c); }),
+      "a recycled PID is NOT killed -- no taskkill is run at all");
+    assert(r === true,
+      "and stopManaged() answers true: there is no managed backend, which " +
+      "is the question it was asked", "got " + r);
+    assert(p.store["aell-comfy-pid"] === undefined,
+      "the useless record is dropped so the next quit cannot repeat it");
+  }
+
+  // (e) A stranger's ComfyUI is ComfyUI-SHAPED, which is exactly why shape
+  // alone is not ownership (the adoptablePid() rule, pointed the other way).
+  {
+    const p = panel(LIVE_PID, { owned: CMDLINE.stranger });
+    p.Comfy.stopManaged();
+    assert(!p.calls.some(function (c) { return /^taskkill/.test(c); }),
+      "a ComfyUI outside the managed root is not ours to kill either");
+  }
+
+  // (f) No managed root means ownership cannot be PROVEN, and every other
+  // caller of managedRootDir() treats that as refuse. Costs one launch:
+  // reapOrphan() reads the same key at init.
+  {
+    const p = panel(LIVE_PID, { noRoot: true });
+    p.Comfy.stopManaged();
+    assert(!p.calls.some(function (c) { return /^taskkill/.test(c); }),
+      "with no managed root, stopManaged() refuses rather than guessing");
+  }
+
+  // (g) The unload budget. AE waits on this handler while it quits, so the
+  // timeouts are part of the behaviour, not a detail -- 30 000 + 20 000 is
+  // ~50 s of an AE that looks hung (reported 2026-09-23).
+  {
+    const src = fs.readFileSync(path.join(EXT, "js", "comfy.js"), "utf8");
+    const budget = ["OWNERSHIP_MS", "KILL_MS", "RESIDUAL_MS"].reduce(
+      function (sum, name) {
+        const m = new RegExp("var\\s+" + name + "\\s*=\\s*(\\d+)").exec(src);
+        assert(m, name + " is declared as a literal the test can price");
+        return sum + parseInt(m[1], 10);
+      }, 0);
+    assert(budget <= 15000,
+      "the whole unload stop budget stays under 15 s (it is " + budget +
+      " ms) -- a shutdown the owner cannot cancel is the symptom this " +
+      "number exists to bound");
   }
 }
 

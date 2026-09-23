@@ -2809,6 +2809,28 @@
   // llama-server (PID persisted across panel sessions).
 
   var COMFY_PID_KEY = "aell-comfy-pid";
+
+  // How long stopManaged() may block. It runs inside the panel's `unload`
+  // handler, which After Effects waits on while it is trying to quit, so
+  // every millisecond here is a millisecond of an AE that looks hung to
+  // the user -- no dialog, Responding = True, ignoring File > Exit.
+  //
+  // The old numbers were 30 000 for the taskkill and 20 000 for the
+  // residual wait: ~50 seconds of a shutdown that cannot be cancelled,
+  // against a measured happy path of 110 ms (17q-d -- a synchronous
+  // taskkill returns with the process already gone, 0.2 ms of residual
+  // wait). The bounds existed for a pathological backend and were paid
+  // for by every ordinary quit.
+  //
+  // Giving up early is safe and that is what makes these numbers
+  // affordable: stopManaged() returns false and KEEPS the pid record, and
+  // reapOrphan() reads that same key at the next init. The worst case of
+  // a short budget is a backend collected one launch later. The worst
+  // case of a long one is the owner force-killing After Effects, which is
+  // how a stale record gets written in the first place.
+  var OWNERSHIP_MS = 4000;   // one Get-CimInstance read
+  var KILL_MS      = 5000;   // taskkill /T /F
+  var RESIDUAL_MS  = 2000;   // the rare "taskkill asked but it is not gone yet"
   var managedProc = null;
   var startWaiters = null;   // non-null while a boot is in flight
 
@@ -3563,6 +3585,51 @@
   }
 
   /**
+   * Is `pid` a live backend THIS PANEL MAY KILL? Synchronous, because its
+   * one caller is stopManaged() on the panel's `unload`.
+   *
+   * pidAlive() above answers "does a process with this id exist", which is
+   * not the question a kill has. Windows recycles PIDs, and the record
+   * this reads from is localStorage -- it outlives an AE crash, a force
+   * kill, and every restart in between, because those are exactly the
+   * paths on which `unload` never ran to clear it. Reported 2026-09-23
+   * from the sales-preso pipeline: AE force-killed twice in a session,
+   * and the stale record left behind is all it takes for the next clean
+   * quit to `taskkill /T /F` whatever inherited the number -- a TREE
+   * kill, on a process the panel never started.
+   *
+   * TWO guards, the same pair adoptablePid() and stopByPort() use, for
+   * the reason written there: the command-line SHAPE (/ComfyUI/i) is not
+   * ownership, because the OWNER's own ComfyUI is ComfyUI-shaped too. It
+   * must also run out of the managed root. A kill and an adoption are the
+   * same claim ("this process is ours") pointed in opposite directions,
+   * and the cost of being wrong is higher here.
+   *
+   * A root we cannot work out REFUSES, like every other caller of
+   * managedRootDir(). Refusing costs nothing: stopManaged() keeps the
+   * record, and reapOrphan() reads that same key at the next init, so a
+   * backend we declined to kill is collected on the next launch rather
+   * than leaked forever.
+   */
+  function pidIsOwnedComfy(pid) {
+    ensureNode();
+    var n = parseInt(pid, 10);
+    if (!(n > 0)) return false;
+    var root = managedRootDir();
+    if (!root) return false;
+    var out = "";
+    try {
+      out = String(child_process.execFileSync("powershell.exe",
+        ["-NoProfile", "-NonInteractive", "-Command",
+         "(Get-CimInstance Win32_Process -Filter 'ProcessId=" + n +
+         "').CommandLine"],
+        { timeout: OWNERSHIP_MS, encoding: "utf8" }) || "");
+    } catch (e) { return false; }
+    if (!/ComfyUI/i.test(out)) return false;
+    return commandLineIsUnder(out, root);
+  }
+
+  /**
    * Shut the hidden backend down (panel close frees its VRAM).
    *
    * Returns TRUE only when the backend is confirmed gone — including the
@@ -3606,9 +3673,17 @@
     }
     managedProc = null;
     if (!pid) { forgetPid(); return true; }
+    // Already gone: nothing to kill, and the record is just litter.
+    if (!pidAlive(pid)) { forgetPid(); return true; }
+    // Alive, but is it OURS? A number that outlived its process is the
+    // one input this function cannot take on trust.
+    if (!pidIsOwnedComfy(pid)) {
+      forgetPid();
+      return true;
+    }
     try {
       child_process.execFileSync("taskkill",
-        ["/PID", String(pid), "/T", "/F"], { timeout: 30000 });
+        ["/PID", String(pid), "/T", "/F"], { timeout: KILL_MS });
     } catch (e2) {}
     // Only when the free check still sees it — one bounded wait, and it
     // is the only path here that costs a spawn.
@@ -3616,9 +3691,9 @@
       try {
         child_process.execFileSync("powershell.exe",
           ["-NoProfile", "-NonInteractive", "-Command",
-           "Wait-Process -Id " + parseInt(pid, 10) + " -Timeout 10 " +
-           "-ErrorAction SilentlyContinue"],
-          { timeout: 20000 });
+           "Wait-Process -Id " + parseInt(pid, 10) + " -Timeout " +
+           Math.round(RESIDUAL_MS / 1000) + " -ErrorAction SilentlyContinue"],
+          { timeout: RESIDUAL_MS * 2 });
       } catch (e3) {}
     }
     if (pidAlive(pid)) return false;
@@ -3653,6 +3728,7 @@
     _adoptablePid: adoptablePid,                  // exposed for tests
     _commandLineIsUnder: commandLineIsUnder,      // exposed for tests
     _managedRootDir: managedRootDir,              // exposed for tests
+    _pidIsOwnedComfy: pidIsOwnedComfy,            // exposed for tests
     bypassNode: bypassNode,
     substituteNode: substituteNode,
     expandFilenameTokens: expandFilenameTokens,
