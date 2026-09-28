@@ -203,9 +203,9 @@
    * when an entry carries it, is the smallest card it is picked FOR.
    *
    * They split because moving a measured gate also moves the defaults this
-   * file hands out (a 12 GB buyer's video default would go from a 12 s
+   * file hands out (a 12 GB user's video default would go from a 12 s
    * LTX clip to a 130 s Wan one), and the tier table is the owner's call
-   * (16f). So the gates carry the measurement and reach a buyer who
+   * (16f). So the gates carry the measurement and reach a user who
    * chooses; the defaults hold where they were until he decides. Removing
    * the field is the whole of that decision's code.
    */
@@ -284,7 +284,7 @@
       // On an equal floor, prefer the larger download. It carries the same
       // intent the floor does ("the most this card can do"), it is a number
       // every entry either has or has not, and it keeps the 32 GB pick at
-      // MiniMax H3 instead of moving a buyer-facing default as a side
+      // MiniMax H3 instead of moving a user-facing default as a side
       // effect of a VRAM measurement. An entry with no sizeMB (krea2,
       // ltx-small) scores 0 and so LOSES a tie rather than winning one by
       // accident.

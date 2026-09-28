@@ -1273,7 +1273,7 @@
   /**
    * The length a video renders when the caller named none (WORKPLAN 18
    * P3a(b)). The authored H3 graph defaulted to 15 s, a >15-minute render
-   * on a 5090, and that is what "make a video of X" handed a buyer. A
+   * on a 5090, and that is what "make a video of X" handed a user. A
    * template authored longer than AELL.COMFY_DEFAULT_CLIP_SECONDS is
    * brought down to it; one authored shorter is left alone, and a named
    * durationSeconds or frames always wins, so this is a default and never
@@ -2869,7 +2869,7 @@
    * Windows answers a dead pipe with OSError [Errno 22] Invalid
    * argument, and the prompt dies at the first sampler node — so EVERY
    * generation on a script-booted backend failed, in the one
-   * configuration no buyer's panel uses and every unattended pass does.
+   * configuration no user's panel uses and every unattended pass does.
    * The §17f sampler bug HID this: it stopped KREA2 at validation, so
    * nothing had ever reached a sampler on a detached backend.
    *
@@ -3043,7 +3043,7 @@
    * `diffusion_models` folder too, AFTER the real one: a name found in both
    * resolves to the real diffusion file (folder_paths.get_full_path takes
    * the first hit). The alternative was a second 6.6 GB download of a file
-   * the buyer already has. The vendor utils/extra_config.py splits each
+   * the user already has. The vendor utils/extra_config.py splits each
    * value on newlines, hence the block scalar.
    */
   function pushModelSubs(lines) {
@@ -3175,7 +3175,7 @@
       }
       // Always written, even with every setting blank: the backend's OWN
       // models/checkpoints is not a diffusion_models folder by default,
-      // and a buyer's sdxl checkpoint usually lands exactly there. LAST,
+      // and a user's sdxl checkpoint usually lands exactly there. LAST,
       // because ComfyUI searches sections in file order and every real
       // diffusion_models folder above must win a name clash. Relative, so
       // it resolves against this yaml's own folder.
@@ -3342,7 +3342,7 @@
    * on the port is unmistakably ours: the panel crashed with a backend
    * up, a second panel session (localStorage is per-host), or the
    * recycled-PID branch cleared the record while the real backend was
-   * still booting. In every one of them the buyer got a refusal with no
+   * still booting. In every one of them the user got a refusal with no
    * path forward — generation bricked until someone killed a python
    * process they never launched.
    *
@@ -3410,7 +3410,7 @@
    * the same night with CUDA hidden: the backend died at boot with the
    * flag and served without it. The kernel needs compute capability 7.5
    * (no GTX 10-series) or an AMD part with matrix cores -- the low-end
-   * reach this product sells -- so a blanket flag would turn a slower
+   * reach this tool is built for -- so a blanket flag would turn a slower
    * backend into no backend on exactly those cards.
    *
    * The answer is the vendor's own int8_attention_is_available(), asked

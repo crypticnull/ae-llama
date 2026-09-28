@@ -16,13 +16,13 @@
 
     // Hosted JSON the panel polls for updates (see update.json in the repo
     // root for the format). Host it anywhere stable you control — your own
-    // site, an S3 bucket, or a public GitHub repo's raw URL. For aescripts
-    // distribution, point buyers at your aescripts product page via the
-    // manifest's panelUrl.
+    // site, an S3 bucket, or a public GitHub repo's raw URL. The manifest's
+    // panelUrl is where the panel sends you when an update has no direct
+    // package to install.
     // Served from the PUBLIC updates repo, which CI publishes into on every
-    // main push / v* tag — end users need no git, no account, no auth.
+    // main push / v* tag — an installed panel needs no git, no account, no auth.
     // One-time setup: create the public repo (with a README) and add an
-    // UPDATES_REPO_TOKEN secret here; see README "Distributing & updating".
+    // UPDATES_REPO_TOKEN secret here; see README "Data folder and updates".
     UPDATE_MANIFEST_URL:
       "https://raw.githubusercontent.com/crypticnull/ae-llama-updates/main/update.json",
 
@@ -113,7 +113,7 @@
     // authoredClipSeconds (the length the TEMPLATE renders when the user
     // names none), and when those differ an authoredNote saying so -- the
     // catalog must not quote a two-second decomposition as if it were the
-    // job the buyer is handed. The test reads the authored length out of
+    // job the user is handed. The test reads the authored length out of
     // the shipped API template rather than trusting the number here.
     COMFY_CATALOG: [
       {
@@ -121,12 +121,12 @@
         label: "Stable Diffusion 1.5",
         // MEASURED 2026-09-09 on an RTX 5090 by scripts/catalog-vram-probe.js,
         // running the shipped AE_LLAMA_SD15_T2I_V1 through the panel's own
-        // comfy_generate on the MANAGED backend (the one a buyer installs:
+        // comfy_generate on the MANAGED backend (the one a user installs:
         // ComfyUI portable, python 3.13.14, torch 2.13.0+cu130), nvidia-smi
         // streaming at 250 ms. Two runs at the template's authored 512x512,
         // seed 12345: 2112 MiB in 4 s COLD (the checkpoint still coming off
         // disk) and 2656 MiB in 2 s warm. The larger delta is the figure
-        // here and the cold wall clock is the seconds, because a buyer's
+        // here and the cold wall clock is the seconds, because a user's
         // first generation is the cold one.
         //
         // minVramGB stays 4: the delta is 2656 MiB against a 4096 MiB card,
@@ -153,7 +153,7 @@
         // runs at the template's authored 1024x1024, seed 12345: 9472 MiB in
         // 6 s COLD (the checkpoint still coming off disk) and 7072 MiB in
         // 4 s warm. The larger delta is the figure here and the cold wall
-        // clock is the seconds, because a buyer's first generation is the
+        // clock is the seconds, because a user's first generation is the
         // cold one.
         //
         // minVramGB was 6 and the measurement disproves it in two independent
@@ -187,7 +187,7 @@
         // P7c step 2g, 5a-4g/5a-4h). Core UNETLoader pulls the UNet out of
         // the whole checkpoint with weight_dtype fp8_e4m3fn; the checkpoint
         // loader still gives CLIP and VAE. urls[] and sizeMB are sdxl's on
-        // purpose: a buyer who has one has both. It loads because comfy.js
+        // purpose: a user who has one has both. It loads because comfy.js
         // maps every checkpoints folder as a diffusion_models folder too.
         //
         // Why it exists: at an 8 GB card's room fp16 sdxl streams part of
@@ -259,7 +259,7 @@
         // AE_LLAMA_KREA2_T2I_V1 (core-only, one pass) replaced it --
         // WORKPLAN 18 P8. A measured block that describes a graph the
         // panel no longer ships is worse than none, so the reading was
-        // retaken on the MANAGED backend a buyer gets (ComfyUI 0.34.0,
+        // retaken on the MANAGED backend a user gets (ComfyUI 0.34.0,
         // port 8288), nvidia-smi streaming at 250 ms, /free before each
         // run so the weights come back cold. Two runs at one seed:
         // 18 848 and 18 560 MiB over an established idle floor, 8 s each,
@@ -286,7 +286,7 @@
         // it rendered the byte-identical png in 10 s (backend 9.96 s)
         // against 8 s on a whole card. recommendFromGB keeps it OUT of
         // the defaults below 24 until the owner moves the tier picks
-        // (tiers.js recommendFloor); a buyer who chooses it can run it.
+        // (tiers.js recommendFloor); a user who chooses it can run it.
         //
         // RETAKEN 2026-09-16 (NEXT UP 7c) on the boot that now ships, which
         // adds --use-ck-attention wherever the kernel exists. Seed 12345:
@@ -340,7 +340,7 @@
         // under 32 GB was offered for video, because measuring wan22-5b
         // moved that gate 8 -> 32. The name is kept because it is the one
         // the tier line already hands out; what changed is that it now
-        // names real files a buyer can download and a graph that runs.
+        // names real files a user can download and a graph that runs.
         //
         // The build is the LTX-Video 2B line, which core ComfyUI still
         // supports (supported_models.py LTXV, image_model "ltxv", T5-XXL
@@ -360,11 +360,11 @@
         // MEASURED 2026-09-16 on an RTX 5090 (32 607 MiB) by
         // scripts/catalog-vram-probe.js, running the shipped
         // AE_LLAMA_LTXV_2B_T2V_V1 through the panel's own comfy_generate on
-        // the MANAGED backend a buyer gets, nvidia-smi streaming at 250 ms.
+        // the MANAGED backend a user gets, nvidia-smi streaming at 250 ms.
         // Two runs at one seed: 13 696 MiB in 14 s COLD and 13 921 MiB in
         // 12 s warm, 225 MiB apart. The higher delta is published and the
         // COLD wall clock is the seconds, as sd15 and sdxl do, because a
-        // buyer's first generation is the cold one.
+        // user's first generation is the cold one.
         //
         // minVramGB is 16, and the number it replaced (6) was never a
         // measurement of anything. 13.6 GiB rounds to the next real card,
@@ -535,7 +535,7 @@
         // MEASURED 2026-09-09 on an RTX 5090 (32 607 MiB) by
         // scripts/catalog-vram-probe.js, running the SHIPPED
         // AE_LLAMA_WAN22_5B_T2V_V1 through the panel's own comfy_generate
-        // on the MANAGED backend a buyer gets (ComfyUI 0.34.0, port 8288),
+        // on the MANAGED backend a user gets (ComfyUI 0.34.0, port 8288),
         // with nvidia-smi streaming at 250 ms. Two runs at one seed:
         // 26 187 and 24 576 MiB over an established idle floor, 127 s each,
         // 1280x704 x 121 frames out. The higher is published, as krea2's
@@ -548,7 +548,7 @@
         // resident (17 304 MiB) and no width, height or length the panel
         // can inject brings that under a 24 GB card, let alone an 8 GB
         // one. 0.10.14 measured what this backend does when a job outgrows
-        // the card -- it does not OOM, it GRINDS -- so an 8 GB buyer was
+        // the card -- it does not OOM, it GRINDS -- so an 8 GB user was
         // being offered this as their VIDEO DEFAULT and would have got
         // minutes per frame with no warning.
         //
@@ -608,7 +608,7 @@
         measuredAt: "1280x704 x 121 frames (the template's authored " +
                     "default, 5.04 s at 24 fps), seed 12345",
         // Unlike minimax-h3, the reading IS the authored job: 121 frames is
-        // the template's own default and 127 s is what a buyer waits, so
+        // the template's own default and 127 s is what a user waits, so
         // these two are equal and the row needs no authoredNote.
         measuredClipSeconds: 5.04,
         authoredClipSeconds: 5.04,
@@ -632,7 +632,7 @@
         // MEASURED 2026-09-16 on an RTX 5090 (32 607 MiB) by
         // scripts/catalog-vram-probe.js, running the shipped
         // AE_LLAMA_WAN22_5B_FP8_T2V_V1 through the panel own comfy_generate
-        // on the MANAGED backend a buyer gets, nvidia-smi streaming at
+        // on the MANAGED backend a user gets, nvidia-smi streaming at
         // 250 ms, /free before each run. Two runs at one seed and the
         // authored size: delta 24 314 and 24 288 MiB, 26 MiB apart, in 129
         // and 124 s, 1280x704 x 121 frames out. The higher is published.
@@ -643,7 +643,7 @@
         // fp8_scaled build in that repo is a 14B). The fp8 here is core
         // UNETLoader weight_dtype, a LOAD-TIME CAST of the same file, so
         // urls[] and sizeMB are deliberately identical to wan22-5b and a
-        // buyer who has one has both. See WORKPLAN 18 P7c step 1.
+        // user who has one has both. See WORKPLAN 18 P7c step 1.
         //
         // THE GATE DOES NOT MOVE, and that is the result. 24 314 MiB is
         // 23.7 GiB: a 24 GB card is 24 564 MiB total, so the job delta
@@ -724,7 +724,7 @@
         // RE-MEASURED 2026-09-09 on an RTX 5090 (32 607 MiB) by
         // scripts/catalog-vram-probe.js, running the SHIPPED
         // AE_LLAMA_H3_T2V_V1 through the panel's own comfy_generate on the
-        // MANAGED backend a buyer gets (ComfyUI 0.34.0, port 8288), with
+        // MANAGED backend a user gets (ComfyUI 0.34.0, port 8288), with
         // nvidia-smi streaming at 250 ms. Two runs at one seed: delta
         // 26 080 MiB and 253 s BOTH times, peaks 2 MiB apart (29 646 /
         // 29 648) over idle floors of 3566 / 3568 — the most repeatable
@@ -732,7 +732,7 @@
         // WORKPLAN §18 P9 replaced this entry's graph with a core-only
         // basic, and the previous reading (26 969 MiB / 80 s) was taken on
         // the owner's authored AE_LLAMA_H3_I2V_V1, which no longer ships.
-        // A number kept across a change of graph prices a job the buyer is
+        // A number kept across a change of graph prices a job the user is
         // not given — the defect §18 P8 found on krea2 and the reason
         // test-model-catalog.js now reads the size and the length out of
         // the entry's OWN template.
@@ -800,7 +800,7 @@
         // MEASURED 2026-09-09 on an RTX 5090 (32 607 MiB) by
         // scripts/catalog-vram-probe.js, running the shipped
         // AE_LLAMA_H3_INT8_T2V_V1 through the panel's own comfy_generate
-        // on the MANAGED backend a buyer gets (ComfyUI 0.34.0, port
+        // on the MANAGED backend a user gets (ComfyUI 0.34.0, port
         // 8288), nvidia-smi streaming at 250 ms, /free before each run.
         // Two runs at one seed: delta 26 048 MiB BOTH times, peaks 1 MiB
         // apart (29 642 / 29 643) over idle floors of 3594 / 3595, 257

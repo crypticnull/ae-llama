@@ -72,7 +72,7 @@
       //
       // The default used to be an ACCIDENT: comfyUrl shipped as
       // 127.0.0.1:8188 — ComfyUI's OWN default port — and ensureRunning
-      // used whatever answered there. So every buyer who already ran
+      // used whatever answered there. So every user who already ran
       // ComfyUI became a bring-your-own user without deciding to be one,
       // and the panel priced jobs and checked weights against a model
       // set it does not manage. comfy.js refuses to reroute to an
@@ -122,7 +122,7 @@
       // stylesheet default.
       vizWidth: 0,
       // Install panel updates without asking (git pull for dev installs,
-      // panelPackageUrl download for package installs). Store builds
+      // panelPackageUrl download for package installs). Package builds
       // without a panelPackageUrl are unaffected — they only show the
       // banner. Opt out in settings.
       autoInstallUpdates: true,

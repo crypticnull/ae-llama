@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!--
   DOOR 3: an invisible CEP extension that runs a job at host launch.
-  DEV ONLY. This is never signed, never packaged, never installed on a
-  customer machine: an always-on invisible extension in someone else's
-  Premiere is not acceptable even when it is inert.
+  DEV ONLY. This is never signed, never packaged, never installed except
+  by a dev junction: an always-on invisible extension in a Premiere that
+  someone is working in is not acceptable even when it is inert.
 
   Two measured facts shape it:
    - Adobe's own CEP 12 invisible-extension sample names

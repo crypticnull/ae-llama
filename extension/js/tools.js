@@ -1969,7 +1969,7 @@
    * So a CJK turn counted at 2.7 was ~2x under-counted, which lets the
    * proactive trim pass, earns the context 400, and the reactive retry
    * then drops every earlier turn: refer-back broken for exactly the
-   * non-English buyer. Every UTF-16 unit at or above U+2E80 (CJK
+   * non-English user. Every UTF-16 unit at or above U+2E80 (CJK
    * radicals onward, kana, Hangul, fullwidth forms, and each half of a
    * surrogate pair) is priced as ONE whole token — above the ~0.74 the
    * densest real text measured, in the survivable direction. Cyrillic

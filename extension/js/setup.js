@@ -5,7 +5,7 @@
  * llama.cpp Windows build, downloads it into %APPDATA%\AE-Llama\vendor and
  * extracts it — no scripts, no terminal. The same machinery powers the
  * "Update engine" button, the optional starter-model download, and the
- * aescripts.com update banner (via the hosted update.json manifest).
+ * update banner (via the hosted update.json manifest).
  */
 (function (global) {
   "use strict";
@@ -716,7 +716,7 @@
   /**
    * Model folders this machine probably already has, and what is in
    * them (WORKPLAN §19a). Probes a NAMED SHORTLIST, never the drives: a
-   * recursive sweep of a buyer's disks is slow, alarming, and finds other
+   * recursive sweep of a user's disks is slow, alarming, and finds other
    * applications' weights the panel has no business claiming. Anything
    * off the list is the Browse button's job.
    *
