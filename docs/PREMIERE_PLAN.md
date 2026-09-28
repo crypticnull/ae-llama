@@ -1,5 +1,11 @@
 # Premiere in the same ZXP — feasibility and plan
 
+> **Note, 2026-09-28 (owner decision): AE Llama is not for sale.** It is a
+> personal tool, so the parts of this plan about the aescripts.com
+> listing, store copy, licensing, pricing and buyers are dropped. The
+> engineering and the measured platform facts still stand. The text below
+> is left as it was written, as a record.
+
 Filed 2026-09-02 by the remote session, from a research + design +
 adversarial-review pass (four researchers, three architects, one
 synthesis, three refuters). Everything below is graded: **REPO** = read

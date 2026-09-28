@@ -1,5 +1,11 @@
 # Premiere platform — what is measured, and what is not
 
+> **Note, 2026-09-28 (owner decision): AE Llama is not for sale.** It is a
+> personal tool, so the parts of this ledger about the aescripts.com
+> listing, store copy, licensing, pricing and buyers are dropped. The
+> engineering and the measured platform facts still stand. The text below
+> is left as it was written, as a record.
+
 Companion to `docs/PREMIERE_PLAN.md`. That file is the plan; this file is
 the **evidence ledger**. Nothing may be promised in a tool doc, a system
 prompt, a README, a release note or store copy unless it has a MEASURED

@@ -1,5 +1,11 @@
 # Work queue — local (real-AE) session
 
+> **Note, 2026-09-28 (owner decision): AE Llama is not for sale.** It is a
+> personal tool, so any item or rationale here about the aescripts.com
+> listing, store copy, licensing for resale, pricing or buyers is dropped.
+> The engineering items stand, and where one says "buyer", read "user".
+> Items are left as they were written, as a record.
+
 Ordered priorities for the agent running on the AE machine. Work top to
 bottom; commit small, tested fixes to the dev branch
 (`claude/ae-plugin-llama-cpp-f13g3x`) with clear messages. Big features
