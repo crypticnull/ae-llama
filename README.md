@@ -1,48 +1,141 @@
-# AE Llama — local LLM copilot panel for After Effects
+# AE Llama: a local LLM panel for After Effects
 
-A CEP extension panel for **After Effects 2024–2026 (Windows)** that runs a
-local [llama.cpp](https://github.com/ggml-org/llama.cpp) model and lets it
-**drive After Effects**: create comps, add and animate layers, apply effects,
-set expressions, import footage, and queue renders — through a strict,
-undo-friendly allowlist of tools.
+AE Llama is a personal tool. It's a CEP extension panel for **After Effects
+on Windows** that runs a local [llama.cpp](https://github.com/ggml-org/llama.cpp)
+model and lets it **drive After Effects**: build comps, add and animate
+layers, rig controls, apply effects, set expressions, import footage,
+render, export and caption, through a strict, undo-friendly allowlist of
+tools. A local [ComfyUI](https://github.com/comfyanonymous/ComfyUI) backend
+adds image and video generation that lands straight in the project.
+
+It isn't sold, listed in a store or licensed to anyone. The code is public
+so the work can be read. There's no support offer and no promise that it
+fits anyone else's machine.
 
 ```
 ┌─ AE Llama panel (CEP) ────────────────┐        ┌─────────────────────┐
 │  model dropdown ▾   [Start]           │  HTTP  │  llama-server.exe   │
-│  chat UI                              │◄──────►│  (your .gguf model) │
+│  chat UI                              │◄──────►│  (a local .gguf)    │
 │                                       │        └─────────────────────┘
-│  JSON commands  {tool, args}          │
-│        │ allowlist executor           │
-│        ▼ ExtendScript (evalScript)    │
-│  jsx/hostscript.jsx → AE project DOM  │
+│  JSON commands  {tool, args}          │        ┌─────────────────────┐
+│        │ allowlist executor           │  HTTP  │  ComfyUI (managed   │
+│        ▼ ExtendScript (evalScript)    │◄──────►│  or your own)       │
+│  jsx/hostscript.jsx → AE project DOM  │        └─────────────────────┘
 └───────────────────────────────────────┘
 ```
 
-Everything runs on your machine. No cloud calls, no telemetry.
+Current version: **0.12.49**, alpha channel.
+
+## What runs where
+
+Everything that touches your project runs on your machine. No project
+content, prompt or render leaves it. The panel does go online for three
+kinds of download and nothing else: engine and ComfyUI builds from GitHub
+releases, model and generation weights from Hugging Face, and the update
+feed.
+
+- **Chat model.** A `llama-server.exe` the panel spawns hidden, health
+  checks, tracks by PID and reaps. It talks to it over the OpenAI-compatible HTTP API on `127.0.0.1`.
+- **Image and video generation.** ComfyUI, by default a portable build the
+  panel installs and runs on a port it owns (the "managed" backend). "Use
+  my own ComfyUI" in Settings points it at an instance you run instead.
+- **Captions.** [whisper.cpp](https://github.com/ggml-org/whisper.cpp)
+  transcribes a comp's own audio into timed text layers or markers.
+- **Encoding.** [ffmpeg](https://ffmpeg.org/) turns a lossless render into
+  a GIF or an H.264 file sized for posting, and every output is read back
+  with ffprobe before it counts as a success.
 
 ## Requirements
 
-- Windows 10/11
-- After Effects 2024, 2025, or 2026
-- Disk space for the engine (~100–400 MB) and a model (~4–5 GB)
+- Windows 10 or 11
+- After Effects 2024 or later (the manifest accepts AEFT 24.0 and up, on
+  CSXS 11). It's field-tested on AE 2026.
+- An NVIDIA GPU is strongly recommended. Without one the engine falls back
+  to a CPU build and a light model.
+- Disk space for the engine, a chat model and, if you want generation, the
+  ComfyUI install and its weights. Those last ones are large.
 
-## Install
+## How it drives After Effects
 
-**As a buyer (ZXP)** — install the `.zxp` with the
-[aescripts ZXP Installer](https://aescripts.com/learn/zxp-installer/),
-restart AE, open **Window ▸ Extensions ▸ AE Llama**. That's it — on first
-launch the panel sets itself up:
+The model never writes or runs raw scripts. It can only emit JSON like
+`{"tool": "add_text_layer", "args": {...}}`, and the tool name has to be in
+a fixed allowlist, the `TOOL_DEFS` in `extension/js/tools.js`. Anything
+else is rejected in the panel before it reaches AE. Output is held to that
+shape by llama.cpp's JSON-schema constrained decoding, with a fallback for
+older server builds.
 
-1. Detects your GPU (`nvidia-smi`) and picks the right llama.cpp build —
-   the newest CUDA line your driver supports, CUDA 12 for pre-Turing cards,
-   CPU when there's no NVIDIA GPU.
-2. Downloads and unpacks the engine into `%APPDATA%\AE-Llama\` (outside the
-   extension, so updates never touch it).
-3. If you have no model yet, one button downloads a good starter model
-   (Qwen2.5-7B-Instruct, ~4.7 GB). Or drop any `.gguf` into
-   `%APPDATA%\AE-Llama\models\` / use **Browse…** in the dropdown.
+The panel forwards each round of commands to `extension/jsx/hostscript.jsx`,
+which implements the host-side tools in ES3 ExtendScript with argument
+validation. A round runs as one batch call inside one undo group, so one
+**Ctrl+Z** reverts everything the model did in that round, and a round that
+fails partway can be rolled back rather than left half applied. A few tools
+run panel-side instead (ComfyUI generation, transcription, GIF and social
+exports) because they need Node, not ExtendScript.
 
-**As a developer (this repo)** — from the repo root in PowerShell:
+The model inspects the project, sees every result, and loops until the job
+is done, up to *Max tool rounds* per message. When a lookup fails, the
+error lists what actually exists (comps, layers, properties, effects,
+fonts, presets), which is how a small local model corrects itself without
+a human. Expressions for rigs are generated by the panel, dimension-aware
+and with names escaped, so the model rarely hand-writes expression syntax.
+When it does use raw `set_expression`, AE's own validation error is fed
+back to it.
+
+**Dry run** in Settings shows what the model *would* do without touching
+the project. While a reply streams, **Send** becomes **Stop**, which aborts
+generation and skips any remaining commands.
+
+### The tools
+
+There are **79 tools**: 68 that change the project and 11 read-only, 73
+host-side and 6 panel-side. The full table, with what each one does and
+how many stub tests and self-test steps cover it, is generated from the
+source into [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md). In groups:
+
+| Area | What it covers | Examples |
+|---|---|---|
+| Project | Inspect, organise, rename, clean up, import | `get_project_info`, `organize_project`, `rename_comps`, `clean_project`, `audit_comp_usage`, `import_as_layer` |
+| Comps | Create, resize, retime, precompose | `create_comp`, `set_comp_setting`, `scale_comp`, `precompose`, `get_comp_details` |
+| Layers | Text, solids, shapes, nulls, cameras, lights, stacking, parenting, timing, mattes | `add_text_layer`, `set_text_style`, `add_shape_content`, `set_layer_parent`, `reorder_layers`, `split_layer_into_chunks`, `set_track_matte`, `get_bounds` |
+| Masks | Add, edit, animate, remove | `add_mask`, `set_mask`, `set_mask_path`, `delete_mask` |
+| Properties and animation | Read or set any property by path, keyframes and easing across many layers | `list_properties`, `get_property`, `set_property`, `set_keyframes`, `apply_keyframe_ease`, `stagger_layers`, `audio_to_keyframes`, `for_each_layer` |
+| Rigging and expressions | Controls, pickwhip-style links, known-good presets, rigged grids | `add_control`, `link_property`, `apply_expression_preset`, `grid_layout`, `set_expression` |
+| Effects and presets | Apply, tune, remove, and search what's installed | `apply_effect`, `set_effect_param`, `list_effects`, `apply_preset`, `list_presets` |
+| Text animation and captions | Per-character animators, timed captions, transcription | `add_text_animator`, `add_captions`, `transcribe_to_captions` |
+| Render and export | Render queue, frames, audio, GIF, social MP4, MOGRT | `render_comp`, `snapshot_frame`, `export_gif`, `export_social`, `export_mogrt`, `expose_property` |
+| Generation | Talk to ComfyUI and import the result | `comfy_status`, `comfy_list_workflows`, `comfy_generate` |
+
+A **Visualizer** pane beside the chat is a bezier editor over the same
+tools (`stagger_layers`, `distribute_property`, `apply_keyframe_ease`), so
+anything it does is also reachable by chat.
+
+## VRAM tiers and the arbiter
+
+Chat and generation share one pool of VRAM, so `extension/js/tiers.js`
+reads the card once (measured VRAM from `nvidia-smi`, never the card's
+name) and maps it to one of eight tiers, **T0 to T7**, with boundaries at
+4, 6, 8, 12, 16, 24 and 32 GB. The chat-model recommendation, the
+generation defaults and the handoff policy all derive from that one tier,
+so they can't drift apart. Lower tiers hand the card over exclusively
+between chat and generation, the top two can run both at once.
+
+The tier sets policy. The actual decision for each generation is
+arithmetic over the models really loaded, against the card minus a
+standing reserve for After Effects and the Windows desktop, because a model
+that starves AE has broken the tool even when it runs. When a job can't
+fit, the panel either pauses the chat model and hands the card over (then
+confirms the VRAM was really released) or refuses with the numbers. It
+never quietly grinds. Starting the chat model is gated the same way.
+Before any of that, the chosen workflow is checked against the backend's
+own `/object_info`, so a missing weight or an enum value only some custom
+node pack offers is refused up front, naming what's missing.
+
+`vramOverrideGB` in Settings makes the panel enforce any card size you
+give it, so every tier can be exercised on one machine.
+
+## Install (developer, from this repo)
+
+From the repo root in PowerShell:
 
 ```powershell
 # Stock Windows PowerShell blocks local scripts (Restricted policy):
@@ -50,242 +143,212 @@ Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 #   (or prefix calls with: powershell -NoProfile -ExecutionPolicy Bypass -File ...)
 #   (ZIP download instead of git clone? also run: Unblock-File .\scripts\*.ps1)
 
-.\scripts\install.ps1      # junction the panel + PlayerDebugMode
+.\scripts\install.ps1      # junction the panel + set PlayerDebugMode (CSXS.11 and .12)
 ```
 
-Restart AE and open the panel — the same hands-off first-run setup applies.
-`scripts\get-llama.ps1` still exists for CI/offline prep (`-Variant auto`
-does the same GPU detection; `cpu`/`cuda -CudaVersion 13` force builds).
+Restart AE and open **Window ▸ Extensions ▸ AE Llama**. On first launch the
+panel sets itself up:
+
+1. Detects the GPU (`nvidia-smi`) and picks a llama.cpp build: the newest
+   CUDA line the driver supports, an older CUDA line for older cards, or
+   CPU when there's no NVIDIA GPU.
+2. Downloads and unpacks the engine into `%APPDATA%\AE-Llama\vendor\`,
+   outside the extension, so updates never touch it.
+3. Offers a chat model from a catalog sized to the detected tier, with
+   progress and cancel. Or drop any `.gguf` into
+   `%APPDATA%\AE-Llama\models\`, or use **Browse…** in the dropdown.
+
+The rest is opt-in and set up from Settings or the scripts below:
+
+| Script | What it does |
+|---|---|
+| `scripts\get-llama.ps1` | Engine download for offline or CI prep. `-Variant auto\|cpu\|cuda`, `-CudaVersion`, `-ListOnly` to see the pick without downloading |
+| `scripts\get-whisper.ps1` | whisper.cpp plus a speech model into `%APPDATA%\AE-Llama\vendor\whisper.cpp`, then verifies it |
+| `scripts\get-ffmpeg.ps1` | An ffmpeg build into `%APPDATA%\AE-Llama\vendor\ffmpeg` (LGPL by default), then verifies it. An ffmpeg already on PATH also works |
+| `scripts\uninstall.ps1` | Removes the dev junction |
+
+The managed ComfyUI backend is installed from **Settings ▸ ComfyUI**.
+
+### Building a ZXP for your own install
+
+A dev install is a junction and needs PlayerDebugMode. To install a signed
+copy instead, on this machine or another of your own:
+
+1. `.\scripts\package-zxp.ps1` builds `dist\AE-Llama-<version>.zxp`. It
+   refuses if `extension/CSXS/manifest.xml` and `extension/js/version.js`
+   disagree on the version, excludes dev files, and signs with a
+   self-signed cert it creates once and reuses. It needs
+   [ZXPSignCmd](https://github.com/Adobe-CEP/CEP-Resources).
+2. `.\scripts\install-zxp.ps1 -ZxpPath <path to .zxp>` extracts the signed
+   panel straight into the CEP extensions folder. Any ZXP installer works
+   too.
+
+CI (`.github/workflows/build-zxp.yml`) builds the same signed ZXP on every
+push and runs the stubbed test suite first.
 
 ## Using the panel
 
-1. **Pick a model** from the dropdown. It lists every `.gguf` found in your
-   models folder; choose **Browse for model file…** to navigate anywhere on
-   disk — browsed files are remembered across sessions.
+1. **Pick a model** from the dropdown. It lists every `.gguf` in the models
+   folder. **Browse for model file…** reaches anywhere on disk, and browsed
+   files are remembered.
 2. Press **Start**. The status dot turns green when the model is loaded
-   (large models can take a minute; watch the log via the ▤ button).
-3. Type what you want in the chat, e.g.:
+   (large models take a while; the log is behind the ▤ button).
+3. Ask for work in plain language:
    - *"Create a 1080p comp called Intro, 10 seconds at 30fps, with a dark
      grey background"*
-   - *"Add a title that says HELLO, white, 200px, centered, and fade its
-     opacity in over the first second"*
-   - *"Apply a Gaussian Blur to layer 1 and animate blurriness from 0 to 40
-     between 0s and 2s"*
-   - *"Add a wiggle expression to the title's position"*
-
-The model inspects your project, emits JSON tool calls, sees each result,
-and iterates (up to *Max tool rounds*, default 4). Every mutation is wrapped
-in an undo group — one **Ctrl+Z** reverts a whole action.
-
-**Dry run** (in ⚙ Settings) shows what the model *would* do without touching
-your project.
+   - *"Add a null called CTRL and link the rotation of every text layer to
+     a slider on it"*
+   - *"Make a 3x3 grid of squares and stagger their opacity 4 frames
+     apart"*
+   - *"Generate a stormy sky background and add it to the Intro comp"*
 
 ### Settings (⚙)
 
 | Setting | Default | Notes |
 |---|---|---|
-| llama-server.exe | auto-installed under `%APPDATA%\AE-Llama\vendor\` | Browse to any build you like |
+| llama-server.exe | `%APPDATA%\AE-Llama\vendor\llama.cpp\` | Auto-installed; browse to any build |
 | Models folder | `%APPDATA%\AE-Llama\models` | Scanned recursively for `.gguf` |
-| Port | 8737 | Change if something else uses it |
-| Context size | 8192 | Tokens; larger = more memory |
+| Port | 8737 | Change it if something else uses it |
+| Context size | 16384 | Tokens; larger costs VRAM |
 | GPU layers (-ngl) | 99 | 0 = CPU only; 99 = as many as fit |
-| Temperature | 0.7 | Lower = more deterministic tool use |
-| Max tool rounds | 4 | Caps the model's act→observe loop per message |
+| Temperature | 0.7 | Lower is more deterministic tool use |
+| Max tool rounds | 6 | Caps the act, observe loop per message |
+| ComfyUI backend | managed | Managed runs on port 8288; "own" uses the URL you set (default `http://127.0.0.1:8188`) |
+| Generation timeout | 600 s | Raise it for long video jobs |
+| Pause chat during generation | auto | auto, always or never; never refuses a job that can't fit |
 
-The **Updates** section of the drawer shows the installed version, checks
-the update channel on demand, and can force-reinstall the engine.
+**Settings ▸ ComfyUI** also has per-model weight rows (download with
+progress, remove with receipts), a **Workflows** list that says what each
+template needs and lets you turn it off, extra model folders spread across
+drives, and per-workflow prompt rewriting by the chat model. **Run
+self-test** is in the drawer too.
 
-## How it drives After Effects (safety model)
+## ComfyUI generation
 
-The model never writes or runs raw scripts. It can only emit JSON like
-`{"tool": "add_text_layer", "args": {...}}` chosen from a fixed allowlist
-(`extension/js/tools.js`). The panel forwards each command to
-`extension/jsx/hostscript.jsx`, which implements the tools with validation
-and undo groups. Unknown tools are rejected panel-side, so the blast radius
-is exactly the tool list — currently:
+`comfy_generate` picks a workflow template, injects the prompt, size, seed
+and frame count by node introspection, queues it, narrates progress as
+*step k of N* with an estimate from ComfyUI's websocket, downloads the
+render and imports it into the comp. Bundled templates cover text to image
+and text to video on several model families. Each has a manifest naming
+the exact weights and nodes it needs, and a catalog entry carrying its VRAM
+floor. The templates in `extension/comfy-workflows/` use core ComfyUI nodes
+only (`tests/test-workflow-bundle.js` enforces it), so the basic set works
+on a fresh managed install with no custom node packs.
 
-`get_project_info`, `get_comp_details`, `create_folder`, `move_to_folder`,
-`rename_item`, `delete_item`, `duplicate_comp`, `organize_project`,
-`create_comp`, `add_text_layer`,
-`set_text_style`, `add_solid`, `add_shape_layer`, `add_mask`, `precompose`,
-`add_camera`, `add_marker`, `add_null`, `add_control`, `link_property`,
-`apply_expression_preset`, `grid_layout`, `set_layer_3d`, `set_layer_parent`,
-`set_transform`, `center_anchor_point`, `add_keyframe`, `set_expression`,
-`apply_effect`,
-`set_effect_param`, `set_layer_timing`, `delete_layer`, `set_comp_setting`,
-`import_file`, `add_to_render_queue`, `comfy_status`,
-`comfy_list_workflows`, `comfy_generate`
+Your own templates are ComfyUI **Export (API)** JSON files dropped in
+`%APPDATA%\AE-Llama\comfy-workflows\`. See
+`extension/comfy-workflows/README.md` for the injection rules. Video
+workflows should end in an AE-importable container (MP4/H.264), since AE
+can't import animated WebP.
 
-Rigging is first-class: *"put Speed and Wobble sliders on a null and drive
-the title's rotation and wiggle from them"* becomes `add_null` →
-`add_control` → `link_property` / `apply_expression_preset`. The panel
-generates every expression itself (dimension-aware, names escaped), so the
-model never hand-writes expression syntax; when it does use raw
-`set_expression`, AE's own validation error is fed back so it can correct
-itself. Text layers support full styling: font, size, fill, tracking,
-leading, justification — at creation (`add_text_layer`) or later
-(`set_text_style`).
+The panel also finds weights you already have: an external models folder,
+extra roots per model kind, the ComfyUI Desktop app's shared store, and the
+roots in your own `extra_model_paths.yaml`, so nothing downloads twice.
 
-While the model streams its answer you see the reply text live, and the
-**Send** button becomes **Stop** — cancelling aborts generation on the
-server immediately and halts any remaining tool commands.
+## Data folder and updates
 
-## ComfyUI integration (image / video generation)
-
-If you have a local [ComfyUI](https://github.com/comfyanonymous/ComfyUI)
-install, the LLM can render images and video and pull them straight into
-your AE project:
-
-> *"Generate a 1920×1080 stormy sky background and add it to the Intro comp"*
-
-runs `comfy_generate` → queues an API-format workflow on your ComfyUI
-instance → waits → downloads the render → imports it into the project, all
-locally.
-
-Setup (all paths definable in ⚙ Settings):
-
-1. **Instance URL** — where ComfyUI listens (default `http://127.0.0.1:8188`).
-   If ComfyUI is already running, that's all you need — press
-   **Test connection**.
-2. **Install folder** — optional; lets the panel's **Launch ComfyUI** button
-   start it for you. Portable builds (`run_nvidia_gpu.bat` / `run_cpu.bat` /
-   embedded Python) and plain checkouts (`main.py` + `python` on PATH) are
-   detected. Custom venv setups: start ComfyUI yourself and just set the URL.
-3. **Workflow templates folder** — drop ComfyUI **Export (API)** JSON files
-   here (default `%APPDATA%\AE-Llama\comfy-workflows\`, seeded with a
-   starter txt2img example — edit its `ckpt_name` first). The panel injects
-   prompt/negative/size/seed/frames into your graph by node introspection;
-   see `extension/comfy-workflows/README.md` for the exact rules.
-4. **Generated files folder** — where renders are saved before being
-   imported (default `%APPDATA%\AE-Llama\generated\`).
-
-Video workflows should end in an AE-importable container (mp4/H.264 via
-SaveVideo or VHS Video Combine — AE can't import animated webp), and may
-need a higher *Generation timeout*.
-
-Structured output is enforced with llama.cpp's JSON-schema constrained
-decoding (with a graceful fallback for older server builds).
-
-## Data folder & what survives updates
-
-Everything heavy or user-owned lives in `%APPDATA%\AE-Llama\`, **outside**
-the extension, because an extension update replaces the extension folder
-wholesale:
+Everything heavy or user-owned lives in `%APPDATA%\AE-Llama\`, outside the
+extension, because an update replaces the extension folder wholesale:
 
 ```
 %APPDATA%\AE-Llama\
   vendor\llama.cpp\   engine binaries (auto-installed, re-downloadable)
-  models\             your .gguf models
-  comfy-workflows\    your generation templates (seeded on first run)
+  vendor\comfy\       managed ComfyUI install
+  vendor\whisper.cpp\ speech-to-text (get-whisper.ps1)
+  vendor\ffmpeg\      encoder (get-ffmpeg.ps1)
+  models\             .gguf chat models
+  comfy-workflows\    generation templates (seeded on first run)
   generated\          ComfyUI renders
   settings.json       settings mirror (localStorage backup)
 ```
 
 Updating or reinstalling the panel never touches models, templates,
-settings, or the engine.
+settings or the engine.
 
-## Distributing & updating (aescripts.com)
+Installed panels poll an update feed (`UPDATE_MANIFEST_URL` in
+`extension/js/version.js`, format in the repo-root `update.json`) and show
+a banner when `panelVersion` is newer. A dev install updates by `git pull`
+in the repo. A ZXP install downloads `panelPackageUrl` and installs it in
+place. The feed can also pin the llama.cpp release (`llamaTag`) and swap
+the model catalog without a new panel build. Versions move together
+through one command:
 
-Every push builds a signed ZXP on CI (**Actions ▸ Build ZXP ▸ artifact
-`AE-Llama-zxp`**); pushing a `v*` tag (e.g. `git tag v0.3.0 && git push
---tags`) additionally attaches it to a GitHub Release — that's the
-downloadable package. For a stable signing identity across releases, add
-repo secrets `ZXP_CERT_B64` (base64 of your .p12) and `ZXP_CERT_PASSWORD`;
-otherwise CI self-signs per build (still installs fine).
+```powershell
+node scripts/bump-version.js patch   # all four places the version lives, in one go
+```
 
-Release flow:
+## Testing
 
-1. Bump the version in **both** `extension/CSXS/manifest.xml`
-   (`ExtensionBundleVersion` + `Extension Version`) and
-   `extension/js/version.js` — the packager refuses a mismatch.
-2. Build the signed ZXP: `.\scripts\package-zxp.ps1`
-   (needs [ZXPSignCmd](https://github.com/Adobe-CEP/CEP-Resources) once;
-   creates and reuses a self-signed cert — sufficient for CEP, buyers
-   install via the aescripts ZXP Installer, no debug mode involved).
-   Output: `dist\AE-Llama-<version>.zxp`. Dev files (`.debug`) and any
-   local binaries are excluded automatically.
-3. Upload to aescripts.com.
-4. Update the hosted `update.json` (template in the repo root; host it at
-   any stable URL you control and point `UPDATE_MANIFEST_URL` in
-   `extension/js/version.js` at it **before** building):
-   - `panelVersion` / `panelUrl` / `notes` — installed panels compare
-     versions on launch and show an update banner.
-   - `panelPackageUrl` (optional) — direct self-update. When set to a
-     downloadable `.zxp`/`.zip` of the new version, the banner gains an
-     **Update now** action that installs it in place (reopen the panel to
-     load it), and the ⚙ *Install panel updates automatically* toggle makes
-     the whole loop hands-off. Leave it **empty** for aescripts builds so
-     buyers go through the store and licensing stays intact. Dev installs
-     (extension junctioned from a git clone) ignore this field entirely —
-     for them "Update panel now" simply runs `git pull` in the repo.
-   - `llamaTag` — pin the llama.cpp release your build was tested against;
-     the panel's engine installs/updates use it instead of `latest`.
-   - `starterModel` — swap the recommended model without shipping a new ZXP.
+Two layers, and the second is the one that matters.
+
+1. **Stubbed suite, no AE.** `tests/test-*.js` are plain Node scripts
+   against a stubbed AE object model that reproduces real AE quirks (padded
+   value arrays, matte type codes, ExtendScript's left-associative ternary).
+   Run any one with `node tests/test-<name>.js`, exit 0 means green. CI runs
+   every one of them on each push, after a `node --check` of every panel
+   file. The suite also enforces repo rules: ES3-only syntax in files AE
+   executes, a PowerShell parse of every `.ps1` (when `pwsh` is installed), parseable XML in every
+   manifest, and a fresh generated tool table in `docs/CAPABILITIES.md`.
+2. **Real-AE self-test.** A fixed script of host-tool calls, no LLM
+   involved, that exercises every host tool in its own scratch comps, checks
+   each result, cleans up and prints a PASS/FAIL report. It's currently
+   **777 steps**. Run it from **Settings ▸ Run self-test**, or headless:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File scripts/run-ae-selftest.ps1
+   ```
+
+   It needs AE's *Allow Scripts to Write Files and Access Network*
+   preference. Both runners share `extension/js/selftest.js`, so new
+   coverage goes there once.
 
 ## Repository layout
 
 ```
-extension/            the CEP panel (ships as the ZXP)
-  CSXS/manifest.xml   CEP manifest (AEFT 24.0–99.9, CSXS 11)
+extension/            the CEP panel
+  CSXS/manifest.xml   CEP manifest (AEFT 24.0+, CSXS 11)
   index.html          panel markup
-  js/                 panel logic (bridge, version, settings, llama server
-                      mgmt, ComfyUI client, auto-setup/updates, tools, UI)
+  js/                 panel logic: tools and prompt (tools.js), llama-server
+                      (llama.js), ComfyUI client (comfy.js), tiers and VRAM
+                      arbiter (tiers.js), setup and updates (setup.js),
+                      settings, whisper, ffmpeg, MOGRT reader, visualizer,
+                      self-test
   jsx/hostscript.jsx  ExtendScript tool implementations (allowlist + undo)
-  comfy-workflows/    bundled workflow templates (seeded into the data dir)
-native/               AEGP C++ plugin scaffold (phase 2, experimental):
-                      Window-menu command that opens the panel; see
-                      native/README.md for SDK setup and build
-scripts/
-  get-llama.ps1       dev/CI engine download (-Variant auto|cpu|cuda,
-                      -ListOnly to see the pick without downloading)
-  install.ps1         dev install: junction the panel + PlayerDebugMode
-  uninstall.ps1       remove the dev junction
-  package-zxp.ps1     build the signed ZXP for distribution
-.github/workflows/    CI: builds the signed ZXP, attaches it to releases
-update.json           update-channel manifest template (host your copy)
+  comfy-workflows/    bundled generation templates and their manifests
+native/               AEGP C++ scaffold (experimental, not compiled against
+                      a real SDK yet); see native/README.md
+scripts/              install, engine/whisper/ffmpeg acquisition, packaging,
+                      the headless self-test runner, and measurement probes
+tests/                stubbed-AE regression suites and fixtures
+docs/                 CAPABILITIES (what it does), ORIENTATION (read first),
+                      WORKPLAN (queue), WORKPLAN-LOG (history)
+update.json           update-feed manifest template
 ```
 
 ## Troubleshooting
 
-- **ZXP Installer says "no compatible program available" / asks for a
-  Creative Cloud login you already have** — the installer's Adobe-app
-  detection is failing, not the ZXP. In order: update to the latest
-  [ZXP/UXP Installer](https://aescripts.com/learn/zxp-installer/) (older
-  builds don't recognize new AE releases like 2026); launch it normally,
-  NOT "Run as administrator" (elevation changes the user context, which
-  breaks both app detection and the CC login check); sign out/in of the
-  Creative Cloud desktop app and retry. Or skip the installer entirely:
-  `.\scripts\install-zxp.ps1 -ZxpPath <path to .zxp>` extracts the signed
-  panel straight into the CEP extensions folder (equivalently: rename the
-  `.zxp` to `.zip` and extract it to
-  `%APPDATA%\Adobe\CEP\extensions\com.cptk.aellama`).
-- **Panel missing from Window ▸ Extensions** — re-run `scripts\install.ps1`,
-  fully restart AE. Check the PlayerDebugMode string value = `1` under the
-  key for *your* AE version: `HKCU\Software\Adobe\CSXS.11` for AE 2024,
-  `HKCU\Software\Adobe\CSXS.12` for AE 2025/2026. Also confirm
-  `%APPDATA%\Adobe\CEP\extensions\com.cptk.aellama` exists.
-- **"llama-server.exe not found" / first-run setup failed** — use
-  **Reinstall / update engine** in ⚙ Settings (needs internet), or run
-  `scripts\get-llama.ps1`, or Browse to any llama-server.exe you have.
-- **Server never turns green** — open the log (▤). Out-of-memory on GPU?
-  Lower *GPU layers*. Wrong build for your GPU? **Reinstall / update
+- **Panel missing from Window ▸ Extensions.** Re-run `scripts\install.ps1`
+  and fully restart AE. Check PlayerDebugMode is the string `1` under the
+  key for your AE version: `HKCU\Software\Adobe\CSXS.11` for AE 2024,
+  `HKCU\Software\Adobe\CSXS.12` for AE 2025 and 2026. Confirm
+  `%APPDATA%\Adobe\CEP\extensions\com.cptk.aellama` exists. A manifest with
+  bad XML fails silently the same way, so `node tests/test-manifest-xml.js`
+  is worth a run after touching one.
+- **ZXP installer can't find After Effects.** That's the installer's app
+  detection, not the ZXP. Skip it: `.\scripts\install-zxp.ps1 -ZxpPath
+  <path to .zxp>`, or rename the `.zxp` to `.zip` and extract it to
+  `%APPDATA%\Adobe\CEP\extensions\com.cptk.aellama`.
+- **"llama-server.exe not found" or first-run setup failed.** Use
+  **Reinstall / update engine** in Settings (needs internet), run
+  `scripts\get-llama.ps1`, or browse to any llama-server.exe.
+- **Server never turns green.** Open the log (▤). Out of memory? Lower *GPU
+  layers* or pick a smaller model. Wrong build? **Reinstall / update
   engine** re-detects, or force one with `get-llama.ps1 -Variant cpu`.
-- **Model produces junk commands** — small/base models struggle with tool
-  use; prefer an *instruct* model ≥7B, or lower the temperature.
-- **Port in use** — change the port in ⚙ Settings.
-- **ComfyUI unreachable** — start it (Launch button or manually) and check
-  the URL with **Test connection**. `comfy_generate` errors mentioning a
-  node usually mean the workflow references a checkpoint/custom node your
-  ComfyUI doesn't have — fix the template in ComfyUI and re-export.
-- **Debugging the panel** — with the panel open, visit
-  `http://localhost:8092` in a browser for CEF DevTools (see
-  `extension/.debug`).
-
-## Roadmap
-
-- [x] Streaming reply display and Stop button
-- [x] Shape layers, masks, precomposing, cameras, markers, 3D, parenting
-- [x] AEGP C++ scaffold (`native/`) — menu command opening the panel;
-      needs a local AE SDK to compile (untested until then)
-- [ ] AEGP in-process inference (llama.cpp linked directly) + render hooks
-- [ ] Starter model catalog (multiple sizes) in the update manifest
+- **Model produces junk commands.** Small or base models struggle with tool
+  use. Prefer an instruct model, or lower the temperature.
+- **Port in use.** Change it in Settings.
+- **A generation is refused.** Read the refusal, it names the missing
+  weight, the missing node or the VRAM it needs. The weight rows in
+  **Settings ▸ ComfyUI** download what's missing.
+- **Debugging the panel.** With the panel open, visit
+  `http://localhost:8092` for CEF DevTools (see `extension/.debug`).
