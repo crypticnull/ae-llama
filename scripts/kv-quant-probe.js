@@ -3,7 +3,7 @@
  * measured through a standalone llama-server (WORKPLAN §13b, NEXT UP 11).
  *
  * Standalone on purpose: llama.js spawnServer's argv is closed, and adding
- * the flags there to take a reading would ship them to every buyer before
+ * the flags there to take a reading would ship them to every user before
  * §13b's "detect and fall back" guard exists (§13b, review 2026-09-05).
  * No extension/ change, so no bump.
  *

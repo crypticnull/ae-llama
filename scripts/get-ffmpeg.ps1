@@ -23,10 +23,11 @@
 
   THE LICENCE IS A DELIBERATE DEFAULT, AND IT IS NOT THE OBVIOUS ONE.
   BtbN publishes each build twice, GPL and LGPL. The GPL build carries
-  libx264 and libx265; the LGPL one does not. This panel is a COMMERCIAL
-  product, and shipping -- or bundling an installer that fetches -- GPL
-  binaries alongside closed source is a licensing question for a human,
-  not a default for a script. So LGPL is the default and -License gpl is
+  libx264 and libx265; the LGPL one does not. The panel is a personal
+  tool, not for sale (owner, 2026-09-28), but its repo is public, and
+  publishing -- or bundling an installer that fetches -- GPL binaries
+  alongside it is still a licensing question for a human, not a default
+  for a script. So LGPL is the default and -License gpl is
   an explicit, logged choice.
 
   That default has a cost, and the point of printing the encoder census

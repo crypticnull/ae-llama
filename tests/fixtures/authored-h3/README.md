@@ -9,7 +9,7 @@ custom additions just for me for now. I want to fully build the user's
 environment and think of mine as another level on top of that that's
 separate."*
 
-It needs **seven** custom node packs a buyer does not have — ComfyLiterals
+It needs **seven** custom node packs a user does not have — ComfyLiterals
 (`Float`), comfyui-custom-scripts (`PlaySound|pysssss`), comfyui-easy-use
 (`easy cleanGpuUsed`), comfyui-kjnodes (`ModelPreviewOverrideKJ`,
 `MiniMaxH3MemoryEfficientSageAttentionPatch`),

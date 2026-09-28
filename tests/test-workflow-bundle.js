@@ -6,7 +6,7 @@
  * WORKPLAN §18 / docs/proposals/comfy-templates-PLAN.md §5. This is the
  * ratchet half: it walks extension/comfy-workflows/ rather than a
  * hardcoded list, so a template added without its sidecar fails here
- * instead of at a buyer's first generation.
+ * instead of at a user's first generation.
  *
  * The three things it is written around, each measured:
  *
@@ -140,9 +140,9 @@ shipped.forEach((t) => {
          t.base + ": catalogEntry names a real catalog entry",
          String(mf.catalogEntry));
 
-  // WORKPLAN §22a: a BUNDLED template is core-only. The buyer's
+  // WORKPLAN §22a: a BUNDLED template is core-only. The user's
   // recommended set is installed with no custom node pack, so a graph
-  // naming one here renders on the owner's machine and on no buyer's.
+  // naming one here renders on the owner's machine and on no user's.
   // Pack-dependent graphs belong in the opt-in layer (§22d), and the
   // owner's authored graphs live in tests/fixtures/ -- fixtures are
   // EXEMPT on purpose, because this walk only reads the bundle folder.
@@ -443,7 +443,7 @@ shipped.forEach((t) => {
 // sigma shift, a frame count -- applied to the file someone had open and
 // not to its sibling. The nvfp4 graph is the one every probe defaults to
 // and the one a Blackwell dev machine runs, so the UNFIXED half is the
-// one that only ships to buyers whose cards cannot run the other. Nothing
+// one that only ships to users whose cards cannot run the other. Nothing
 // else in this file compares two templates to each other.
 //
 // The allowed differences are enumerated, not pattern-matched: exactly

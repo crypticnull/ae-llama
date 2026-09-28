@@ -9,7 +9,7 @@
  * KSamplerSelect offers 63 samplers and the vendor portable build offers 44,
  * and the shipped KREA2 template was authored against `res_2s`, one of the 19
  * that only exist where RES4LYF is installed. ComfyUI dropped every output
- * branch of that graph at validation on the backend a buyer gets (WORKPLAN
+ * branch of that graph at validation on the backend a user gets (WORKPLAN
  * 17f). Checking a template against comfy-node-defs.json would have passed it,
  * because that file is a picture of the one machine where the bug is invisible.
  *

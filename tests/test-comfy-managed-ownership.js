@@ -271,7 +271,7 @@ cp.execFileSync = realExec;
 // last hole in this family. `ensureRunning` refuses a listener on the
 // managed port that `ownsManagedBackend()` (localStorage) does not claim
 // -- correct against a stranger, and a brick wall against an orphan of
-// our OWN install, which is what the buyer actually meets:
+// our OWN install, which is what the user actually meets:
 //
 //   - the panel crashed with a backend up and localStorage went with it;
 //   - a second panel session (the key is per-host);

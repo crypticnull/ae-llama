@@ -4,7 +4,7 @@
  *
  * Why this exists: `Setup.bootstrapComfy` had exactly ONE caller —
  * `btn-comfy-install` in Settings (main.js). So the only way to install
- * the backend a buyer gets was for a human to open After Effects, open
+ * the backend a user gets was for a human to open After Effects, open
  * the panel, open Settings and click. That made WORKPLAN §17c — "dogfood
  * the shipped backend on the dev machine" — impossible for an unattended
  * pass, and §17c gates every template pass in §18.
@@ -160,7 +160,7 @@ function reportInstall(inst) {
   verdict(!!inst, "the managed backend is installed",
           inst ? inst.root : "not found under the panel's vendor folder");
   if (!inst) return;
-  // The standing disk cost of the buyer's path, which NOBODY has
+  // The standing disk cost of the user's path, which NOBODY has
   // measured — §17c asks for this number, and it decides whether the
   // dogfooding arrangement is permanent or per-test.
   const mb = dirSizeMB(inst.root);

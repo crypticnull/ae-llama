@@ -76,7 +76,7 @@ assert(Setup.pickComfyAsset(REAL_V034, true).name ===
 // Not asserted as CORRECT, recorded as MEASURED: with no cpu asset to
 // find, both cpu patterns miss and the bare portable fallback takes the
 // FIRST portable in list order, which is AMD. So an Intel or GPU-less
-// buyer is handed the AMD runtime silently. Filed as WORKPLAN 17e; when
+// user is handed the AMD runtime silently. Filed as WORKPLAN 17e; when
 // that is fixed, this assertion is what flips.
 assert(Setup.pickComfyAsset(REAL_V034, false).name ===
        "ComfyUI_windows_portable_amd.7z",
@@ -137,8 +137,8 @@ assert(fs.existsSync(path.join(modelsDir, "checkpoints")) &&
 // 5a. A checkpoints folder is a diffusion_models folder too (WORKPLAN 18
 // P7c step 2g). AE_LLAMA_SDXL_FP8_T2I_V1 casts sdxl's UNet with core
 // UNETLoader, which lists only diffusion_models, straight out of the whole
-// checkpoint the buyer already has. Without this mapping the backend
-// refuses the graph on a name it cannot offer, or the buyer downloads the
+// checkpoint the user already has. Without this mapping the backend
+// refuses the graph on a name it cannot offer, or the user downloads the
 // same 6.6 GB twice. Parsed the way the vendor utils/extra_config.py does:
 // a value is split on newlines, and the real folder must come FIRST so a
 // name present in both resolves to the real diffusion file.
@@ -475,7 +475,7 @@ step(function (next) {
 //
 // The defect this closes: comfyUrl shipped as 127.0.0.1:8188 — ComfyUI's
 // OWN default port — and ensureRunning used whatever answered there. So
-// a buyer who already ran ComfyUI silently became a bring-your-own user
+// a user who already ran ComfyUI silently became a bring-your-own user
 // without deciding to, and the panel then priced jobs and checked
 // weights against a model set it does not manage. comfy.js already
 // refuses to reroute to an instance found on ANOTHER port for exactly
@@ -669,7 +669,7 @@ step(function (next) {
 // 5B ~23 % faster on the managed backend, but where the kernel is missing
 // ComfyUI's attention.py calls exit(-1) at import -- with CUDA hidden the
 // backend died at boot with the flag and served without it. A card under
-// compute capability 7.5 is the low-end reach this product sells, so the
+// compute capability 7.5 is the low-end reach this tool is built for, so the
 // flag must follow the vendor's own answer and any doubt must mean NO.
 function ckBoot(answer, cb) {
   const seen = [], probes = [];
@@ -802,7 +802,7 @@ runSteps(0);
 // calls sys.stderr.flush() the moment sampling starts, Windows answers a
 // dead pipe with OSError [Errno 22] Invalid argument, and the prompt dies
 // at the first sampler node. So EVERY generation on a script-booted
-// backend failed — in the one configuration no buyer's panel uses and
+// backend failed — in the one configuration no user's panel uses and
 // every unattended pass does. The identical comfy-probe run went from
 // "execution error [Errno 22]" at 4s to a 2.1 MB PNG at 14s with only
 // this changed.

@@ -5,7 +5,7 @@ The host twin of scripts/vram-ballast.py. Holds TOTAL - BOX_MB of
 PHYSICAL RAM, locked, so everything else on the machine (After Effects,
 the desktop, the managed backend and its pinned staging) has to live in
 what a BOX_MB machine has. Unlike the VRAM ballast it does NOT sit on top
-of what is already in use: a 16 GB buyer's AE and desktop live inside
+of what is already in use: a 16 GB user's AE and desktop live inside
 their 16 GB too, so whatever does not fit gets paged, exactly as there.
 
     python scripts/ram-ballast.py --box-mb 16384 --max-sec 1500 --stop-file local/ram.stop

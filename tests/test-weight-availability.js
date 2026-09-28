@@ -28,7 +28,7 @@
 // A THIRD half, added 2026-09-09 (WORKPLAN 17g). Checking weights alone
 // reported "ready" about a graph ComfyUI refuses: the shipped KREA2 template
 // named sampler `res_2s`, a value the RES4LYF pack ADDS to a core node's
-// enum, and the backend a buyer gets dropped every output branch of it at
+// enum, and the backend a user gets dropped every output branch of it at
 // validation while this very check printed PASS. So Comfy.validateGraphInputs
 // asks both questions in one walk of /object_info — the weight slots and the
 // build-constant enum VALUES — and the same invariant governs both: it may

@@ -7,7 +7,7 @@
  * REAL log lines (build 10240, captured 2026-09-16) without a GPU.
  *
  * Why the log matters as well as nvidia-smi: the card reading is the
- * truth a buyer pays, but it cannot say WHICH buffer grew. The server
+ * truth a user pays, but it cannot say WHICH buffer grew. The server
  * prints the KV buffer, its K/V types, and whether flash attention came
  * on, and a quantized V cache silently forces flash attention on
  * ("enabling flash_attn since it is required for quantized V cache").

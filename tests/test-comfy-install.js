@@ -2,7 +2,7 @@
  * test-comfy-install.js — the headless managed-backend installer.
  *
  * scripts/comfy-install.js exists because Setup.bootstrapComfy had ONE
- * caller: a button in Settings (main.js). So the backend a buyer gets
+ * caller: a button in Settings (main.js). So the backend a user gets
  * could only be installed by a human opening After Effects, opening the
  * panel and clicking — which made WORKPLAN §17c impossible for an
  * unattended pass, and §17c gates every template pass in §18.
@@ -79,7 +79,7 @@ function run(env, args) {
 }
 
 // 3. The mode is REPORTED, not assumed. A machine set to "own" still
-//    installs (that IS §17c — dogfooding the buyer's backend beside the
+//    installs (that IS §17c — dogfooding the user's backend beside the
 //    owner's own), but the run must say the panel will keep talking to
 //    the other one until the mode is switched.
 {

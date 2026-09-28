@@ -570,7 +570,7 @@ assert(listed.indexOf("AE_LLAMA_H3_T2V_V1.manifest") === -1,
 // The authored graph left the bundle in 0.12.14 (WORKPLAN 18 P9). Asserted
 // in the NEGATIVE as well, because "the basic is listed" passes just as
 // happily with both files present, and shipping both is what the move was
-// for: a buyer picking the authored one gets a graph needing seven packs.
+// for: a user picking the authored one gets a graph needing seven packs.
 assert(listed.indexOf("AE_LLAMA_H3_I2V_V1") === -1,
        "and the authored H3 graph is NOT in the shipped bundle any more " +
        "(it is a fixture — tests/fixtures/authored-h3/README.md)");

@@ -7,9 +7,9 @@ the krea2 catalog entry's graph with the core-only
 on 2026-09-06: *"build basic ones and redefine my supplied one as
 alternate custom additions just for me for now. I want to fully build the
 user's environment and think of mine as another level on top of that
-that's separate."* It needs four custom node packs a buyer does not have
+that's separate."* It needs four custom node packs a user does not have
 (rgthree Power Lora Loader / Any Switch / Image Comparer, easy
-cleanGpuUsed, SesquiLatentUpscale), so a buyer who picked it got a graph
+cleanGpuUsed, SesquiLatentUpscale), so a user who picked it got a graph
 their backend refuses.
 
 It is kept **here** rather than deleted because five suites use it as

@@ -1,12 +1,12 @@
 <#
 .SYNOPSIS
-  Builds a signed ZXP of the panel for distribution (aescripts.com etc.).
+  Builds a signed ZXP of the panel for installing outside a dev junction.
 
   - Stages extension\ into a clean temp copy (dev-only files excluded).
   - Verifies the version in CSXS\manifest.xml matches js\version.js.
   - Signs with ZXPSignCmd (Adobe's tool, from Adobe-CEP/CEP-Resources on
     GitHub). A self-signed cert is created on first run and reused -- fine
-    for CEP: end users install the ZXP with the aescripts ZXP Installer,
+    for CEP: the ZXP installs with any ZXP installer or install-zxp.ps1,
     no PlayerDebugMode needed.
 
 .EXAMPLE

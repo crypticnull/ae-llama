@@ -5,7 +5,7 @@
  * comfyui_nvidia_rtx_nodes and needs the NVIDIA app's video SDK. It
  * registers on some machines and not others, so a template that hard-requires
  * it fails validation on every machine without the SDK — including, one day,
- * a customer's. The manifest's `optionalNodes` block says which nodes may be
+ * a user's. The manifest's `optionalNodes` block says which nodes may be
  * dropped and which input passes through when they are.
  *
  * The load-bearing fact, read out of the installed ComfyUI 0.32.0 rather than

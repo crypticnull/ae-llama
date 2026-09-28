@@ -120,7 +120,7 @@ const Tools = window.Tools;
 
   // Physical impossibility is the ONLY thing that stops a load. An 8 GB
   // card + a 6 GB model is 'tight', NOT refused: that would decide the
-  // honest chat floor for every 8 GB buyer by arithmetic, and §16d
+  // honest chat floor for every 8 GB user by arithmetic, and §16d
   // reserves that call for the owner.
   const small = P({ cardTotalMB: 8192, usedMB: 1200, chatNeedMB: 6002,
                     gpuLayers: 99 });

@@ -14,7 +14,7 @@ allocation still lands on a 32 GB card, so a job that would spill past a
 12 GB card's physical memory - the grind CLAUDE.md forbids shipping
 silently - cannot happen and cannot be seen. A ballast takes the memory
 away for real: torch.cuda.mem_get_info in the backend reports the small
-number, and an allocation beyond it goes where it would on the buyer's
+number, and an allocation beyond it goes where it would on the user's
 card (the driver's system-memory fallback, or an OOM).
 
 Exits by itself after --max-sec so a pass that dies cannot leave 20 GB

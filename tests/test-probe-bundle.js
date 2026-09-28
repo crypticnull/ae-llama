@@ -4,8 +4,8 @@
 //
 // 1. THE PROBE CAN NEVER SHIP. CI publishes the update feed on EVERY
 //    push to main and claude/**, to a stable URL every installed panel
-//    polls — so anything that lands inside extension/ is on customers'
-//    machines within minutes, whether or not anyone meant it to be.
+//    polls — so anything that lands inside extension/ is on every installed
+//    panel within minutes, whether or not anyone meant it to be.
 //    The probe therefore lives in probe/, has its own bundle id, and is
 //    installed only by a junction. This test is what keeps it there.
 //

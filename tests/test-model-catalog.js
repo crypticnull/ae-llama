@@ -86,7 +86,7 @@ assert(cOver.length === 1 && cOver[0].name === "y",
 // cost 21 536 MiB, because the floor is the 17 304 MiB of resident weights
 // and not the frame. So no size this panel can inject fits Wan 2.2 5B on
 // an 8 GB card, the gate is 32, and this row now asserts what an 8 GB
-// buyer is actually offered.
+// user is actually offered.
 //
 // UPDATED 2026-09-16, and the update is that this row now asserts
 // v: null. ltx-small used to be what an 8 GB card was offered, on a
@@ -101,7 +101,7 @@ assert(cOver.length === 1 && cOver[0].name === "y",
 // and both are the honest answer. It does NOT get a worse offer than
 // before -- it gets no offer, where before it got a recommendation for an
 // entry with no weights to download and no graph to run, which could only
-// ever have failed in the buyer's hands.
+// ever have failed in the user's hands.
 //
 // The gap is therefore narrower but real, and it is WORKPLAN 18 P7a's
 // remaining question. This row pins v: null deliberately: if some future
@@ -286,7 +286,7 @@ window.AELL.COMFY_CATALOG.forEach((e) => {
     // on an RTX 5090 and had to be cancelled, so the only completed reading
     // this catalog can hold is a 2 s decomposition of it. Publishing that
     // is honest ONLY if the row also says what the panel renders when the
-    // user names no length, because THAT is the job the buyer is given.
+    // user names no length, because THAT is the job the user is given.
     // Without this, the catalog quotes a render nobody gets and nothing in
     // the repo notices. The authored length is not a matter of opinion — it
     // is the widget value in the entry's own shipped API template, reached
@@ -724,7 +724,7 @@ const ALLOW_UNMEASURED = [];
 // 14B variant. WORKPLAN 18 P7c step 1 was written expecting one and it is
 // not there. The fp8 entry is the SAME file cast at load time by core
 // UNETLoader's weight_dtype, so its urls[] and sizeMB are identical to the
-// fp16's on purpose: a buyer who has one has both, and the panel must
+// fp16's on purpose: a user who has one has both, and the panel must
 // never ask them to download 17 GB twice.
 //
 // The bug class: a future pass reads "fp8" in the entry and gives it its
@@ -750,7 +750,7 @@ const ALLOW_UNMEASURED = [];
 
     // The reading is the whole reason the entry exists. If the cast ever
     // stops being cheaper, the entry is dead weight and should be deleted
-    // rather than shipped as a choice that costs a buyer more.
+    // rather than shipped as a choice that costs a user more.
     assert(typeof fp8.measuredVramMB === "number" &&
            typeof fp16.measuredVramMB === "number" &&
            fp8.measuredVramMB < fp16.measuredVramMB,
@@ -787,7 +787,7 @@ const ALLOW_UNMEASURED = [];
 // sdxl and sdxl-fp8 are the same kind of pair (18 P7c step 2g, 5a-4h): one
 // checkpoint, the fp8 entry's UNet cast at load by core UNETLoader straight
 // out of it. Same bug class as Wan -- a pass that gives the cast its own
-// urls[] makes a buyer fetch 6.6 GB twice -- plus one of its own: the cast
+// urls[] makes a user fetch 6.6 GB twice -- plus one of its own: the cast
 // must stay cheaper AND gated lower, or it is dead weight in the picker.
 {
   const cat = window.AELL.COMFY_CATALOG;

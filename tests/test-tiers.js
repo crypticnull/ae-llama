@@ -187,7 +187,7 @@ const T = window.Tiers;
   // unconstrained, byte-identical clip. DynamicVRAM streams the weights
   // instead of holding them, so it shrank rather than ground. This is the
   // row CLAUDE.md's "reach is a feature" is about: a 12 GB card is the
-  // common case on aescripts, and it has video now.
+  // common case, and it has video now.
   const t12 = rec(12, 8.9);
   // The gate has since moved 12 -> 8 (NEXT UP 5b-1, 841 MiB of room, 24 s
   // twice, identical); recommendFromGB 12 is what keeps THIS row where it
@@ -224,7 +224,7 @@ const T = window.Tiers;
   // after After Effects and the desktop floor, identical output, clock
   // within 1.3x, so their gates are 12. The DEFAULTS above did not move:
   // recommendFromGB holds them where the unconstrained readings put them,
-  // because moving a 12 GB buyer's video default from a 12 s clip to a
+  // because moving a 12 GB user's video default from a 12 s clip to a
   // 130 s one is the owner's tier call (16f). Both halves pinned, so the
   // gate cannot silently fall back and the defaults cannot silently move.
   const byName = (n) => cat.filter((e) => e.name === n)[0];

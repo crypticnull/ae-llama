@@ -3,7 +3,7 @@
  * taken from a different ComfyUI than the one installed (WORKPLAN §17l).
  *
  * The fixture is a hand-taken snapshot of the vendor build's enum values,
- * and bootstrapComfy downloads /releases/latest, so the build a buyer gets
+ * and bootstrapComfy downloads /releases/latest, so the build a user gets
  * moves without anyone touching the repo. A stale fixture fails safe one
  * way (it rejects a value a newer build added) and UNSAFE the other (it
  * passes a value the newer build dropped — the res_2s failure of §17f).

@@ -54,7 +54,7 @@ jobs:
       # Optional stable signing identity: set repo secrets ZXP_CERT_B64
       # (base64 of a .p12) and ZXP_CERT_PASSWORD. Without them each build
       # signs with a fresh self-signed cert, which installs fine via the
-      # aescripts ZXP Installer but changes identity per build.
+      # ZXP installer but changes identity per build.
       - name: Restore signing certificate (optional)
         shell: pwsh
         env:

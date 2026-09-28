@@ -9,7 +9,7 @@
  * core node's enum. The author's ComfyUI has RES4LYF; the vendor backend
  * `comfy-install.js` downloads does not, and offers 44 samplers without it.
  * ComfyUI dropped every output branch of the graph at validation, so the
- * template a buyer got could not render at all.
+ * template a user got could not render at all.
  *
  * Nothing in the repo could see it:
  *
@@ -103,7 +103,7 @@ ok(checked > 0,
 /* ------------------------------------------------- 3. the regression itself
  * Pin the specific value, so a re-export from the author's machine that
  * reintroduces res_2s fails HERE with the story attached rather than in a
- * buyer's render. */
+ * user's render. */
 const krea = templates.filter((t) => /KREA2/i.test(t.file))[0];
 ok(!!krea, "a KREA2 template is shipped");
 if (krea) {

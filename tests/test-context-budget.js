@@ -420,7 +420,7 @@ Tools.fetchProjectState(function (json) {
   // The starve row (WORKPLAN §15 item 2, REFINED "The acceptance
   // criterion"). A default user (16K, settings as shipped) with a TYPICAL
   // project must not get main.js's starve notice, whose advice — raise
-  // Context size, it costs VRAM — is the one thing an 8-12 GB buyer
+  // Context size, it costs VRAM — is the one thing an 8-12 GB user
   // cannot do. The state is the size context-budget-probe measured on a
   // real project (~2.7K chars; the 6,000 cap itself starves, 303 chars,
   // and that is a known separate fact). Measured 2026-09-16: 2,725 chars
