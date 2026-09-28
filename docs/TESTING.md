@@ -1,5 +1,9 @@
 # AE Llama — test-user install guide
 
+_Owner decision, 2026-09-28: AE Llama is a personal tool and is not for
+sale. This guide installs the packaged panel on a machine; it is not a
+store or support page._
+
 AE Llama is an After Effects panel that drives AE with a local AI model:
 you type what you want in plain language, it inspects your project and
 does the work with real AE operations (layers, keyframes, expressions,
@@ -23,9 +27,10 @@ day. That is the point of testing it.
 
 1. Download the panel package:
    **https://raw.githubusercontent.com/crypticnull/ae-llama-updates/main/AE-Llama.zxp**
-2. Install it with the free aescripts **ZXP Installer**
-   (https://aescripts.com/learn/zxp-installer/) — drag the `.zxp` onto
-   it. Any ZXP installer works.
+2. Install it with any ZXP installer (drag the `.zxp` onto it), or
+   skip the installer: `scripts\install-zxp.ps1 -ZxpPath <path to .zxp>`
+   from a clone of the repo extracts it straight into the CEP
+   extensions folder.
 3. In After Effects: **Edit → Preferences → Scripting & Expressions →
    check "Allow Scripts to Write Files and Access Network"**. The panel
    needs this to operate on your project.

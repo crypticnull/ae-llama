@@ -507,7 +507,7 @@ Queued (see WORKPLAN for owners/order):
   `AE_LLAMA_H3_INT8_T2V_V1` (video). Each was
   authored from a RUNNING backend's `/object_info`, uses core nodes
   only (no custom packs), and has been rendered end to end into AE and
-  had its VRAM measured on the managed backend a buyer installs.
+  had its VRAM measured on the managed backend the panel installs.
   `ltx-small` was the one entry that shipped none, on the ground that it
   had no weights published; 2026-09-16 found that it was imagining the
   LTX-Video 2B line, which is real, which core ComfyUI still supports
@@ -532,7 +532,7 @@ Queued (see WORKPLAN for owners/order):
   entries are a second such pair, and a cheaper one: there is no fp8
   FILE of that model to download, so `wan22-5b-fp8` is the SAME three
   files loaded through core `UNETLoader`'s `weight_dtype` cast and it
-  adds zero bytes to a buyer's download. Measured 2026-09-16 it costs
+  adds zero bytes to the download. Measured 2026-09-16 it costs
   24 314 MiB against the fp16's 26 187 at the authored 1280x704, and
   16 834 against 21 536 at 704x480 — the cast really does halve the
   9 536 MiB diffusion term, but only the smaller job shows it, because
@@ -542,14 +542,14 @@ Queued (see WORKPLAN for owners/order):
   pinning off (0.12.26), a 5090 ballasted to what a 12 GB card leaves
   after After Effects AND the desktop floor ran each of them with
   byte-identical output and within 1.3x of the whole-card clock (Wan
-  129-132 s, Krea 2 10 s). A 12 GB buyer can now CHOOSE them. The
+  129-132 s, Krea 2 10 s). A 12 GB user can now CHOOSE them. The
   DEFAULTS did not move: `recommendFromGB` keeps Wan out of the picks
-  under 32 GB and Krea 2 under 24, because a 12 GB buyer's default clip
+  under 32 GB and Krea 2 under 24, because a 12 GB user's default clip
   would go from 12 s to 130 s, and that is an owner call (WORKPLAN
   NEXT UP 5a-4e). **Later the same day both Wan entries went to gate
   8**: at an 8 GB card's room beside After Effects (841 MiB) each
   rendered its identical clip twice, fp8 in 135 / 131 s and fp16 in
-  130 / 131 s, so an 8 GB buyer can choose Wan with no quantized build
+  130 / 131 s, so an 8 GB user can choose Wan with no quantized build
   and no node pack. Default still held at 32. SDXL stayed at 12: at an 8 GB card's room it was
   identical but 2.8x slower, all of it the fp16 UNet streaming over PCIe
   every step. **`sdxl-fp8` (2026-09-16) is the first image entry gated
@@ -559,7 +559,7 @@ Queued (see WORKPLAN for owners/order):
   bytes. 7 130 MiB peak (the VAE decode spike) in 6 s on the whole card; at an 8 GB card's room
   beside After Effects, 6 s and a byte-identical png. A different sample
   from fp16 sdxl at the same seed, not a worse one. Its default is held
-  at 12 like the others, so an 8 GB buyer still defaults to SD 1.5 and
+  at 12 like the others, so an 8 GB user still defaults to SD 1.5 and
   can choose it. **Both of the owner's authored
   graphs have LEFT the bundle** (WORKPLAN §18 P8, P9) and are kept as
   test fixtures; a copy already installed under `%APPDATA%` survives.

@@ -5,6 +5,11 @@ from a container with no access to the owner's machine. That session is
 being retired in favour of a LOCAL Claude Code session with direct access
 to After Effects, llama.cpp and ComfyUI. This file is the state transfer.
 
+**Owner decision, 2026-09-28: not for sale.** AE Llama is a personal tool.
+There is no aescripts listing, no store, no buyers and no licensing. Where
+an older doc or log entry says "buyer" or plans around a listing, read it
+as "the user" and drop the listing part; the engineering stands.
+
 **Read order for a fresh session:** `CLAUDE.md` (the standing brief and
 the hard-won AE/ExtendScript facts — do not relearn those), then
 `docs/MEMORY.md` (the generated index into the 260k-token
@@ -17,10 +22,10 @@ with `sed -n 'START,ENDp' docs/WORKPLAN-LOG.md`.
 
 ---
 
-## 1. What the product is
+## 1. What the tool is
 
-**AE Llama** — a commercial After Effects CEP panel (Windows 11, AE 2024+,
-field-tested on AE 2026; destined for aescripts.com). It drives After
+**AE Llama** — a personal After Effects CEP panel (Windows 11, AE 2024+,
+field-tested on AE 2026; not for sale, owner decision 2026-09-28). It drives After
 Effects through a LOCAL llama.cpp model using JSON tool-calling, with a
 hidden ComfyUI backend for image and video generation. The user types
 plain English; the model calls tools; the panel executes them in AE.
@@ -192,8 +197,8 @@ This is the main product work in flight, and it rests on one finding.
 ### The finding that started it (§17a)
 
 `comfyUrl` defaulted to `http://127.0.0.1:8188` — **ComfyUI's own default
-port**. So every buyer who already had ComfyUI installed silently became
-"bring your own backend", and every buyer who did not got nothing. Nobody
+port**. So every user who already had ComfyUI installed silently became
+"bring your own backend", and every user who did not got nothing. Nobody
 had ever verified the shipped path, because the owner's machine has its
 own ComfyUI on port 8000 and that is what got tested.
 
@@ -251,7 +256,7 @@ measured consequences:
    from the bundle.
 3. **`package-zxp.ps1:72-77`** excludes only `.debug`, `vendor`,
    `models`, `generated` — so ~200 KB of the owner's authored graphs
-   ships inside every buyer's ZXP today and is never read. Add
+   ships inside every packaged ZXP today and is never read. Add
    `workflows` to `$excludeDirs` (pass P11).
 4. **The resolver needs a deliberate baseline tiebreak** — prefer the
    template the catalog entry's `workflowTemplate` points at, before
@@ -285,10 +290,10 @@ complete** and already inherits their configuration.
    `parseComfyPathsYaml`)
 
 So §19 is UX over existing search logic: **19a** `Setup.scanForModelRoots()`
-probing a NAMED SHORTLIST (**never scan drives** — slow, alarming in a
-commercial product, and it would claim other applications' models),
-**19b** a Scan button plus per-line validation of typed roots, **19c** a
-first-run prompt which is commercial copy and stays **OWNER-GATED**.
+probing a NAMED SHORTLIST (**never scan drives** — slow, alarming to
+whoever is at the keyboard, and it would claim other applications'
+models), **19b** a Scan button plus per-line validation of typed roots,
+**19c** a first-run prompt, whose wording stays **OWNER-GATED**.
 
 One defect worth remembering: §17a relabelled the install-folder field
 "only used with 'Use my own ComfyUI'" — **wrong**. `comfyDir` is read at

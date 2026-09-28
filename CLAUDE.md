@@ -1,43 +1,52 @@
 # AE Llama — agent briefing
 
-Commercial After Effects CEP panel ("AE Llama") that drives AE via a local
+After Effects CEP panel ("AE Llama") that drives AE via a local
 llama.cpp model + tool-calling, with a hidden ComfyUI backend for image/
 video generation. Windows 11 + AE 2024+ (field-tested on AE 2026).
 
-## What this product is FOR (owner, 2026-09-09)
+**Owner decision, 2026-09-28: not for sale.** AE Llama is a personal tool
+the owner built for his own work. There is no aescripts listing, no store,
+no buyers and no licensing, and nothing here should plan for them. The repo
+is public so the work can be read. Older docs and log entries that talk
+about buyers, aescripts or refunds are history from before this decision.
+
+## What the tool is FOR (owner, 2026-09-09, reframed 2026-09-28)
 
 > "This is a gateway into the open source world for the layman who only
 > knows After Effects."
 
-That is the thesis, and it decides arguments that no measurement can.
-The buyer is a motion designer, not an ML practitioner. They will never
-clone a repo, read a model card, pick a quantization, or debug a node
-graph. The panel does all of that FOR them and hands them a text box.
+That is still the design thesis, and it decides arguments that no
+measurement can. The user it is built for is a motion designer, not an ML
+practitioner, who should never have to clone a repo, read a model card,
+pick a quantization, or debug a node graph. The panel does all of that
+FOR them and hands them a text box.
 
-Two consequences that bind design work here:
+Three consequences that bind design work here:
 
 **Reach is a feature, not a nice-to-have.** "We wanna be able to offer
 the video to as many people as possible that can run it. And that means
 twelve gigabyte cards as well... even lower, if there's a way to run a
-video model on an eight gigabyte card." An 8-12 GB card is the common
-case on aescripts. A capability that only exists on a 5090 reaches
-almost nobody, so **shrinking a VRAM floor is product work of the same
-rank as adding a feature** — see §13 (SageAttention, KV quantization)
-and §18 P7a, which are the same problem from two directions.
+video model on an eight gigabyte card." 8-12 GB cards are the common
+case, and a capability that only exists on a 5090 is a capability the
+tool mostly does not have. So **shrinking a VRAM floor is work of the
+same rank as adding a feature** — see §13 (SageAttention, KV
+quantization) and §18 P7a, which are the same problem from two
+directions.
 
-**Use the ecosystem; that IS the product.** Lower quantizations, GGUF
+**Use the ecosystem; that IS the tool.** Lower quantizations, GGUF
 builds, attention backends, community node packs — the open-source world
 is the supply. Being creative there is the job, not a detour from it.
-The one hard line is §22a: the BASICS stay core-only so a buyer's
-recommended set never needs an install to work. Anything that needs a
-pack belongs in the opt-in layer (§22d) — and note that low-end support
-may be that layer's first real customer, which promotes it.
+The one hard line is §22a: the BASICS stay core-only so the recommended
+set never needs an install to work. Anything that needs a pack belongs
+in the opt-in layer (§22d) — and note that low-end support may be that
+layer's first real user, which promotes it.
 
 **Never a silent grind.** Owner, deciding §18 P7a: if a card cannot run
 it, "tell them that it's not gonna work". Measured in 0.10.14, this
 backend does not fail when a job outgrows the card, it grinds — minutes
-per frame, no error — and a buyer cannot tell that from a broken plugin.
-An honest refusal costs a sale; a grind costs a refund and a review.
+per frame, no error — and nobody at the keyboard can tell that from a
+broken plugin. An honest refusal leaves the user with a working tool and
+a reason; a grind leaves them with a hung After Effects and no idea why.
 
 ## Two agents, two roles
 

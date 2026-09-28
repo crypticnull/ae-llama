@@ -2,7 +2,7 @@
 
 **Read this first if you are new to the repo.** It is the one document
 meant to be read start-to-finish by a fresh session that needs to know
-what this product is before touching anything. Everything else in
+what this tool is before touching anything. Everything else in
 `docs/` is either a backlog, a plan, or an evidence ledger.
 
 Where to go next, once oriented:
@@ -18,10 +18,12 @@ Where to go next, once oriented:
 
 ---
 
-## 1. What the product is
+## 1. What the tool is
 
-**AE Llama** is a commercial Adobe After Effects panel that lets a user
-drive After Effects by typing plain English into a chat box.
+**AE Llama** is an Adobe After Effects panel that lets a user drive
+After Effects by typing plain English into a chat box. It is a personal
+tool: owner decision 2026-09-28, it is not for sale, not listed anywhere
+and not licensed to anyone.
 
 > "make the logo fade in over 2 seconds and add a soft drop shadow"
 
@@ -41,9 +43,10 @@ repo:
    quietly. Most of the engineering in this repo is about making a small
    model *succeed anyway* — see §5, which is the real thesis of the
    project.
-3. **It is a commercial product**, headed for aescripts.com. Users are
-   motion designers, not developers. A failure that a developer would
-   shrug at ("it silently did nothing") is a refund here.
+3. **Its user is a motion designer, not a developer.** A failure that a
+   developer would shrug at ("it silently did nothing") is a broken tool
+   here, because the person at the keyboard has no way to tell it from a
+   bug and no reason to go digging.
 
 Platform: Windows 11, After Effects 2024+, field-tested on AE 2026.
 Adobe CEP panel (HTML/JS front end + ExtendScript back end).
