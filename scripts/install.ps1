@@ -55,5 +55,5 @@ Write-Host "Linked $linkPath -> $srcDir" -ForegroundColor Green
 Write-Host ''
 Write-Host 'Installed. Next steps:' -ForegroundColor Green
 Write-Host '  1. If you have not yet: .\scripts\get-llama.ps1   (downloads llama-server)'
-Write-Host '  2. Put one or more .gguf models into extension\models\ (or use Browse in the panel)'
+Write-Host '  2. Put one or more .gguf models into %APPDATA%\AE-Llama\models\ (or use Browse in the panel)'
 Write-Host '  3. Restart After Effects, then open: Window > Extensions > AE Llama'

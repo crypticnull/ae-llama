@@ -99,7 +99,7 @@ function install(manifest) {
   r = await install({ panelUrl: "https://example.com/product" });
   assert(r.err && /no direct install package/i.test(r.err.message) &&
          /example\.com/.test(r.err.message),
-         "package install without panelPackageUrl points at the store page");
+         "package install without panelPackageUrl points at the project page");
   extPath = path.join(workDir, "extension");
 
   // 5. local divergence -> ff-only refuses instead of clobbering

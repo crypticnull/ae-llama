@@ -32,7 +32,7 @@
       "url": "https://huggingface.co/comfyanonymous/flux_text_encoders/resolve/main/t5xxl_fp8_e4m3fn_scaled.safetensors"
     }
   ],
-  "licenseIsNotApacheAndTheOwnerShouldKnow": "The checkpoint's own safetensors metadata carries the 'LTXV Open Weights License 0.X' (license date April 15, 2025, covering every LTXV release since v0.9.6), NOT Apache-2.0 as Wan 2.2 is. The panel never redistributes a weight -- a buyer downloads it from Lightricks' own HuggingFace repo -- so this is a question about what the panel RECOMMENDS, not about what it ships. Flagged for the owner in WORKPLAN 18 P7c step 2b; no pass should decide it.",
+  "licenseIsNotApacheAndTheOwnerShouldKnow": "The checkpoint's own safetensors metadata carries the 'LTXV Open Weights License 0.X' (license date April 15, 2025, covering every LTXV release since v0.9.6), NOT Apache-2.0 as Wan 2.2 is. The panel never redistributes a weight -- a user downloads it from Lightricks' own HuggingFace repo -- so this is a question about what the panel RECOMMENDS, not about what it ships. Flagged for the owner in WORKPLAN 18 P7c step 2b; no pass should decide it.",
   "customNodes": [
     {
       "pack": "(comfy-core)",

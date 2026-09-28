@@ -65,10 +65,10 @@ means your install is healthy.
 ## When something goes wrong (this is the valuable part)
 
 Use the **copy chat** button at the top of the panel — it copies the
-whole conversation plus your version/model/GPU — and send that paste
-back. That one paste is everything needed to reproduce and fix it.
-Please send failures even (especially) when they seem dumb: "it made
-the wrong folder" reports have directly produced same-day fixes.
+whole conversation plus your version/model/GPU — and keep that paste.
+That one paste is everything needed to reproduce and fix it. Keep
+failures even (especially) when they seem dumb: an "it made the wrong
+folder" chat is exactly what a fix needs.
 
 Known alpha edges: image/video generation (the ComfyUI side) is still
 being wired up per hardware tier — chat-driven AE work is the part to

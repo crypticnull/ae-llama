@@ -433,7 +433,7 @@ assert(!/testsrc=/.test(getSrc),
 assert(/Get-AellFfmpegEncoders/.test(getSrc),
   "it prints the encoder census, so the licence choice is measured not assumed");
 assert(/\$License = 'lgpl'/.test(getSrc),
-  "LGPL is the default: this is a commercial product and GPL is a human's call");
+  "LGPL is the default: it keeps the build redistributable, and GPL is a human's call");
 // -nostdin is the difference between a failed export and a hung pass.
 const spawnCalls = verifySrc.match(/Invoke-AellFfmpegProcess -Exe [^\n]*\n?[\s\S]{0,400}?\)/g) || [];
 assert(/-nostdin/.test(verifySrc) &&

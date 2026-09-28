@@ -48,7 +48,7 @@
       "url": "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/main/vae/minimax_h3_audio_vae_fp32.safetensors"
     }
   ],
-  "whyNoTurboLora": "The authored manifest lists an OPTIONAL 4-step turbo lora (MiniMax_H3/minimax_h3_turbo_4step_comfyui_pruned.safetensors) that its graph never loads -- there is no LoraLoader in either file. It is not listed here because this template does not use it, and a manifest that names a weight it never loads prices a download the buyer does not need.",
+  "whyNoTurboLora": "The authored manifest lists an OPTIONAL 4-step turbo lora (MiniMax_H3/minimax_h3_turbo_4step_comfyui_pruned.safetensors) that its graph never loads -- there is no LoraLoader in either file. It is not listed here because this template does not use it, and a manifest that names a weight it never loads prices a download the user does not need.",
   "customNodes": [
     {
       "pack": "(comfy-core)",

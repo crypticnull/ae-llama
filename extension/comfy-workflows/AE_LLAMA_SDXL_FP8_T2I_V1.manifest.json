@@ -19,7 +19,7 @@
       "role": "checkpoint",
       "dir": "checkpoints",
       "sizeMB": 6617,
-      "note": "ONE file read by two loaders: CheckpointLoaderSimple for CLIP + VAE, UNETLoader for the fp8-cast UNet. Listed once, in checkpoints where the downloader puts it, so a buyer who has sdxl already has this and nothing is fetched twice."
+      "note": "ONE file read by two loaders: CheckpointLoaderSimple for CLIP + VAE, UNETLoader for the fp8-cast UNet. Listed once, in checkpoints where the downloader puts it, so a user who has sdxl already has this and nothing is fetched twice."
     }
   ],
   "customNodes": [

@@ -366,7 +366,7 @@ window.AELL.COMFY_CATALOG.forEach((e) => {
                    e.measuredClipSeconds + " s but the panel's default " +
                    "renders " + authored + " s, so the entry must carry an " +
                    "authoredNote saying so — a shorter measurement quoted " +
-                   "without it describes a job the buyer is not given");
+                   "without it describes a job the user is not given");
           }
         }
       }
@@ -413,7 +413,7 @@ window.AELL.COMFY_CATALOG.forEach((e) => {
                "template renders (" + sizes[0] + ", the literal " +
                "width+height on its " + pairs[sizes[0]] + "), not " +
                String(e.measuredAt) + " -- a reading taken at another size, " +
-               "or kept across a change of graph, prices a job the buyer " +
+               "or kept across a change of graph, prices a job the user " +
                "is not given");
       }
     }

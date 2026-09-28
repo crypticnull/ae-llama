@@ -1122,7 +1122,7 @@
     var url = manifest && manifest.panelPackageUrl;
     if (!url) {
       cb(new Error("This update has no direct install package — get it " +
-                   "from " + ((manifest && manifest.panelUrl) || "the store") +
+                   "from " + ((manifest && manifest.panelUrl) || "the project page") +
                    " and reinstall the ZXP."));
       return;
     }

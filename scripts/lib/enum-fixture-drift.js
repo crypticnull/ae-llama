@@ -66,7 +66,7 @@ function driftNote(fixtureVer, installedVer) {
   }
   return "the installed ComfyUI is " + installedVer + " but " +
     "tests/fixtures/comfy-core-enums.json was taken from " + fixtureVer +
-    ", so the template enum check is testing against a build a buyer no " +
+    ", so the template enum check is testing against a build a user no " +
     "longer gets. Re-harvest: " + REHARVEST;
 }
 

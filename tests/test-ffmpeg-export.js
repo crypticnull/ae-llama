@@ -970,7 +970,7 @@ function socialTests(dir, next) {
            "into the story frame: " + r.data.dimensions);
     assert(r.data.encoder === "libopenh264",
            "on the software encoder by default — the LGPL build has no " +
-           "libx264 and no commercial product should need one");
+           "libx264 and nothing here should need one");
     assert(/letterboxed/.test((r.data.notes || []).join(" ")),
            "and the 16:9 comp is letterboxed, with the note saying so");
     assert(LAST_ENCODE.indexOf("-c:a") !== -1,

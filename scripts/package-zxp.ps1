@@ -105,7 +105,7 @@ try {
     # ------------------------------------------------------- verification
     # Adobe's own tool reading back what we just wrote. A ZXP whose
     # signature does not verify installs from a junction and fails from
-    # the store, which is the worst possible place to find out --
+    # a real install, which is the worst possible place to find out --
     # especially once the bundle carries more than one <Extension>
     # (docs/PREMIERE_PLAN.md), since the manifest is signed DATA and a
     # second entry changes those bytes.
@@ -118,9 +118,8 @@ try {
     $size = [math]::Round((Get-Item $outZxp).Length / 1MB, 2)
     Write-Host ''
     Write-Host "Done: $outZxp ($size MB)" -ForegroundColor Green
-    Write-Host 'Next: upload to aescripts.com, then publish the matching'
-    Write-Host 'panelVersion in your hosted update.json so installed panels'
-    Write-Host 'show the update banner.'
+    Write-Host 'Next: install it with the ZXP installer, and bump panelVersion'
+    Write-Host 'in update.json so installed panels show the update banner.'
 } finally {
     Remove-Item -Recurse -Force $stageDir -ErrorAction SilentlyContinue
 }
