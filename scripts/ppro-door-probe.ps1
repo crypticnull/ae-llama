@@ -92,6 +92,28 @@ function Get-PremiereProcesses {
            @(Get-Process -Name 'Adobe Premiere' -ErrorAction SilentlyContinue)
 }
 
+# Wait for Premiere to be GONE, on the real signal, not on a guess.
+#
+# Both call sites below used to be a flat `Start-Sleep -Seconds 8` after
+# CloseMainWindow(). That is wrong in both directions: it waits 8 seconds
+# when Premiere quit in one, and it gives up at 8 when Premiere needed
+# twelve -- and the probe then reported SKIPPED, "Premiere would not
+# quit", about an application that was closing perfectly normally.
+#
+# Owner's standing rule, 2026-10-06 (user-level CLAUDE.md): a wait ends on
+# its real signal, read every 2 to 5 seconds, and a timeout is a cap for
+# FAILURE, never the normal way a wait ends. The signal here is the
+# process list going empty, which this file already knows how to ask for.
+function Wait-PremiereGone {
+    param([int]$TimeoutSec = 30)
+    $deadline = (Get-Date).AddSeconds($TimeoutSec)
+    while ((Get-PremiereProcesses).Count -gt 0) {
+        if ((Get-Date) -ge $deadline) { return $false }
+        Start-Sleep -Seconds 2
+    }
+    return $true
+}
+
 # ------------------------------------------------------- find the apps
 if (-not $PremierePath) {
     $adobe = 'C:\Program Files\Adobe'
@@ -238,7 +260,7 @@ if ($Door -eq '2' -or $Door -eq 'all') {
                 foreach ($p in $running) {
                     [void]$p.CloseMainWindow()
                 }
-                Start-Sleep -Seconds 8
+                [void](Wait-PremiereGone)
                 foreach ($p in (Get-PremiereProcesses)) {
                     Write-Host '  Premiere is still up - it may be asking to save. Answer it and re-run.'
                 }
@@ -292,7 +314,7 @@ if ($Door -eq '3' -or $Door -eq 'all') {
                         detail = 'Premiere is running and this door fires at LAUNCH. Quit Premiere and re-run, or pass -ClosePremiere' }
         } else {
             foreach ($p in $running) { [void]$p.CloseMainWindow() }
-            if ($running.Count -gt 0) { Start-Sleep -Seconds 8 }
+            if ($running.Count -gt 0) { [void](Wait-PremiereGone) }
 
             $job = Join-Path $probeData 'job.json'
             $jobResult = Join-Path $probeData 'job-result.json'

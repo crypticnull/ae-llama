@@ -98,6 +98,26 @@ For long unattended runs the human starts `scripts/run-local-agent.ps1`,
 which loops: pull -> one headless pass -> commit -> repeat. A plain
 interactive session does NOT self-start; it answers one prompt and waits.
 
+**The one sanctioned long sleep in this repo.** The owner's standing wait
+rule (user-level `CLAUDE.md`, 2026-10-06) says a wait ends on its real
+signal, read every 2 to 5 seconds, and that a fixed sleep is never
+padding. `run-local-agent.ps1:1028` breaks that on purpose: a usage limit
+is waited out with a flat `Start-Sleep -Seconds 1200`, up to 21 times.
+
+**Owner, 2026-10-06, asked directly: "the 1200 is fine."** Leave it. The
+reasoning behind his rule is that nothing on this machine takes longer
+than a minute -- and this wait is not on this machine. There is no local
+signal to watch; the signal is the API accepting a request again, and
+polling a rate limit every few seconds is both useless and the kind of
+thing that lengthens it. Do not "fix" this one, and do not let a sweep
+for long sleeps quietly shorten it.
+
+Everything else in `scripts/` complies and was checked the same day: the
+dialog sweep is 5 s, the ComfyUI job poll 2.5 s, the Premiere result-file
+wait 1 s on the file itself, the pass is a blocking pipeline with no
+interval at all, and `ppro-door-probe.ps1`'s two "wait for Premiere to
+quit" sleeps became `Wait-PremiereGone` (the real signal, 2 s, 30 s cap).
+
 ## The machine belongs to the owner during the day
 
 **Owner, 2026-09-09: local testing happens OVERNIGHT only, unless he says
